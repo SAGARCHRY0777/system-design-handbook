@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Failure &amp; resilience · System Design Handbook</title>
+<meta name="description" content="Timeouts, retries that make outages worse, circuit breakers, bulkheads, graceful degradation, and the availability maths behind an SLA.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html" class="active">Failure & resilience</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="failure-and-resilience"><a class="anchor" href="#failure-and-resilience">#</a>Failure and resilience</h1><blockquote>
+<p><strong>Phase 6 of the round, and the one most candidates never reach.</strong> Volunteering
+a failure analysis when the clock is at forty minutes is one of the cheapest
+ways to separate yourself, because the field is thin.</p>
+</blockquote>
+<hr>
+<h2 id="1-what-actually-fails"><a class="anchor" href="#1-what-actually-fails">#</a>1 · What actually fails</h2><div class="table-scroll"><table><thead><tr><th>Failure</th><th>Frequency</th><th>Usually handled by</th></tr></thead><tbody><tr><td>Single machine dies</td><td>Constantly</td><td>Redundancy + health checks</td></tr><tr><td>Disk fails</td><td>Often</td><td>Replication</td></tr><tr><td>Process crashes / OOM</td><td>Often</td><td>Restart + health checks</td></tr><tr><td><strong>A dependency gets slow</strong></td><td>Often</td><td><strong>This is the dangerous one</strong></td></tr><tr><td>Network partition</td><td>Occasionally</td><td>Quorum, or accept unavailability</td></tr><tr><td>Deploy introduces a bug</td><td>Regularly</td><td>Canary, fast rollback</td></tr><tr><td>Whole AZ lost</td><td>Rarely</td><td>Multi-AZ</td></tr><tr><td>Whole region lost</td><td>Very rarely</td><td>Multi-region, if justified</td></tr></tbody></table></div><blockquote>
+<p><strong>Slow is worse than down, and this is the single most useful thing on the
+page.</strong> A dead dependency fails fast and you shed the work. A dependency at
+10 seconds instead of 50 milliseconds holds every caller&#39;s thread, exhausts
+connection pools, and propagates upward until the whole system is unavailable
+— while every component reports itself healthy. Saying this unprompted is
+strong senior signal.</p>
+</blockquote>
+<hr>
+<h2 id="2-timeouts"><a class="anchor" href="#2-timeouts">#</a>2 · Timeouts</h2><p><strong>Every network call needs a timeout, and the default in most libraries is
+infinite.</strong> That is the root cause of an enormous share of real outages.</p>
+<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Detail</th></tr></thead><tbody><tr><td><strong>Set one everywhere</strong></td><td>Connect, read, and total-request separately</td></tr><tr><td><strong>Base it on p99, not average</strong></td><td>A timeout below p99 fails healthy requests</td></tr><tr><td><strong>Budget downward</strong></td><td>If you owe an answer in 1s, your dependency gets less</td></tr><tr><td><strong>Deadline propagation</strong></td><td>Pass the remaining budget down the call chain</td></tr></tbody></table></div><p><strong>Deadline propagation is the detail worth naming.</strong> Without it, a service near
+the end of a chain happily spends 5 seconds on work the caller abandoned 3
+seconds ago — burning capacity on a result nobody will read. gRPC does this
+natively; in HTTP you pass a deadline header and each hop enforces it.</p>
+<pre class="code"><code>client 1000ms
+  -&gt; API gateway: 950ms remaining
+       -&gt; service A: 900ms remaining
+            -&gt; database: 850ms budget, so the query timeout is 850ms
+
+Each hop subtracts its own overhead and passes the rest down.</code></pre><hr>
+<h2 id="3-retries-and-how-they-cause-outages"><a class="anchor" href="#3-retries-and-how-they-cause-outages">#</a>3 · Retries — and how they cause outages</h2><p>Retries are necessary and dangerous. <strong>A naive retry policy converts a
+degradation into an outage.</strong></p>
+<pre class="code"><code>Service is at 90% capacity. A small blip causes 10% of requests to fail.
+Those 10% retry -- immediately, 3 times each.
+
+  offered load = 100% + (10% x 3) = 130%
+  -&gt; more failures -&gt; more retries -&gt; 200% -&gt; collapse
+
+The system cannot recover even after the original blip ends, because the
+retry load is now self-sustaining. This is a METASTABLE FAILURE.</code></pre><p><strong>The four things a safe retry policy needs:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Mechanism</th><th>Purpose</th></tr></thead><tbody><tr><td><strong>Exponential backoff</strong></td><td>Space attempts out: <code>base × 2^n</code></td></tr><tr><td><strong>Jitter</strong></td><td>Break synchronisation; without it retries arrive in waves</td></tr><tr><td><strong>A cap</strong></td><td>3 attempts, not &quot;until it works&quot;</td></tr><tr><td><strong>Retry budget</strong></td><td>Cap retries at ~10% of total traffic across the client</td></tr></tbody></table></div><p><strong>Retry budgets are the mechanism most candidates have never heard of</strong>, and
+they are the real fix: per-request caps still allow the aggregate amplification
+above. A budget makes the <em>client as a whole</em> refuse to retry beyond a fraction
+of its normal load, which bounds the amplification no matter how many requests
+are failing.</p>
+<p><strong>Only retry idempotent operations, or ones with an idempotency key.</strong> Otherwise
+the retry is a correctness bug rather than a resilience feature.</p>
+<hr>
+<h2 id="4-circuit-breakers"><a class="anchor" href="#4-circuit-breakers">#</a>4 · Circuit breakers</h2><p>Stop calling a dependency that is clearly broken.</p>
+<pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Closed
+    Closed --&gt; Open: failure rate &gt; threshold
+    Open --&gt; HalfOpen: after cooldown
+    HalfOpen --&gt; Closed: probe succeeds
+    HalfOpen --&gt; Open: probe fails</pre><div class="table-scroll"><table><thead><tr><th>State</th><th>Behaviour</th></tr></thead><tbody><tr><td><strong>Closed</strong></td><td>Normal; count failures</td></tr><tr><td><strong>Open</strong></td><td>Fail immediately without calling; return a fallback</td></tr><tr><td><strong>Half-open</strong></td><td>Let a few probes through to test recovery</td></tr></tbody></table></div><p><strong>Two things a circuit breaker buys</strong>, and the second is the one candidates
+miss:</p>
+<ol>
+<li><strong>The caller stops wasting resources</strong> on calls that will fail — no threads
+parked on a 10-second timeout.</li>
+<li><strong>The failing service gets breathing room.</strong> A service overloaded into failure
+cannot recover while still receiving full load. The breaker sheds that load
+and lets it come back.</li>
+</ol>
+<p><strong>Pair it with a fallback</strong>, or you have only converted a slow failure into a
+fast one. Cached data, a default value, a degraded response — say what the
+fallback is.</p>
+<hr>
+<h2 id="5-bulkheads"><a class="anchor" href="#5-bulkheads">#</a>5 · Bulkheads</h2><p>Isolate resources so one failure cannot consume everything.</p>
+<pre class="code"><code>WITHOUT bulkheads -- one shared pool of 100 threads:
+  the recommendations service (nice-to-have) gets slow
+  -&gt; all 100 threads block on it
+  -&gt; checkout requests cannot get a thread
+  -&gt; THE WHOLE SITE IS DOWN because recommendations was slow
+
+WITH bulkheads -- separate pools:
+  recommendations: 20 threads   &lt;- these block, and that is all
+  checkout:        50 threads   &lt;- unaffected
+  everything else: 30 threads</code></pre><p><strong>Bulkheads are how you make criticality real.</strong> A non-critical dependency
+should not be able to take down a critical path, and a shared thread pool means
+it can. Applies to thread pools, connection pools, and separate service
+deployments per tenant tier.</p>
+<hr>
+<h2 id="6-graceful-degradation"><a class="anchor" href="#6-graceful-degradation">#</a>6 · Graceful degradation</h2><p><strong>Rank features by criticality during scoping, then shed in that order.</strong> This
+is where you show product judgement, which few candidates do.</p>
+<div class="table-scroll"><table><thead><tr><th>Tier</th><th>Example (e-commerce)</th><th>Under stress</th></tr></thead><tbody><tr><td><strong>Critical</strong></td><td>Browse, add to cart, checkout</td><td>Never shed</td></tr><tr><td><strong>Important</strong></td><td>Search, order history</td><td>Degrade — cached, slower</td></tr><tr><td><strong>Nice-to-have</strong></td><td>Recommendations, reviews</td><td>Drop entirely</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;If the recommendation service is unavailable, the product page renders
+without that section rather than erroring. If search is degraded I serve
+category browsing. Checkout is the last thing to go — and if it does, I would
+rather queue the order and confirm asynchronously than reject it.&quot;</em></p>
+</blockquote>
+<p><strong>Load shedding at the edge</strong> completes the picture: when saturated, reject the
+lowest-priority traffic <em>immediately and cheaply</em> rather than accepting
+everything and being slow for everyone. Fast rejection of 10% beats timeouts for
+100%.</p>
+<hr>
+<h2 id="7-availability-maths"><a class="anchor" href="#7-availability-maths">#</a>7 · Availability maths</h2><p>Worth being able to do out loud.</p>
+<div class="table-scroll"><table><thead><tr><th>SLA</th><th>Downtime/year</th><th>Downtime/month</th></tr></thead><tbody><tr><td>99%</td><td>3.65 days</td><td>7.2 hours</td></tr><tr><td>99.9%</td><td>8.8 hours</td><td>43 minutes</td></tr><tr><td>99.99%</td><td>53 minutes</td><td>4.3 minutes</td></tr><tr><td>99.999%</td><td>5.3 minutes</td><td>26 seconds</td></tr></tbody></table></div><p><strong>Dependencies in series multiply:</strong></p>
+<pre class="code"><code>Three services in series, each 99.9%:
+  0.999^3 = 0.997  -&gt;  99.7%, about 26 hours/year
+
+Adding dependencies REDUCES availability. This is the argument against
+gratuitous microservices, and it is a quantitative one.</code></pre><p><strong>Redundancy in parallel:</strong></p>
+<pre class="code"><code>Two independent replicas, each 99%:
+  1 - (0.01)^2 = 99.99%</code></pre><blockquote>
+<p><strong>The word doing the work is &quot;independent&quot;, and the caveat is the interesting
+part.</strong> Two instances in the same rack share a switch; two AZs share a region&#39;s
+control plane; two services share a deploy pipeline that can push the same bad
+config to both. <strong>Correlated failure is why real availability falls short of
+the arithmetic</strong> — and saying that is much better than quoting the formula.</p>
+</blockquote>
+<hr>
+<h2 id="8-what-to-say-in-the-round"><a class="anchor" href="#8-what-to-say-in-the-round">#</a>8 · What to say in the round</h2><p>Walk the diagram, kill each box:</p>
+<blockquote>
+<p><em>&quot;App servers are stateless behind health checks, so losing one is invisible.
+The cache is the interesting one — losing a node costs 1/N of the entries with
+consistent hashing, but if we lost the tier entirely the database sees roughly
+20× its normal read load, which it is not sized for, so there is a circuit
+breaker and load shedding in front rather than pretending it would hold.</em></p>
+<p><em>The database leader failover costs about 30 seconds of write unavailability
+and a cold cache after. Every outbound call has a timeout derived from p99 and
+a deadline propagated from the edge, retries are capped with jitter and a
+client-wide retry budget so we cannot amplify a blip into an outage, and
+recommendations live in their own thread pool so they cannot starve checkout.</em></p>
+<p><em>What I&#39;d want to verify in production is the cache-miss assumption — the whole
+read path depends on a 95% hit rate, and I would run a game day where we kill a
+cache node and watch what actually happens.&quot;</em></p>
+</blockquote>
+<p><strong>Ending on &quot;here is what I would test&quot; is a strong close</strong> — it says you know
+the difference between a design that should work and one that has been shown to.</p>
+<hr>
+<h2 id="9-interview-questions"><a class="anchor" href="#9-interview-questions">#</a>9 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;What happens when a dependency gets slow?&quot;</td><td>Worse than it being down. Callers hold threads, pools exhaust, and it propagates upward while every component still reports healthy. Timeouts based on p99, a circuit breaker to fail fast with a fallback, and bulkheads so it can only consume its own pool.</td></tr><tr><td>⭐ &quot;Are retries always good?&quot;</td><td>No — they are a common cause of outages. Failures trigger retries, retries add load, load causes failures; the system stays collapsed after the trigger is gone. Backoff with jitter, a hard cap, and a client-wide retry budget of about 10% of traffic. And only retry idempotent operations.</td></tr><tr><td>⭐ &quot;Explain a circuit breaker.&quot;</td><td>Track the failure rate; above a threshold, open and fail fast without calling. After a cooldown, half-open and probe. It protects the caller from wasted resources <em>and</em> gives the failing service room to recover, which it cannot do under full load.</td></tr><tr><td>&quot;How do you set a timeout?&quot;</td><td>From the dependency&#39;s p99, not its average, and within a budget propagated from the edge — each hop passes down the remaining deadline so nobody works on a request the caller has already abandoned.</td></tr><tr><td>⭐ &quot;What&#39;s your availability?&quot;</td><td>Depends on the chain: three services in series at 99.9% each gives 99.7%, so each dependency I add costs availability. Redundancy multiplies the other way, but only if failures are independent — shared racks, shared control planes and shared deploy pipelines are why real numbers fall short of the arithmetic.</td></tr><tr><td>&quot;What do you drop under load?&quot;</td><td>Whatever we ranked lowest during scoping. Recommendations and reviews go first, search degrades to cached results, checkout is last. Shedding at the edge cheaply beats accepting everything and timing out for everyone.</td></tr><tr><td>&quot;How do you know the design survives failure?&quot;</td><td>Test it — game days and fault injection. A failover path that has never been exercised does not work; that is the default state, not the exception.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>explain why slow is worse than down,</li>
+<li>describe the retry-amplification spiral and name retry budgets,</li>
+<li>give both benefits of a circuit breaker,</li>
+<li>explain bulkheads with the shared-thread-pool example,</li>
+<li>compute series and parallel availability, and</li>
+<li>name correlated failure as the reason the arithmetic overstates reality.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="idempotency.html"><span>previous</span>Idempotency & exactly-once</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-what-actually-fails">1 · What actually fails</a></li><li class="d2"><a href="#2-timeouts">2 · Timeouts</a></li><li class="d2"><a href="#3-retries-and-how-they-cause-outages">3 · Retries — and how they cause outages</a></li><li class="d2"><a href="#4-circuit-breakers">4 · Circuit breakers</a></li><li class="d2"><a href="#5-bulkheads">5 · Bulkheads</a></li><li class="d2"><a href="#6-graceful-degradation">6 · Graceful degradation</a></li><li class="d2"><a href="#7-availability-maths">7 · Availability maths</a></li><li class="d2"><a href="#8-what-to-say-in-the-round">8 · What to say in the round</a></li><li class="d2"><a href="#9-interview-questions">9 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

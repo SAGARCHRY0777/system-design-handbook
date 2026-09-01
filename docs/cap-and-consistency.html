@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAP &amp; consistency models · System Design Handbook</title>
+<meta name="description" content="What CAP actually says and what people wrongly think it says, PACELC, the consistency models ordered by strength, and how to pick per operation.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html" class="active">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="cap-and-consistency-models"><a class="anchor" href="#cap-and-consistency-models">#</a>CAP and consistency models</h1><blockquote>
+<p><strong>CAP is the most misquoted theorem in system design interviews.</strong> Stating it
+correctly is a fast, cheap signal — and stating it incorrectly is a fast,
+cheap negative one.</p>
+</blockquote>
+<hr>
+<h2 id="1-what-cap-actually-says"><a class="anchor" href="#1-what-cap-actually-says">#</a>1 · What CAP actually says</h2><blockquote>
+<p>Among <strong>C</strong>onsistency, <strong>A</strong>vailability, and <strong>P</strong>artition tolerance, a
+distributed system can guarantee at most two.</p>
+</blockquote>
+<p><strong>The correct reading</strong>, which most candidates miss:</p>
+<p><strong>Partitions are not a choice.</strong> Networks drop packets, links fail, switches
+reboot. If your system spans machines, it will be partitioned eventually. So
+&quot;CP or AP or CA&quot; is a false trichotomy — <strong>CA is not available to you</strong>, and
+choosing it means choosing a single machine.</p>
+<blockquote>
+<p><strong>CAP is a question about one moment: <em>during a partition</em>, do you return a
+possibly-stale answer, or refuse to answer?</strong> That is it. It says nothing
+about the other 99.99% of the time, and it is not a description of a database&#39;s
+general character.</p>
+</blockquote>
+<p>Also note the definitions are narrower than the words suggest:</p>
+<ul>
+<li><strong>Consistency</strong> here means <em>linearizability</em> — every read sees the latest
+write, as though there were one copy. It is not ACID&#39;s C.</li>
+<li><strong>Availability</strong> means <em>every</em> non-failing node answers <em>every</em> request.
+A system that stays up for 99.9% of requests is not &quot;A&quot; in CAP&#39;s sense.</li>
+</ul>
+<p><strong>So &quot;MongoDB is CP and Cassandra is AP&quot; is a rough shorthand at best.</strong> Both are
+tunable per query. Saying <em>&quot;Cassandra defaults to AP but with <code>QUORUM</code> reads and
+writes it behaves closer to CP&quot;</em> is more accurate and more impressive than the
+label.</p>
+<hr>
+<h2 id="2-pacelc-the-more-useful-version"><a class="anchor" href="#2-pacelc-the-more-useful-version">#</a>2 · PACELC — the more useful version</h2><p>CAP only describes the partition case, which is rare. <strong>PACELC covers the normal
+case too</strong>, and it is the extension worth naming:</p>
+<blockquote>
+<p><strong>If Partition: choose Availability or Consistency.
+Else (normal operation): choose Latency or Consistency.</strong></p>
+</blockquote>
+<p><strong>The &quot;else&quot; branch is where your system actually lives.</strong> Every synchronous
+replication decision is a latency-versus-consistency trade made while the network
+is perfectly healthy.</p>
+<div class="table-scroll"><table><thead><tr><th>System</th><th>Classification</th><th>Meaning</th></tr></thead><tbody><tr><td>Cassandra (default)</td><td>PA/EL</td><td>Available under partition; fast over consistent normally</td></tr><tr><td>DynamoDB</td><td>PA/EL (tunable)</td><td>Same, with strongly-consistent reads available on request</td></tr><tr><td>MongoDB</td><td>PC/EC</td><td>Consistent under partition; consistent normally</td></tr><tr><td>Spanner</td><td>PC/EC</td><td>Consistency always, and pays latency for it</td></tr><tr><td>Postgres (single node)</td><td>CA-ish</td><td>No partition to tolerate; not a distributed system</td></tr></tbody></table></div><blockquote>
+<p><strong>Bringing up PACELC unprompted is one of the highest-value things you can say
+in a design round.</strong> It signals you understand the trade-off exists during
+normal operation, not just during failures — which is the thing CAP&#39;s fame
+obscures.</p>
+</blockquote>
+<hr>
+<h2 id="3-the-consistency-models-ordered"><a class="anchor" href="#3-the-consistency-models-ordered">#</a>3 · The consistency models, ordered</h2><p>Strongest at the top. Each is cheaper and weaker than the one above.</p>
+<div class="table-scroll"><table><thead><tr><th>Model</th><th>Guarantee</th><th>Cost</th></tr></thead><tbody><tr><td><strong>Linearizable</strong></td><td>Every read sees the latest committed write; the system behaves like one copy</td><td>Coordination on every operation</td></tr><tr><td><strong>Sequential</strong></td><td>All nodes see operations in the same order; not necessarily real-time</td><td>Slightly cheaper</td></tr><tr><td><strong>Causal</strong></td><td>Causally related operations are seen in order; concurrent ones may differ</td><td>Track causality; no global coordination</td></tr><tr><td><strong>Read-your-writes</strong></td><td>You see your own writes</td><td>Route reads to leader, or track position</td></tr><tr><td><strong>Monotonic reads</strong></td><td>You never see time go backwards</td><td>Sticky routing</td></tr><tr><td><strong>Eventual</strong></td><td>Absent new writes, replicas converge</td><td>Almost none</td></tr></tbody></table></div><p><strong>Two clarifications that come up:</strong></p>
+<p><strong>Eventual consistency has no bound.</strong> &quot;Eventually&quot; is not &quot;within 100 ms&quot; — it
+is a liveness property with no timing guarantee. In practice it is milliseconds;
+in a partition it can be minutes.</p>
+<p><strong>Causal consistency is the sweet spot most systems actually want</strong>, and naming
+it scores. It prevents the anomalies users actually notice — a reply appearing
+before the comment it answers, a deletion undone by a stale update — without the
+coordination cost of linearizability.</p>
+<hr>
+<h2 id="4-linearizability-versus-serializability"><a class="anchor" href="#4-linearizability-versus-serializability">#</a>4 · Linearizability versus serializability</h2><p>Frequently confused, and distinguishing them is a strong senior signal.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Linearizability</th><th>Serializability</th></tr></thead><tbody><tr><td><strong>Concerns</strong></td><td>Single operations on single objects</td><td>Transactions over many objects</td></tr><tr><td><strong>Guarantees</strong></td><td>Real-time ordering — a read after a write sees it</td><td><em>Some</em> serial order exists</td></tr><tr><td><strong>From</strong></td><td>Distributed systems</td><td>Databases</td></tr><tr><td><strong>Together</strong></td><td><strong>Strict serializability</strong> — what Spanner provides</td><td></td></tr></tbody></table></div><p>The gap matters: a serializable database may execute your transactions in an
+order that does not match real time, so a transaction that committed before
+yours started can appear after it. For most applications that is fine. For
+anything where an external observer compares timestamps — audit logs,
+cross-system reconciliation — it is not.</p>
+<hr>
+<h2 id="5-choosing-per-operation-not-per-system"><a class="anchor" href="#5-choosing-per-operation-not-per-system">#</a>5 · Choosing per operation, not per system</h2><p><strong>The most important practical point on this page.</strong> &quot;Is this system CP or AP?&quot;
+is the wrong granularity. The same product needs different answers for different
+operations.</p>
+<div class="table-scroll"><table><thead><tr><th>Operation</th><th>Needs</th><th>Why</th></tr></thead><tbody><tr><td>View a feed</td><td>Eventual</td><td>Seconds of staleness is invisible</td></tr><tr><td>View follower count</td><td>Eventual</td><td>Approximate is fine — Twitter shows approximations</td></tr><tr><td>Post a message</td><td>Read-your-writes</td><td>The author must see their own post</td></tr><tr><td>Add to cart</td><td>Causal</td><td>Order matters; availability matters more than exactness</td></tr><tr><td><strong>Checkout / payment</strong></td><td><strong>Linearizable</strong></td><td>Double-charging is unacceptable</td></tr><tr><td>Inventory decrement</td><td>Linearizable, or compensating</td><td>Overselling has real cost</td></tr><tr><td>Username registration</td><td>Linearizable</td><td>Uniqueness is the entire point</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Ninety-nine percent of this system is eventually consistent, and I&#39;m happy
+with that. The checkout path is the exception — inventory decrement and payment
+capture need strong consistency, so those go through a single-leader path with
+transactions, and I accept the lower availability on that specific path.&quot;</em></p>
+</blockquote>
+<p><strong>That sentence is a complete, senior answer to the consistency question.</strong> It
+shows you know strong consistency is expensive, that you only pay for it where
+it earns its keep, and that you can identify where that is.</p>
+<hr>
+<h2 id="6-making-eventual-consistency-acceptable"><a class="anchor" href="#6-making-eventual-consistency-acceptable">#</a>6 · Making eventual consistency acceptable</h2><p>The follow-up: <em>&quot;how do users not notice?&quot;</em></p>
+<div class="table-scroll"><table><thead><tr><th>Technique</th><th>Effect</th></tr></thead><tbody><tr><td><strong>Read your own writes</strong></td><td>Users judge staleness mostly by their own actions</td></tr><tr><td><strong>Optimistic UI</strong></td><td>Show the change locally before it is confirmed</td></tr><tr><td><strong>Bounded staleness</strong></td><td>&quot;At most 5 seconds behind&quot; is a real, monitorable SLO</td></tr><tr><td><strong>Version vectors</strong></td><td>Detect conflicts rather than silently losing one</td></tr><tr><td><strong>Compensating actions</strong></td><td>Allow the oversell, then refund — often cheaper than preventing it</td></tr><tr><td><strong>Idempotent retries</strong></td><td>Duplicates from at-least-once become harmless</td></tr></tbody></table></div><blockquote>
+<p><strong>The compensating-action point is worth making explicitly</strong>, because it
+reframes the problem commercially rather than technically: airlines
+deliberately oversell and compensate, because the cost of occasional
+compensation is far below the cost of coordinating every booking globally.
+Choosing to detect-and-fix rather than prevent is a legitimate design position
+— and one very few candidates raise.</p>
+</blockquote>
+<hr>
+<h2 id="7-interview-questions"><a class="anchor" href="#7-interview-questions">#</a>7 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Explain CAP.&quot;</td><td>During a network partition you must choose between returning a possibly-stale response and refusing to respond. Partition tolerance is not optional for a distributed system, so it is really a two-way choice, and only in that moment. Consistency there means linearizability specifically, and availability means every node answers every request — both stricter than the everyday words.</td></tr><tr><td>⭐ &quot;Is your system CP or AP?&quot;</td><td>Per operation, not per system. The feed is eventually consistent because seconds of staleness is invisible; checkout is linearizable because double-charging is not acceptable. Designing the whole system to the strictest requirement is how you get something slow and fragile.</td></tr><tr><td>⭐ &quot;What is PACELC?&quot;</td><td>CAP&#39;s extension to normal operation: if partitioned, availability or consistency; else, latency or consistency. It matters more, because partitions are rare and the latency/consistency trade is being made continuously.</td></tr><tr><td>&quot;Linearizability versus serializability?&quot;</td><td>Linearizability is about single operations on single objects with real-time ordering. Serializability is about transactions producing <em>some</em> serial order, not necessarily matching real time. Both together is strict serializability.</td></tr><tr><td>&quot;How do you make eventual consistency acceptable?&quot;</td><td>Users mostly judge staleness by their own actions, so read-your-writes plus optimistic UI covers most of it. Then a bounded-staleness SLO you actually monitor, and compensating actions for the rare conflict — detecting and fixing is often cheaper than globally preventing.</td></tr><tr><td>&quot;When would you accept losing data?&quot;</td><td>Where the value is low and the volume is high: view counts, analytics samples, non-critical telemetry. Never for anything a user would notice missing or that has financial consequence. Then I would say so explicitly rather than let it be an accident.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>state CAP correctly, including that partition tolerance is not a choice,</li>
+<li>explain PACELC and why its &quot;else&quot; branch matters more,</li>
+<li>order the consistency models and name causal as the practical sweet spot,</li>
+<li>distinguish linearizability from serializability, and</li>
+<li>assign different models to different operations in one system and justify each.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="replication-and-consistency.html"><span>previous</span>Replication & consistency</a><a class="pager next" href="idempotency.html"><span>next</span>Idempotency & exactly-once</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-what-cap-actually-says">1 · What CAP actually says</a></li><li class="d2"><a href="#2-pacelc-the-more-useful-version">2 · PACELC — the more useful version</a></li><li class="d2"><a href="#3-the-consistency-models-ordered">3 · The consistency models, ordered</a></li><li class="d2"><a href="#4-linearizability-versus-serializability">4 · Linearizability versus serializability</a></li><li class="d2"><a href="#5-choosing-per-operation-not-per-system">5 · Choosing per operation, not per system</a></li><li class="d2"><a href="#6-making-eventual-consistency-acceptable">6 · Making eventual consistency acceptable</a></li><li class="d2"><a href="#7-interview-questions">7 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

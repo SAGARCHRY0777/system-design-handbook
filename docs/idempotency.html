@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Idempotency &amp; exactly-once · System Design Handbook</title>
+<meta name="description" content="Why every retry needs it, idempotency keys done properly, the two-generals problem, sagas, and the double-charge question you will be asked.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html" class="active">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="idempotency-and-exactly-once"><a class="anchor" href="#idempotency-and-exactly-once">#</a>Idempotency and exactly-once</h1><blockquote>
+<p><strong>Every distributed system retries, and every retry is a potential duplicate.</strong>
+Idempotency is the property that makes duplicates harmless — which is why it is
+the answer to a surprising number of interview questions.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-problem-precisely"><a class="anchor" href="#1-the-problem-precisely">#</a>1 · The problem, precisely</h2><pre class="code"><code>Client                    Server
+  |---- POST /charge -------&gt;|
+  |                          |  charge succeeds, $100 taken
+  |    X response lost X     |
+  |                          |
+  |  timeout. retry?         |
+  |                          |
+  If it retries  -&gt; possible DOUBLE CHARGE
+  If it doesn&#39;t  -&gt; possible LOST ORDER
+
+The client CANNOT distinguish &quot;request never arrived&quot; from
+&quot;request succeeded but the response was lost.&quot;</code></pre><p><strong>This is the two generals problem</strong>, and it is provably unsolvable: no finite
+exchange of messages over an unreliable channel gives both parties certainty.
+You cannot make the client&#39;s decision safe by trying harder.</p>
+<blockquote>
+<p><strong>So you change the problem.</strong> Instead of making the client&#39;s retry decision
+correct, you make retrying <em>safe</em>. That is idempotency, and framing it that way
+— &quot;the uncertainty is unavoidable, so I remove the consequence&quot; — is the answer
+that reads as senior.</p>
+</blockquote>
+<hr>
+<h2 id="2-which-operations-are-already-idempotent"><a class="anchor" href="#2-which-operations-are-already-idempotent">#</a>2 · Which operations are already idempotent</h2><div class="table-scroll"><table><thead><tr><th>Operation</th><th>Idempotent?</th><th>Why</th></tr></thead><tbody><tr><td><code>GET /users/1</code></td><td>✓</td><td>Reads change nothing</td></tr><tr><td><code>PUT /users/1 {name: &quot;A&quot;}</code></td><td>✓</td><td>Setting to a value is repeatable</td></tr><tr><td><code>DELETE /users/1</code></td><td>✓</td><td>Already deleted stays deleted</td></tr><tr><td><code>POST /orders</code></td><td>✗</td><td><strong>Creates a new one each time</strong></td></tr><tr><td><code>balance = balance - 10</code></td><td>✗</td><td>Applies again</td></tr><tr><td><code>SET status = &#39;paid&#39;</code></td><td>✓</td><td>Assignment, not increment</td></tr><tr><td><code>INSERT ... ON CONFLICT DO NOTHING</code></td><td>✓</td><td>The conflict absorbs the duplicate</td></tr></tbody></table></div><p><strong>Absolute versus relative is the pattern.</strong> <code>SET x = 5</code> is idempotent; <code>x += 1</code>
+is not. Where you can express the operation absolutely, do — it removes the
+problem instead of managing it.</p>
+<p><strong>HTTP method semantics are worth stating correctly:</strong> <code>GET</code>, <code>PUT</code>, <code>DELETE</code>
+and <code>HEAD</code> are defined as idempotent; <code>POST</code> and <code>PATCH</code> are not. This is why
+an L7 load balancer will retry a failed <code>GET</code> automatically but not a <code>POST</code> —
+a small detail that connects two parts of the design.</p>
+<hr>
+<h2 id="3-idempotency-keys"><a class="anchor" href="#3-idempotency-keys">#</a>3 · Idempotency keys</h2><p>The general mechanism for operations that are not naturally idempotent.</p>
+<pre class="code"><code class="language-http">POST /v1/charges
+Idempotency-Key: 8f14e45f-ea1c-4a4b-9f3e-2c0d7b1a9e55
+Content-Type: application/json
+
+{ &quot;amount&quot;: 10000, &quot;currency&quot;: &quot;usd&quot;, &quot;source&quot;: &quot;card_xyz&quot; }</code></pre><p><strong>The client generates the key</strong> — one per logical operation, reused across
+every retry of that operation. Server-generated keys cannot work, because
+obtaining one is itself a request that can fail.</p>
+<h3 id="the-implementation-and-the-part-people-get-wrong"><a class="anchor" href="#the-implementation-and-the-part-people-get-wrong">#</a>The implementation, and the part people get wrong</h3><pre class="code"><code class="language-sql">CREATE TABLE idempotency_keys (
+    key            TEXT PRIMARY KEY,
+    request_hash   TEXT NOT NULL,
+    state          TEXT NOT NULL,     -- in_progress | completed
+    response_code  INT,
+    response_body  JSONB,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at     TIMESTAMPTZ NOT NULL
+);</code></pre><pre class="code"><code class="language-python">def charge(key, request):
+    # Claim the key atomically. The PRIMARY KEY constraint is the lock --
+    # a SELECT-then-INSERT would race and let two concurrent retries both
+    # proceed, which is the exact bug idempotency keys exist to prevent.
+    claimed = db.execute(&quot;&quot;&quot;
+        INSERT INTO idempotency_keys (key, request_hash, state, expires_at)
+        VALUES (?, ?, &#39;in_progress&#39;, now() + interval &#39;24 hours&#39;)
+        ON CONFLICT (key) DO NOTHING
+        RETURNING key
+    &quot;&quot;&quot;, key, hash_of(request))
+
+    if not claimed:
+        existing = db.fetch_one(&quot;SELECT * FROM idempotency_keys WHERE key = ?&quot;, key)
+
+        # Same key, different payload -- the client has a bug. Refuse
+        # rather than silently returning an unrelated result.
+        if existing.request_hash != hash_of(request):
+            raise Conflict(&quot;idempotency key reused with a different request&quot;)
+
+        if existing.state == &#39;in_progress&#39;:
+            raise Conflict(&quot;request in progress, retry shortly&quot;)   # 409
+
+        return existing.response_code, existing.response_body      # replay
+
+    # First time through. The state change and the recorded response must
+    # commit together, or a crash between them loses the idempotency.
+    with db.transaction():
+        result = perform_charge(request)
+        db.execute(&quot;&quot;&quot;UPDATE idempotency_keys
+                      SET state=&#39;completed&#39;, response_code=?, response_body=?
+                      WHERE key=?&quot;&quot;&quot;, 200, result, key)
+    return 200, result</code></pre><p><strong>Four details that distinguish a real answer:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Detail</th><th>Why</th></tr></thead><tbody><tr><td><strong>Atomic claim</strong> (<code>ON CONFLICT</code>)</td><td><code>SELECT</code> then <code>INSERT</code> races; two concurrent retries both proceed</td></tr><tr><td><strong>Store the request hash</strong></td><td>Same key with a different body is a client bug — return 409, not the wrong result</td></tr><tr><td><strong>Store the <em>response</em></strong></td><td>A retry must return the same result, not just avoid a second charge</td></tr><tr><td><strong>Expire the keys</strong></td><td>Otherwise the table grows forever; 24 hours is typical</td></tr></tbody></table></div><blockquote>
+<p><strong>&quot;Store the response, not just a flag&quot; is the detail that matters most.</strong> The
+client retried because it did not get an answer — it still needs one. A system
+that prevents the double charge but returns &quot;already processed&quot; has not
+actually solved the client&#39;s problem.</p>
+</blockquote>
+<hr>
+<h2 id="4-idempotency-for-consumers"><a class="anchor" href="#4-idempotency-for-consumers">#</a>4 · Idempotency for consumers</h2><p>Queue consumers get the same problem from at-least-once delivery.</p>
+<div class="table-scroll"><table><thead><tr><th>Approach</th><th>How</th><th>Note</th></tr></thead><tbody><tr><td><strong>Dedupe table</strong></td><td>Unique constraint on <code>message_id</code></td><td>Simple, durable, needs cleanup</td></tr><tr><td><strong>Natural key</strong></td><td><code>INSERT ... ON CONFLICT DO NOTHING</code> on the business key</td><td>Best where it applies — no extra state</td></tr><tr><td><strong>Idempotent by design</strong></td><td><code>SET state=&#39;shipped&#39;</code> rather than <code>state = next(state)</code></td><td>Best of all</td></tr><tr><td><strong>Version check</strong></td><td>Apply only if <code>version = expected</code></td><td>Also handles reordering</td></tr></tbody></table></div><blockquote>
+<p><strong>A dedupe table is not free and the caveat is worth stating</strong>: it must be
+written in the <em>same transaction</em> as the effect, or a crash between them
+reintroduces the duplicate. If the effect is in another system entirely — a
+third-party payment API — you cannot have that transaction, which is exactly
+why you pass <em>them</em> an idempotency key too and let them dedupe.</p>
+</blockquote>
+<hr>
+<h2 id="5-distributed-transactions-and-sagas"><a class="anchor" href="#5-distributed-transactions-and-sagas">#</a>5 · Distributed transactions and sagas</h2><p><strong>When an operation spans services, two-phase commit is usually the wrong
+answer</strong> and knowing why is a good signal: 2PC blocks. If the coordinator dies
+after prepare, participants hold locks indefinitely, and availability becomes
+the product of every participant&#39;s availability.</p>
+<p><strong>The saga pattern instead:</strong> a sequence of local transactions, each with a
+compensating action.</p>
+<pre class="mermaid">flowchart LR
+    A[&quot;Reserve&lt;br/&gt;inventory&quot;] --&gt; B[&quot;Charge&lt;br/&gt;payment&quot;]
+    B --&gt; C[&quot;Create&lt;br/&gt;shipment&quot;]
+    C --&gt; D[&quot;Confirm&quot;]
+    B -.-&gt;|&quot;fails&quot;| A2[&quot;Release&lt;br/&gt;inventory&quot;]
+    C -.-&gt;|&quot;fails&quot;| B2[&quot;Refund&lt;br/&gt;payment&quot;]
+    B2 -.-&gt; A2</pre><div class="table-scroll"><table><thead><tr><th></th><th>Choreography</th><th>Orchestration</th></tr></thead><tbody><tr><td><strong>How</strong></td><td>Services react to each other&#39;s events</td><td>A coordinator drives each step</td></tr><tr><td><strong>Good</strong></td><td>No central component; loosely coupled</td><td>The flow is explicit and debuggable</td></tr><tr><td><strong>Bad</strong></td><td>The flow exists nowhere; hard to trace</td><td>The coordinator is a component to run</td></tr></tbody></table></div><p><strong>Say the honest cost:</strong> a saga is not atomic. There are windows where inventory
+is reserved but payment has not completed, and a compensating action is not a
+rollback — a refund is a <em>new fact</em>, visible to the user, not an erasure. For a
+booking flow that is usually acceptable; for a ledger it may not be.</p>
+<p><strong>Every saga step must be idempotent</strong>, because the coordinator retries.</p>
+<hr>
+<h2 id="6-the-double-charge-question"><a class="anchor" href="#6-the-double-charge-question">#</a>6 · The double-charge question</h2><p>You will be asked some version of this. The complete answer:</p>
+<blockquote>
+<p><em>&quot;Three layers. First, the client sends an idempotency key with the charge and
+reuses it on every retry, so a lost response cannot become a second charge.
+Second, I claim that key atomically with a unique constraint and store the
+response, so retries replay the original result rather than re-executing —
+and a mismatched request hash on the same key returns 409 rather than the wrong
+answer. Third, I pass an idempotency key to the payment provider as well,
+because my dedupe table and their charge cannot be in one transaction — so
+they have to dedupe on their side too.</em></p>
+<p><em>If it still happens — and at scale it will, through some path I did not
+anticipate — reconciliation catches it: a job compares our ledger to the
+provider&#39;s daily settlement and refunds duplicates. Detection plus
+compensation is the backstop, because prevention alone is never complete.&quot;</em></p>
+</blockquote>
+<p><strong>The last paragraph is what separates it.</strong> Acknowledging that prevention is
+incomplete and designing the detection path is exactly the reasoning senior
+engineers apply to money.</p>
+<hr>
+<h2 id="7-interview-questions"><a class="anchor" href="#7-interview-questions">#</a>7 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;The client times out and retries a payment.&quot;</td><td>It cannot tell a lost request from a lost response — that is the two generals problem and it is unsolvable. So I make retrying safe instead: a client-generated idempotency key, claimed atomically with a unique constraint, with the response stored so retries replay it.</td></tr><tr><td>⭐ &quot;How do you implement an idempotency key?&quot;</td><td>Unique key column, claimed with <code>INSERT ... ON CONFLICT DO NOTHING</code> — a select-then-insert races. Store the request hash to detect key reuse with a different body, store the response so retries get the real answer, and expire rows after about a day.</td></tr><tr><td>⭐ &quot;Exactly-once processing across services?&quot;</td><td>Not achievable as delivery. At-least-once plus idempotent handlers gives the same observable outcome. Across services, a saga of local transactions with compensating actions, each step idempotent — not two-phase commit, which blocks and multiplies unavailability.</td></tr><tr><td>&quot;How do you make a counter increment idempotent?&quot;</td><td>You cannot make <code>+= 1</code> idempotent directly, so change the representation: record the event with a unique ID and derive the count, or track applied message IDs. Where accuracy can be relaxed — view counts — accept the drift and say so.</td></tr><tr><td>&quot;What if the dedupe write and the effect are in different systems?&quot;</td><td>Then no transaction covers both, and you cannot fully prevent duplication locally. Push the key down to the external system so it dedupes too, and add reconciliation to detect what slips through.</td></tr><tr><td>&quot;Choreography or orchestration?&quot;</td><td>Orchestration when the flow is complex or needs auditing — the sequence is explicit and debuggable. Choreography when the steps are genuinely independent reactions. The failure mode of choreography is that the business process exists in no single place.</td></tr><tr><td>&quot;Is a saga atomic?&quot;</td><td>No, and that is the trade. There are visible intermediate states, and compensation is a new fact rather than an erasure — a refund appears on the statement. Acceptable for bookings; for a ledger I would keep the money movement inside one transactional boundary.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>state the two generals problem and why it reframes the solution,</li>
+<li>write the idempotency-key implementation including the atomic claim,</li>
+<li>say why storing the response matters as much as preventing the duplicate,</li>
+<li>explain sagas versus 2PC and the honest cost of compensation, and</li>
+<li>give the three-layer double-charge answer with reconciliation as the backstop.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="cap-and-consistency.html"><span>previous</span>CAP & consistency models</a><a class="pager next" href="failure-and-resilience.html"><span>next</span>Failure & resilience</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-problem-precisely">1 · The problem, precisely</a></li><li class="d2"><a href="#2-which-operations-are-already-idempotent">2 · Which operations are already idempotent</a></li><li class="d2"><a href="#3-idempotency-keys">3 · Idempotency keys</a></li><li class="d3"><a href="#the-implementation-and-the-part-people-get-wrong">The implementation, and the part people get wrong</a></li><li class="d2"><a href="#4-idempotency-for-consumers">4 · Idempotency for consumers</a></li><li class="d2"><a href="#5-distributed-transactions-and-sagas">5 · Distributed transactions and sagas</a></li><li class="d2"><a href="#6-the-double-charge-question">6 · The double-charge question</a></li><li class="d2"><a href="#7-interview-questions">7 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
