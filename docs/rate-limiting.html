@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rate limiting · System Design Handbook</title>
+<meta name="description" content="The five algorithms with their exact trade-offs, why the fixed window is wrong, distributed counting, and what to return when you reject.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="rate-limiting.html" class="active">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="rate-limiting"><a class="anchor" href="#rate-limiting">#</a>Rate limiting</h1><blockquote>
+<p>Rate limiting appears twice in the round: as a component of a larger design,
+and as a <strong>standalone question</strong> — &quot;design a rate limiter&quot; is a classic. Both
+want the same thing: the algorithm, why, and how it works across many servers.</p>
+</blockquote>
+<hr>
+<h2 id="1-why"><a class="anchor" href="#1-why">#</a>1 · Why</h2><div class="table-scroll"><table><thead><tr><th>Reason</th><th>Example</th></tr></thead><tbody><tr><td><strong>Protect capacity</strong></td><td>One client cannot exhaust the fleet</td></tr><tr><td><strong>Fairness</strong></td><td>One tenant cannot starve the others</td></tr><tr><td><strong>Cost control</strong></td><td>Downstream calls cost money per request</td></tr><tr><td><strong>Abuse</strong></td><td>Credential stuffing, scraping</td></tr><tr><td><strong>Tiering</strong></td><td>Free 100/hr, paid 10,000/hr</td></tr></tbody></table></div><p><strong>Rate limiting is a load-shedding mechanism</strong>, which means it is part of your
+availability story, not just a security feature. Framing it that way is better
+than &quot;to stop abuse&quot;.</p>
+<hr>
+<h2 id="2-the-five-algorithms"><a class="anchor" href="#2-the-five-algorithms">#</a>2 · The five algorithms</h2><h3 id="fixed-window"><a class="anchor" href="#fixed-window">#</a>Fixed window</h3><p>Count requests per fixed interval; reset at the boundary.</p>
+<pre class="code"><code>limit 100/minute
+
+12:00:00 - 12:00:59   counter -&gt; 100
+12:01:00              counter resets to 0</code></pre><p><strong>Its flaw is the boundary burst, and you should name it:</strong></p>
+<pre class="code"><code>12:00:59   100 requests  |
+12:01:00   100 requests  |  200 requests in ONE second
+                            while &quot;never exceeding 100/minute&quot;</code></pre><p>Simple, memory-cheap, and permits 2× the limit at any boundary.</p>
+<h3 id="sliding-window-log"><a class="anchor" href="#sliding-window-log">#</a>Sliding window log</h3><p>Store the timestamp of every request; count those inside the window.</p>
+<p><strong>Exact</strong> — no boundary problem. Costs memory proportional to the number of
+requests, which is why it does not scale to high limits.</p>
+<pre class="code"><code class="language-python">def allow(user_id, limit=100, window=60):
+    now = time.time()
+    key = f&quot;rl:{user_id}&quot;
+    pipe = redis.pipeline()
+    pipe.zremrangebyscore(key, 0, now - window)   # drop expired
+    pipe.zadd(key, {str(uuid4()): now})           # record this one
+    pipe.zcard(key)                               # count the window
+    pipe.expire(key, window)
+    _, _, count, _ = pipe.execute()
+    return count &lt;= limit</code></pre><h3 id="sliding-window-counter"><a class="anchor" href="#sliding-window-counter">#</a>Sliding window counter</h3><p>The practical compromise: weight the previous window by how much of it is still
+in view.</p>
+<pre class="code"><code>limit 100/min.  It is 12:01:15, so 75% of the window is in 12:01
+and 25% is still in 12:00.
+
+  estimate = current + previous x 0.25
+           = 40      + 90       x 0.25   =  62.5   -&gt; allow</code></pre><p><strong>O(1) memory, no boundary burst, approximate.</strong> The approximation assumes
+requests were spread evenly across the previous window — accurate enough that
+this is what most production limiters use, and saying that is a good answer.</p>
+<h3 id="token-bucket"><a class="anchor" href="#token-bucket">#</a>Token bucket</h3><p>A bucket of capacity B refills at rate R. Each request takes a token; empty
+bucket means reject.</p>
+<pre class="code"><code>capacity 10, refill 1/second
+
+  idle for 10s  -&gt; bucket full  -&gt; a BURST of 10 is allowed
+  sustained     -&gt; throttled to 1/second</code></pre><p><strong>Token bucket allows bursts up to the bucket size while enforcing a long-run
+average.</strong> That is usually what you actually want — real clients are bursty, and
+a limiter that rejects a legitimate burst after a quiet period is annoying
+without being safer.</p>
+<pre class="code"><code class="language-python">def allow(user_id, capacity=10, refill_rate=1.0):
+    now = time.time()
+    tokens, last = redis.hmget(f&quot;tb:{user_id}&quot;, &quot;tokens&quot;, &quot;last&quot;)
+    tokens = float(tokens or capacity)
+    last = float(last or now)
+
+    # Refill lazily: no background job, just compute what accrued.
+    tokens = min(capacity, tokens + (now - last) * refill_rate)
+
+    if tokens &lt; 1:
+        return False
+    redis.hset(f&quot;tb:{user_id}&quot;, mapping={&quot;tokens&quot;: tokens - 1, &quot;last&quot;: now})
+    return True</code></pre><p><strong>Lazy refill is the implementation detail worth mentioning</strong> — you never run a
+timer, you compute the accrued tokens from the elapsed time on each request.</p>
+<h3 id="leaky-bucket"><a class="anchor" href="#leaky-bucket">#</a>Leaky bucket</h3><p>A queue drained at a fixed rate. <strong>Smooths output completely</strong> — no bursts pass
+through at all. Right when the thing you are protecting cannot absorb bursts,
+such as a downstream API with a hard rate limit.</p>
+<div class="table-scroll"><table><thead><tr><th>Algorithm</th><th>Memory</th><th>Burst</th><th>Exact</th><th>Use</th></tr></thead><tbody><tr><td>Fixed window</td><td>O(1)</td><td>2× at boundary</td><td>✗</td><td>Rough internal limits</td></tr><tr><td>Sliding log</td><td>O(requests)</td><td>None</td><td>✓</td><td>Low limits, exactness required</td></tr><tr><td>Sliding counter</td><td>O(1)</td><td>Minimal</td><td>~</td><td><strong>The general default</strong></td></tr><tr><td>Token bucket</td><td>O(1)</td><td>Up to capacity</td><td>✓</td><td><strong>APIs — bursts are desirable</strong></td></tr><tr><td>Leaky bucket</td><td>O(queue)</td><td>None</td><td>✓</td><td>Protecting a fixed-rate downstream</td></tr></tbody></table></div><blockquote>
+<p><strong>Token bucket for public APIs, sliding window counter when you want strict
+per-window semantics.</strong> Being able to pick and say why in one sentence is the
+whole question.</p>
+</blockquote>
+<hr>
+<h2 id="3-doing-it-across-many-servers"><a class="anchor" href="#3-doing-it-across-many-servers">#</a>3 · Doing it across many servers</h2><p>The real problem. Ten servers each enforcing 100/min gives an effective limit of
+1,000/min.</p>
+<div class="table-scroll"><table><thead><tr><th>Approach</th><th>How</th><th>Trade-off</th></tr></thead><tbody><tr><td><strong>Central store</strong></td><td>Redis holds the counters</td><td>Correct; a network hop and a dependency</td></tr><tr><td><strong>Local, divided</strong></td><td>Each server enforces limit/N</td><td>No coordination; wrong under uneven balancing</td></tr><tr><td><strong>Local + async sync</strong></td><td>Enforce locally, reconcile periodically</td><td>Fast, approximate, temporarily over-permissive</td></tr><tr><td><strong>Sticky routing</strong></td><td>Same client always to the same server</td><td>Correct; couples limiting to load balancing</td></tr></tbody></table></div><p><strong>Redis is the standard answer</strong>, and the important detail is atomicity: a
+read-then-write race lets concurrent requests both pass. Use <code>INCR</code> (atomic by
+construction) or a <strong>Lua script</strong>, which Redis executes atomically — that is the
+implementation answer for anything more complex than a counter.</p>
+<pre class="code"><code class="language-lua">-- Atomic token bucket. The whole script runs as one operation, so
+-- there is no window between reading the tokens and writing them back.
+local tokens = tonumber(redis.call(&quot;HGET&quot;, KEYS[1], &quot;tokens&quot;)) or ARGV[1]
+local last   = tonumber(redis.call(&quot;HGET&quot;, KEYS[1], &quot;last&quot;))   or ARGV[3]
+local filled = math.min(ARGV[1], tokens + (ARGV[3] - last) * ARGV[2])
+if filled &lt; 1 then return 0 end
+redis.call(&quot;HSET&quot;, KEYS[1], &quot;tokens&quot;, filled - 1, &quot;last&quot;, ARGV[3])
+redis.call(&quot;EXPIRE&quot;, KEYS[1], ARGV[4])
+return 1</code></pre><p><strong>And say what happens when Redis is down.</strong> Fail open (allow everything —
+availability over protection) or fail closed (reject everything — protection
+over availability)? For a public API, fail open with a conservative local
+fallback: a rate limiter that takes down your service is worse than the abuse it
+was preventing. <strong>Volunteering this choice is a strong signal.</strong></p>
+<hr>
+<h2 id="4-what-to-limit-on"><a class="anchor" href="#4-what-to-limit-on">#</a>4 · What to limit on</h2><div class="table-scroll"><table><thead><tr><th>Key</th><th>Catches</th><th>Problem</th></tr></thead><tbody><tr><td><strong>API key / user ID</strong></td><td>Per-customer fairness</td><td>Only works when authenticated</td></tr><tr><td><strong>IP address</strong></td><td>Anonymous traffic</td><td>NAT and mobile carriers share IPs; IPv6 is cheap to rotate</td></tr><tr><td><strong>IP + endpoint</strong></td><td>Targeted abuse (login)</td><td>More keys to track</td></tr><tr><td><strong>Session / device</strong></td><td>Per-device fairness</td><td>Spoofable</td></tr><tr><td><strong>Global</strong></td><td>Total system protection</td><td>No fairness between clients</td></tr></tbody></table></div><p><strong>Layer them.</strong> A strict limit on <code>POST /login</code> per IP, a generous per-user API
+limit, and a global circuit breaker are three different defences against three
+different failures.</p>
+<hr>
+<h2 id="5-what-to-return"><a class="anchor" href="#5-what-to-return">#</a>5 · What to return</h2><p><strong>Getting the response right is easy points</strong>, and many candidates skip it.</p>
+<pre class="code"><code class="language-http">HTTP/1.1 429 Too Many Requests
+Retry-After: 30
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1735689600</code></pre><p><strong>429, not 503.</strong> 503 means the server is broken; 429 means the client should
+slow down — and well-behaved clients read <code>Retry-After</code> and back off.</p>
+<p><strong>Return the headers on successful responses too</strong>, so clients can self-throttle
+before they hit the wall rather than discovering it by being rejected.</p>
+<blockquote>
+<p><strong>Rate limit at the edge, not in the application.</strong> The whole point is to
+reject cheaply — spending a service call, a database query, and a thread on a
+request you are about to refuse defeats the purpose. API gateway or load
+balancer, before the expensive work.</p>
+</blockquote>
+<hr>
+<h2 id="6-what-to-say-in-the-round"><a class="anchor" href="#6-what-to-say-in-the-round">#</a>6 · What to say in the round</h2><blockquote>
+<p><em>&quot;Token bucket at the API gateway, keyed by API key, with a separate stricter
+IP-based limit on the auth endpoints. Bucket capacity ten, refill at the
+tier&#39;s sustained rate — bursts are legitimate and I&#39;d rather allow them than
+reject a client that was idle. Counters in Redis, updated by a Lua script so
+the read-modify-write is atomic; without that, concurrent requests race and
+both pass. If Redis is unavailable I fail open with a conservative local limit
+— a limiter that causes an outage is worse than the abuse it prevents. Clients
+get 429 with <code>Retry-After</code>, and the limit headers on every response so they
+can self-throttle.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="7-interview-questions"><a class="anchor" href="#7-interview-questions">#</a>7 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Which algorithm?&quot;</td><td>Token bucket for a public API, because bursts after idle are legitimate and it still bounds the long-run average. Sliding window counter when I need strict per-window semantics with O(1) memory. Fixed window I would avoid — it permits 2× the limit across a boundary.</td></tr><tr><td>⭐ &quot;How does it work across 10 servers?&quot;</td><td>Shared counters in Redis, atomic via INCR or a Lua script — a read-then-write races and lets concurrent requests through. Dividing the limit locally by server count breaks under uneven load balancing.</td></tr><tr><td>⭐ &quot;What if Redis is down?&quot;</td><td>A decision to state explicitly. For a public API, fail open with a conservative in-process fallback: the limiter causing an outage is worse than the abuse it stops. For something like payments, fail closed.</td></tr><tr><td>&quot;IP or user ID?&quot;</td><td>User ID where authenticated — it is the unit of fairness. IP for anonymous traffic, knowing NAT makes it coarse and IPv6 makes it cheap to evade. Layer both, plus a global limit.</td></tr><tr><td>&quot;What do you return?&quot;</td><td>429 with <code>Retry-After</code>, plus limit/remaining/reset headers on all responses so well-behaved clients throttle themselves instead of discovering the wall.</td></tr><tr><td>&quot;Where does it run?&quot;</td><td>At the edge — gateway or LB. Rejecting a request after a database query has already spent the resource the limiter exists to protect.</td></tr><tr><td>&quot;How do you handle a legitimate burst?&quot;</td><td>That is exactly what token bucket&#39;s capacity is for. If the burst is large and predictable, a per-tier bucket size, or queue and shape it with a leaky bucket rather than rejecting.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>name all five algorithms and the fixed window&#39;s boundary flaw,</li>
+<li>explain token bucket&#39;s lazy refill,</li>
+<li>justify the sliding window counter&#39;s approximation,</li>
+<li>explain why the Redis update must be atomic, and</li>
+<li>make and defend the fail-open/fail-closed call.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="queues-and-streams.html"><span>previous</span>Queues & streams</a><a class="pager next" href="databases.html"><span>next</span>Databases & indexes</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-why">1 · Why</a></li><li class="d2"><a href="#2-the-five-algorithms">2 · The five algorithms</a></li><li class="d3"><a href="#fixed-window">Fixed window</a></li><li class="d3"><a href="#sliding-window-log">Sliding window log</a></li><li class="d3"><a href="#sliding-window-counter">Sliding window counter</a></li><li class="d3"><a href="#token-bucket">Token bucket</a></li><li class="d3"><a href="#leaky-bucket">Leaky bucket</a></li><li class="d2"><a href="#3-doing-it-across-many-servers">3 · Doing it across many servers</a></li><li class="d2"><a href="#4-what-to-limit-on">4 · What to limit on</a></li><li class="d2"><a href="#5-what-to-return">5 · What to return</a></li><li class="d2"><a href="#6-what-to-say-in-the-round">6 · What to say in the round</a></li><li class="d2"><a href="#7-interview-questions">7 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

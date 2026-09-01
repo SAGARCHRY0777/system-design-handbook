@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Queues &amp; streams · System Design Handbook</title>
+<meta name="description" content="Why you decouple, queue versus log, delivery guarantees and why exactly-once is a lie, consumer groups, backpressure, and the dead-letter path.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html" class="active">Queues & streams</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="queues-and-streams"><a class="anchor" href="#queues-and-streams">#</a>Queues and streams</h1><blockquote>
+<p><strong>Adding a queue is how you turn a synchronous failure into an asynchronous
+delay.</strong> That sentence is the whole justification, and it is also the whole
+cost — because the delay is now something you have to reason about.</p>
+</blockquote>
+<hr>
+<h2 id="1-what-a-queue-actually-buys"><a class="anchor" href="#1-what-a-queue-actually-buys">#</a>1 · What a queue actually buys</h2><p>Four things, and a good answer names which one it wants:</p>
+<div class="table-scroll"><table><thead><tr><th>Benefit</th><th>Meaning</th></tr></thead><tbody><tr><td><strong>Decoupling</strong></td><td>The producer does not know or wait for the consumer</td></tr><tr><td><strong>Load levelling</strong></td><td>A 10× spike becomes a longer queue, not a crash</td></tr><tr><td><strong>Retry</strong></td><td>A failed unit of work is still in the queue</td></tr><tr><td><strong>Fan-out</strong></td><td>One event, many independent consumers</td></tr></tbody></table></div><p>And the costs, which you should volunteer:</p>
+<div class="table-scroll"><table><thead><tr><th>Cost</th><th>Meaning</th></tr></thead><tbody><tr><td><strong>Eventual consistency</strong></td><td>The effect happens <em>later</em>; the UI must cope</td></tr><tr><td><strong>Duplicates</strong></td><td>At-least-once delivery means handlers must be idempotent</td></tr><tr><td><strong>Ordering</strong></td><td>Global ordering is expensive; usually only per-key</td></tr><tr><td><strong>Another failure domain</strong></td><td>The queue itself can fill, lag, or fail</td></tr><tr><td><strong>Harder debugging</strong></td><td>A request&#39;s story is now spread across systems</td></tr></tbody></table></div><blockquote>
+<p><strong>&quot;I&#39;ll make this async&quot; is not free</strong>, and saying what it costs is the
+difference between using a queue and knowing why. The most common real
+consequence: the user posts something and does not see it, because their own
+write has not been fanned out yet.</p>
+</blockquote>
+<hr>
+<h2 id="2-queue-versus-log"><a class="anchor" href="#2-queue-versus-log">#</a>2 · Queue versus log</h2><p>The distinction that matters most, and the one candidates blur.</p>
+<pre class="code"><code>TASK QUEUE (SQS, RabbitMQ)
+  producer -&gt; [ job job job ] -&gt; consumer   consumes and DELETES
+  - message is removed once acked
+  - work is distributed; each job done once
+  - no history, no replay
+  - competing consumers scale trivially
+
+LOG / STREAM (Kafka, Redis Streams, Kinesis)
+  producer -&gt; [ 0 1 2 3 4 5 6 7 ] partition, append-only, RETAINED
+                      ^        ^
+                  group A   group B     each tracks its OWN offset
+  - messages persist for a retention window
+  - many independent consumer groups read the same data
+  - replay by resetting an offset
+  - ordering guaranteed WITHIN a partition</code></pre><div class="table-scroll"><table><thead><tr><th></th><th>Task queue</th><th>Log</th></tr></thead><tbody><tr><td><strong>Model</strong></td><td>Work to be done</td><td>Facts that happened</td></tr><tr><td><strong>After consumption</strong></td><td>Deleted</td><td>Retained</td></tr><tr><td><strong>Replay</strong></td><td>No</td><td>Yes — rewind the offset</td></tr><tr><td><strong>Multiple consumers</strong></td><td>They compete</td><td>Independent groups</td></tr><tr><td><strong>Ordering</strong></td><td>Weak</td><td>Per partition</td></tr><tr><td><strong>Scaling unit</strong></td><td>Consumers</td><td>Partitions</td></tr><tr><td><strong>Use for</strong></td><td>Send email, resize image</td><td>Event sourcing, analytics, CDC, fan-out</td></tr></tbody></table></div><blockquote>
+<p><strong>The clearest way to choose:</strong> if a second team might later want the same
+events for a different purpose, you want a log. If the message is a unit of
+work that one worker should do once and forget, you want a queue. Replay alone
+often decides it — being able to reprocess a week of events after fixing a bug
+is worth a great deal.</p>
+</blockquote>
+<hr>
+<h2 id="3-delivery-guarantees"><a class="anchor" href="#3-delivery-guarantees">#</a>3 · Delivery guarantees</h2><div class="table-scroll"><table><thead><tr><th>Guarantee</th><th>Means</th><th>Reality</th></tr></thead><tbody><tr><td><strong>At-most-once</strong></td><td>Never duplicated, may be lost</td><td>Fire-and-forget; metrics</td></tr><tr><td><strong>At-least-once</strong></td><td>Never lost, may be duplicated</td><td><strong>What you will actually use</strong></td></tr><tr><td><strong>Exactly-once</strong></td><td>Once, exactly</td><td>Not achievable end-to-end</td></tr></tbody></table></div><p><strong>Exactly-once delivery is impossible; exactly-once <em>processing</em> is achievable.</strong>
+This is worth being able to say precisely, because it is a favourite probe.</p>
+<pre class="code"><code>The consumer must do two things:
+  1. process the message
+  2. acknowledge it
+
+There is no way to make these atomic across two systems.
+
+  ack first, then process   -&gt; crash between = message LOST
+  process first, then ack   -&gt; crash between = message REDELIVERED
+
+So you choose at-least-once (process, then ack) and make processing
+idempotent. The DUPLICATE becomes harmless, which is the same
+observable outcome as exactly-once.</code></pre><p>The standard mechanisms:</p>
+<div class="table-scroll"><table><thead><tr><th>Mechanism</th><th>How</th></tr></thead><tbody><tr><td><strong>Idempotency key</strong></td><td>Dedupe table on <code>message_id</code>, unique constraint</td></tr><tr><td><strong>Natural idempotence</strong></td><td><code>SET status=&#39;paid&#39;</code> is safe to repeat; <code>balance += 10</code> is not</td></tr><tr><td><strong>Transactional outbox</strong></td><td>Write the row and the outbox event in one DB transaction; a relay publishes</td></tr><tr><td><strong>Kafka transactions</strong></td><td>Exactly-once <em>within</em> Kafka only — not to your database</td></tr></tbody></table></div><blockquote>
+<p><strong>The transactional outbox is the answer to &quot;how do you write to the database
+and publish an event atomically?&quot;</strong> — a very common follow-up. You cannot
+two-phase-commit across a database and a broker in practice, so you write both
+the state change and the event into the <em>same</em> database transaction, and a
+separate relay reads the outbox table and publishes. The publish is
+at-least-once, so the consumer still needs to dedupe.</p>
+</blockquote>
+<hr>
+<h2 id="4-consumer-groups-and-scaling"><a class="anchor" href="#4-consumer-groups-and-scaling">#</a>4 · Consumer groups and scaling</h2><pre class="code"><code>topic with 4 partitions, consumer group of 2:
+
+  P0 ─┐
+  P1 ─┴─&gt; consumer A
+  P2 ─┐
+  P3 ─┴─&gt; consumer B
+
+scale to 4 consumers -&gt; one partition each  (maximum parallelism)
+scale to 5 consumers -&gt; one sits IDLE</code></pre><p><strong>Partitions are the unit of parallelism, and this caps your consumers.</strong> You
+cannot have more useful consumers than partitions, and repartitioning a live
+topic is disruptive because it changes key placement — so partition count is a
+capacity decision made early. Saying this shows operational experience.</p>
+<p><strong>The partition key decides ordering.</strong> Messages with the same key land on the
+same partition and are ordered relative to each other. <code>user_id</code> as the key
+gives per-user ordering, which is almost always what you actually need — global
+ordering would mean one partition and therefore one consumer.</p>
+<p><strong>What happens when a consumer dies</strong> is a good deep-dive target:</p>
+<div class="table-scroll"><table><thead><tr><th>Broker</th><th>Mechanism</th></tr></thead><tbody><tr><td>Kafka</td><td>Group coordinator detects the missed heartbeat, rebalances partitions to survivors, and the new owner resumes from the last committed offset</td></tr><tr><td>SQS</td><td>The message&#39;s visibility timeout expires and it reappears for another consumer</td></tr><tr><td>Redis Streams</td><td>The entry stays pending; another consumer takes it with <code>XCLAIM</code> after the idle threshold</td></tr></tbody></table></div><hr>
+<h2 id="5-backpressure-and-lag"><a class="anchor" href="#5-backpressure-and-lag">#</a>5 · Backpressure and lag</h2><p><strong>Consumer lag is the number to monitor</strong> — how far behind the head the consumer
+is. It is the single best health signal for an async system, and &quot;I&#39;d alert on
+consumer lag&quot; is a good thing to say unprompted.</p>
+<pre class="code"><code>lag rising steadily     -&gt; consumers are underprovisioned
+lag spiking then draining -&gt; normal; the queue is doing its job
+lag rising with idle consumers -&gt; a poison message or a stuck partition</code></pre><p>When producers outrun consumers, something must give:</p>
+<div class="table-scroll"><table><thead><tr><th>Strategy</th><th>Effect</th></tr></thead><tbody><tr><td><strong>Buffer</strong></td><td>Queue grows — fine, until retention or disk runs out</td></tr><tr><td><strong>Scale consumers</strong></td><td>The right first answer, bounded by partition count</td></tr><tr><td><strong>Shed load</strong></td><td>Reject at the edge; protects the system, drops work</td></tr><tr><td><strong>Slow the producer</strong></td><td>Rate limit or block; propagates the pressure upstream</td></tr><tr><td><strong>Sample or aggregate</strong></td><td>For metrics, drop precision rather than data</td></tr></tbody></table></div><blockquote>
+<p><strong>An unbounded queue is not a solution, it is a deferred outage.</strong> If arrival
+rate exceeds service rate persistently, the queue only decides <em>when</em> you
+fail, not whether. Say this — it is the queueing-theory point most candidates
+miss, and it reframes &quot;just add a queue&quot; correctly.</p>
+</blockquote>
+<hr>
+<h2 id="6-retries-and-the-dead-letter-queue"><a class="anchor" href="#6-retries-and-the-dead-letter-queue">#</a>6 · Retries and the dead-letter queue</h2><pre class="mermaid">flowchart LR
+    Q[&quot;Queue&quot;] --&gt; C[&quot;Consumer&quot;]
+    C --&gt;|&quot;success&quot;| A[&quot;Ack&quot;]
+    C --&gt;|&quot;failure&quot;| R{&quot;Retries&lt;br/&gt;exhausted?&quot;}
+    R --&gt;|&quot;no&quot;| B[&quot;Backoff&lt;br/&gt;+ jitter&quot;]
+    B --&gt; Q
+    R --&gt;|&quot;yes&quot;| D[[&quot;Dead-letter&lt;br/&gt;queue&quot;]]
+    D --&gt; H[&quot;Alert + human&lt;br/&gt;inspection&quot;]</pre><p><strong>Exponential backoff with jitter</strong>, not fixed retries: <code>delay = base × 2^n ± random</code>. The jitter matters — without it, everything that failed together
+retries together, and you have rebuilt the thundering herd you were trying to
+avoid.</p>
+<p><strong>A dead-letter queue is mandatory, and its purpose is containment.</strong> Without
+one, a single unprocessable message (&quot;poison pill&quot;) is retried forever, blocking
+its partition and consuming capacity indefinitely. With one, after N attempts it
+moves aside and everything else proceeds.</p>
+<p><strong>Alert on DLQ depth.</strong> A DLQ nobody looks at is a silent data-loss channel — it
+looks healthy precisely because the failures are hidden.</p>
+<hr>
+<h2 id="7-choosing-a-technology"><a class="anchor" href="#7-choosing-a-technology">#</a>7 · Choosing a technology</h2><div class="table-scroll"><table><thead><tr><th>Need</th><th>Reach for</th></tr></thead><tbody><tr><td>Simple work queue, managed</td><td>SQS</td></tr><tr><td>Complex routing, priorities, per-message TTL</td><td>RabbitMQ</td></tr><tr><td>High-throughput event log, replay, many consumers</td><td>Kafka</td></tr><tr><td>You already run Redis and want a light stream</td><td>Redis Streams</td></tr><tr><td>Managed streaming on a cloud</td><td>Kinesis / Pub/Sub</td></tr><tr><td>Scheduled or delayed work</td><td>SQS delay, or a scheduler + queue</td></tr></tbody></table></div><p><strong>Name a category and one example, then justify by property, not brand.</strong> <em>&quot;An
+append-only log with consumer groups and replay — Kafka, or Redis Streams if we
+already run Redis and the volume is modest.&quot;</em></p>
+<hr>
+<h2 id="8-what-to-say-in-the-round"><a class="anchor" href="#8-what-to-say-in-the-round">#</a>8 · What to say in the round</h2><blockquote>
+<p><em>&quot;The write path is synchronous only as far as durably storing the post.
+Fan-out goes on a log — I want replay, and I expect a second consumer later
+for analytics. Partition by author ID so one author&#39;s events stay ordered.
+Delivery is at-least-once, so the fan-out worker dedupes on <code>(tweet_id, follower_id)</code> with a unique constraint. Retries back off with jitter and land
+in a DLQ after five attempts, and I&#39;d alert on both consumer lag and DLQ
+depth. The user-visible cost is that a post may take a second or two to reach
+followers&#39; timelines — I&#39;d write it into the author&#39;s own view synchronously
+so they always see their own post immediately.&quot;</em></p>
+</blockquote>
+<p><strong>That last sentence is the one that gets noticed</strong>: it shows you thought about
+what eventual consistency feels like to a user, not just what it means to the
+system.</p>
+<hr>
+<h2 id="9-interview-questions"><a class="anchor" href="#9-interview-questions">#</a>9 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Why add a queue here?&quot;</td><td>To decouple the write path from expensive downstream work, absorb spikes so a 10× burst becomes lag rather than errors, and get retries for free. The cost is eventual consistency, possible duplicates, and a new failure domain — all of which I have to design for.</td></tr><tr><td>⭐ &quot;Kafka or SQS?&quot;</td><td>SQS if these are units of work to be done once and forgotten. Kafka if they are facts other consumers may later want, or if I need replay and per-key ordering. Replay usually decides it.</td></tr><tr><td>⭐ &quot;Can you guarantee exactly-once?&quot;</td><td>Not for delivery — ack and process cannot be made atomic across two systems, so you pick at-least-once and make the handler idempotent. That yields exactly-once <em>processing</em>, which is what people actually mean.</td></tr><tr><td>&quot;How do you write to the DB and publish atomically?&quot;</td><td>Transactional outbox: state change and event row in one transaction, then a relay publishes from the outbox. The publish is still at-least-once, so consumers dedupe.</td></tr><tr><td>&quot;A consumer crashes mid-message.&quot;</td><td>It never acked, so the message is redelivered — visibility timeout in SQS, <code>XCLAIM</code> after the idle threshold in Redis Streams, rebalance to the last committed offset in Kafka. The handler must be idempotent because that redelivery is a duplicate.</td></tr><tr><td>⭐ &quot;The queue is backing up.&quot;</td><td>Check whether lag is rising steadily or spiking and draining. Steady rise means underprovisioned consumers — scale them, capped by partition count. Rising with idle consumers means a poison message. And if arrival exceeds service rate persistently, no queue size saves you; you shed load or slow the producer.</td></tr><tr><td>&quot;What is in your dead-letter queue design?&quot;</td><td>Move aside after N attempts with jittered exponential backoff, alert on depth, and keep the original message plus the failure reason. Without a DLQ one poison message blocks its partition forever.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>state the four benefits and five costs of going async,</li>
+<li>draw the queue-versus-log distinction and pick by replay,</li>
+<li>explain why exactly-once delivery is impossible but exactly-once processing is not,</li>
+<li>describe the transactional outbox,</li>
+<li>say why an unbounded queue is a deferred outage, and</li>
+<li>name the two metrics you would alert on.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="caching.html"><span>previous</span>Caching</a><a class="pager next" href="rate-limiting.html"><span>next</span>Rate limiting</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-what-a-queue-actually-buys">1 · What a queue actually buys</a></li><li class="d2"><a href="#2-queue-versus-log">2 · Queue versus log</a></li><li class="d2"><a href="#3-delivery-guarantees">3 · Delivery guarantees</a></li><li class="d2"><a href="#4-consumer-groups-and-scaling">4 · Consumer groups and scaling</a></li><li class="d2"><a href="#5-backpressure-and-lag">5 · Backpressure and lag</a></li><li class="d2"><a href="#6-retries-and-the-dead-letter-queue">6 · Retries and the dead-letter queue</a></li><li class="d2"><a href="#7-choosing-a-technology">7 · Choosing a technology</a></li><li class="d2"><a href="#8-what-to-say-in-the-round">8 · What to say in the round</a></li><li class="d2"><a href="#9-interview-questions">9 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

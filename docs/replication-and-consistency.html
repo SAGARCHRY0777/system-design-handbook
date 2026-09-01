@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replication &amp; consistency · System Design Handbook</title>
+<meta name="description" content="Leader-follower, multi-leader and leaderless; quorums; replication lag and the read-your-writes problem; and failover done honestly.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html" class="active">Replication & consistency</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="replication-and-consistency"><a class="anchor" href="#replication-and-consistency">#</a>Replication and consistency</h1><blockquote>
+<p><strong>Replication gives you three different things — durability, read scale, and
+availability — and the topology you choose depends on which one you actually
+need.</strong> Saying which is a good way to open.</p>
+</blockquote>
+<hr>
+<h2 id="1-why-replicate"><a class="anchor" href="#1-why-replicate">#</a>1 · Why replicate</h2><div class="table-scroll"><table><thead><tr><th>Goal</th><th>What it needs</th></tr></thead><tbody><tr><td><strong>Durability</strong></td><td>A copy on another machine before you ack the write</td></tr><tr><td><strong>Read scale</strong></td><td>Replicas that can serve reads</td></tr><tr><td><strong>Availability</strong></td><td>A replica that can take over as leader</td></tr><tr><td><strong>Latency</strong></td><td>A copy near the user</td></tr></tbody></table></div><p>These pull in different directions. Read scale wants many async replicas;
+durability wants synchronous acks; low-latency writes want the leader nearby,
+which cannot be true for everyone at once.</p>
+<hr>
+<h2 id="2-leader-follower-primary-replica"><a class="anchor" href="#2-leader-follower-primary-replica">#</a>2 · Leader-follower (primary-replica)</h2><p>The default, and the right first answer.</p>
+<pre class="code"><code>        writes
+          |
+          v
+      [ LEADER ] --replicate--&gt; [ follower ] &lt;- reads
+                 --replicate--&gt; [ follower ] &lt;- reads</code></pre><div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>Good</strong></td><td>Simple; no write conflicts ever; reads scale linearly</td></tr><tr><td><strong>Bad</strong></td><td>Writes do not scale; failover has a gap; replicas lag</td></tr></tbody></table></div><h3 id="synchronous-asynchronous-or-semi-synchronous"><a class="anchor" href="#synchronous-asynchronous-or-semi-synchronous">#</a>Synchronous, asynchronous, or semi-synchronous</h3><div class="table-scroll"><table><thead><tr><th>Mode</th><th>Ack after</th><th>Durability</th><th>Latency</th><th>Risk</th></tr></thead><tbody><tr><td><strong>Async</strong></td><td>Leader writes</td><td>Weakest</td><td>Lowest</td><td>Leader dies → acked writes lost</td></tr><tr><td><strong>Sync</strong></td><td>All replicas ack</td><td>Strongest</td><td>Highest</td><td>One slow replica blocks all writes</td></tr><tr><td><strong>Semi-sync</strong></td><td>One replica acks</td><td>Good</td><td>Moderate</td><td><strong>The usual choice</strong></td></tr></tbody></table></div><blockquote>
+<p><strong>Fully synchronous replication to all replicas is a trap</strong> and worth naming
+as one: it makes your write availability the <em>product</em> of every node&#39;s
+availability, so adding replicas makes writes <em>less</em> available. Semi-sync — ack
+once at least one replica has it — gives you durability against single-node
+loss without that coupling.</p>
+</blockquote>
+<hr>
+<h2 id="3-replication-lag"><a class="anchor" href="#3-replication-lag">#</a>3 · Replication lag</h2><p><strong>The practical consequence of async replication, and the source of the bugs
+users actually notice.</strong></p>
+<h3 id="read-your-writes"><a class="anchor" href="#read-your-writes">#</a>Read-your-writes</h3><p>A user posts a comment, the write goes to the leader, the page reloads and reads
+from a replica that has not caught up — <strong>the comment they just wrote is gone.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Fix</th><th>How</th><th>Cost</th></tr></thead><tbody><tr><td><strong>Read from leader after write</strong></td><td>For N seconds, or for data the user can modify</td><td>Leader load</td></tr><tr><td><strong>Sticky routing</strong></td><td>Same user → same replica</td><td>Uneven load</td></tr><tr><td><strong>Wait for the write&#39;s position</strong></td><td>Client carries the log position; replica waits for it</td><td>Latency</td></tr><tr><td><strong>Client-side echo</strong></td><td>Show the local copy optimistically</td><td>UI-only; the data is still stale</td></tr></tbody></table></div><p><strong>&quot;Read from the leader for a short window after a write&quot; is the pragmatic
+answer</strong>, and scoping it to the user&#39;s <em>own</em> mutable data keeps leader load
+small.</p>
+<h3 id="monotonic-reads"><a class="anchor" href="#monotonic-reads">#</a>Monotonic reads</h3><p>Two successive reads hit different replicas with different lag, and <strong>time
+appears to go backwards</strong> — a comment appears, then vanishes. Fix: route a given
+user consistently to one replica.</p>
+<h3 id="consistent-prefix"><a class="anchor" href="#consistent-prefix">#</a>Consistent prefix</h3><p>Causally related writes are seen out of order — the reply arrives before the
+question. Fix: keep causally related writes in the same partition, or track
+causality explicitly.</p>
+<blockquote>
+<p><strong>Naming these three by name — read-your-writes, monotonic reads, consistent
+prefix — is a strong signal</strong>, because they are the three anomalies that make
+&quot;eventually consistent&quot; concrete rather than hand-wavy.</p>
+</blockquote>
+<p><strong>Monitor replication lag and alert on it.</strong> It is the single most useful
+health metric for a replicated database, and it is the thing that silently
+degrades before it visibly breaks.</p>
+<hr>
+<h2 id="4-multi-leader"><a class="anchor" href="#4-multi-leader">#</a>4 · Multi-leader</h2><p>Writes accepted at several leaders, replicated to each other.</p>
+<p><strong>Use for:</strong> multi-region write latency, offline-capable clients, collaborative
+editing.</p>
+<p><strong>The cost is conflicts</strong>, which are unavoidable — two regions modify the same
+record concurrently and both are already committed.</p>
+<div class="table-scroll"><table><thead><tr><th>Resolution</th><th>How</th><th>Problem</th></tr></thead><tbody><tr><td><strong>Last write wins</strong></td><td>Highest timestamp</td><td><strong>Silently discards data</strong>; clock skew decides</td></tr><tr><td><strong>Per-field merge</strong></td><td>Merge non-conflicting fields</td><td>Not always semantically valid</td></tr><tr><td><strong>CRDTs</strong></td><td>Structures that merge deterministically</td><td>Restricts what you can model</td></tr><tr><td><strong>Application decides</strong></td><td>Keep both, let the user resolve</td><td>Real work; often correct</td></tr></tbody></table></div><blockquote>
+<p><strong>Last-write-wins is the default in several systems and it loses data.</strong> Being
+able to say that — and that &quot;last&quot; is decided by clocks that are not
+synchronised — is exactly the kind of thing that separates candidates.</p>
+</blockquote>
+<hr>
+<h2 id="5-leaderless-and-quorums"><a class="anchor" href="#5-leaderless-and-quorums">#</a>5 · Leaderless and quorums</h2><p>Dynamo-style: the client writes to several nodes and reads from several.</p>
+<pre class="code"><code>N = replicas,  W = write acks required,  R = read replies required
+
+W + R &gt; N  -&gt;  read and write sets OVERLAP, so a read sees the
+               latest write (&quot;strong&quot; quorum consistency)
+
+N=3, W=2, R=2   the standard: survives one node down, either way
+N=3, W=3, R=1   fast reads, writes fail if any node is down
+N=3, W=1, R=1   fastest, weakest -- may read stale</code></pre><p><strong><code>W + R &gt; N</code> is the formula to know, and the intuition behind it is the
+pigeonhole principle</strong>: if the write touched W nodes and the read touched R
+nodes and W + R exceeds N, the two sets must share at least one node — and that
+node has the latest value.</p>
+<p><strong>The honest caveat</strong>, worth volunteering: quorums do not give you real
+linearizability. Concurrent writes, failed writes that partially succeeded, and
+recovery from backup all break the guarantee at the edges. It is <em>stronger</em>
+consistency, not <em>strong</em> consistency.</p>
+<p>Supporting mechanisms: <strong>read repair</strong> (the reader notices a stale replica and
+fixes it), <strong>hinted handoff</strong> (another node holds a write for a down node),
+<strong>anti-entropy</strong> (background Merkle-tree comparison).</p>
+<hr>
+<h2 id="6-failover"><a class="anchor" href="#6-failover">#</a>6 · Failover</h2><p><em>&quot;The leader dies — what happens?&quot;</em> A very common probe, and the good answer
+admits the problems.</p>
+<pre class="code"><code>1. DETECT     heartbeat timeout (typically 10-30s)
+2. ELECT      choose the most up-to-date follower
+3. PROMOTE    reconfigure it as leader
+4. REDIRECT   point clients and replicas at it</code></pre><p><strong>What goes wrong, and you should say it:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Problem</th><th>Detail</th></tr></thead><tbody><tr><td><strong>Lost writes</strong></td><td>With async replication, writes acked but not replicated are gone. The old leader may return holding writes nobody else has.</td></tr><tr><td><strong>Split brain</strong></td><td>Both nodes think they lead; both accept writes; data diverges. Prevented by requiring a majority quorum, or by fencing.</td></tr><tr><td><strong>Detection tuning</strong></td><td>Too short and you fail over on a network blip; too long and you are down longer. There is no correct value, only a trade.</td></tr><tr><td><strong>Cold replica</strong></td><td>The new leader has empty caches and a cold buffer pool, so performance is degraded even after recovery.</td></tr></tbody></table></div><blockquote>
+<p><strong>Fencing tokens are the split-brain answer.</strong> Each leadership term gets a
+monotonically increasing number, and storage rejects writes carrying an old
+token. A deposed leader that comes back cannot corrupt anything, because its
+token is stale. This is how you make &quot;the old leader might still be alive&quot;
+safe rather than merely unlikely.</p>
+</blockquote>
+<hr>
+<h2 id="7-choosing-in-the-round"><a class="anchor" href="#7-choosing-in-the-round">#</a>7 · Choosing, in the round</h2><div class="table-scroll"><table><thead><tr><th>Situation</th><th>Topology</th></tr></thead><tbody><tr><td>Read-heavy, single region</td><td>Leader-follower, async replicas, read-your-writes handled</td></tr><tr><td>Must not lose acked writes</td><td>Semi-synchronous</td></tr><tr><td>Multi-region, low-latency writes</td><td>Multi-leader — and name the conflict strategy</td></tr><tr><td>High availability over consistency</td><td>Leaderless with quorums</td></tr><tr><td>Strong consistency required</td><td>Single leader per key, or consensus (Raft)</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Leader-follower with async replicas. Reads go to replicas, except a user&#39;s
+own data for thirty seconds after they write it — that goes to the leader, so
+they always see their own changes. Semi-sync so we don&#39;t lose acked writes to a
+single node failure. I&#39;d alert on replication lag, and on failover I&#39;d expect
+roughly thirty seconds of write unavailability plus a cold cache on the new
+leader.&quot;</em></p>
+</blockquote>
+<p><strong>That is a complete answer</strong>: topology, read routing, the read-your-writes fix,
+durability, monitoring, and the honest cost of failover.</p>
+<hr>
+<h2 id="8-interview-questions"><a class="anchor" href="#8-interview-questions">#</a>8 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Sync or async replication?&quot;</td><td>Semi-sync — ack once at least one replica has the write. Fully sync to all replicas makes write availability the product of every node&#39;s availability, so more replicas means worse writes. Fully async means a leader failure loses acked writes.</td></tr><tr><td>⭐ &quot;A user posts and doesn&#39;t see their post.&quot;</td><td>Replication lag — they read from a replica that has not caught up. Route reads of the user&#39;s own mutable data to the leader for a short window after a write. The general family is read-your-writes, monotonic reads, and consistent prefix.</td></tr><tr><td>⭐ &quot;What is W + R &gt; N?&quot;</td><td>Quorum consistency. If writes go to W replicas and reads consult R, and W + R exceeds N, the sets must overlap, so a read sees the latest write. N=3, W=2, R=2 is the standard. It is not true linearizability, though — concurrent and partially-failed writes break it at the edges.</td></tr><tr><td>&quot;The leader dies.&quot;</td><td>Detect by heartbeat, elect the most caught-up follower, promote, redirect. Expect roughly 30 seconds of write unavailability, possible loss of async-replicated writes, and a cold cache after. Guard against split brain with a majority quorum and fencing tokens.</td></tr><tr><td>⭐ &quot;How do you prevent split brain?&quot;</td><td>Require a majority to elect, so two leaders cannot both hold one. And fence: each term gets an increasing token, and storage rejects writes bearing a stale one — so a returning old leader cannot corrupt data.</td></tr><tr><td>&quot;How do you resolve multi-leader conflicts?&quot;</td><td>Last-write-wins is the default and it silently discards data, with clock skew deciding the winner. Better: merge per field, use CRDTs where the data model allows, or keep both versions and let the application or user resolve.</td></tr><tr><td>&quot;What do you monitor?&quot;</td><td>Replication lag first — it degrades silently before it breaks visibly. Then failover events, and whether reads are being served stale beyond the tolerance we agreed in scoping.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>explain why fully synchronous replication hurts availability,</li>
+<li>name the three lag anomalies and fix read-your-writes,</li>
+<li>derive <code>W + R &gt; N</code> and state its honest limit,</li>
+<li>walk the four failover steps and the four things that go wrong, and</li>
+<li>explain fencing tokens.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="sharding.html"><span>previous</span>Sharding & partitioning</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-why-replicate">1 · Why replicate</a></li><li class="d2"><a href="#2-leader-follower-primary-replica">2 · Leader-follower (primary-replica)</a></li><li class="d3"><a href="#synchronous-asynchronous-or-semi-synchronous">Synchronous, asynchronous, or semi-synchronous</a></li><li class="d2"><a href="#3-replication-lag">3 · Replication lag</a></li><li class="d3"><a href="#read-your-writes">Read-your-writes</a></li><li class="d3"><a href="#monotonic-reads">Monotonic reads</a></li><li class="d3"><a href="#consistent-prefix">Consistent prefix</a></li><li class="d2"><a href="#4-multi-leader">4 · Multi-leader</a></li><li class="d2"><a href="#5-leaderless-and-quorums">5 · Leaderless and quorums</a></li><li class="d2"><a href="#6-failover">6 · Failover</a></li><li class="d2"><a href="#7-choosing-in-the-round">7 · Choosing, in the round</a></li><li class="d2"><a href="#8-interview-questions">8 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

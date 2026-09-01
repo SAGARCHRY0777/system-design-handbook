@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caching · System Design Handbook</title>
+<meta name="description" content="Where to put a cache, the four read/write patterns, eviction and TTL, and the three failure modes — stampede, penetration, avalanche — that separate depth from hand-waving.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html" class="active">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="caching"><a class="anchor" href="#caching">#</a>Caching</h1><blockquote>
+<p><strong>Caching appears in essentially every design round</strong>, which means saying &quot;and
+we&#39;ll add a cache&quot; is worth nothing. The score is in <em>where</em>, <em>which pattern</em>,
+<em>how it is invalidated</em>, and <em>what happens when it fails</em>.</p>
+</blockquote>
+<hr>
+<h2 id="1-where-caches-live"><a class="anchor" href="#1-where-caches-live">#</a>1 · Where caches live</h2><p>There are six layers, and a good answer names the one it means.</p>
+<pre class="mermaid">flowchart LR
+    B[&quot;Browser cache&lt;br/&gt;0ms&quot;] --&gt; C[&quot;CDN edge&lt;br/&gt;~20ms&quot;]
+    C --&gt; G[&quot;API gateway&lt;br/&gt;cache&quot;]
+    G --&gt; A[&quot;App-local&lt;br/&gt;in-process, ~0.1ms&quot;]
+    A --&gt; D[&quot;Distributed cache&lt;br/&gt;Redis, ~1ms&quot;]
+    D --&gt; E[(&quot;Database&lt;br/&gt;buffer pool&quot;)]</pre><div class="table-scroll"><table><thead><tr><th>Layer</th><th>Latency</th><th>Good for</th><th>Watch out for</th></tr></thead><tbody><tr><td><strong>Browser</strong></td><td>0</td><td>Static assets, user&#39;s own data</td><td>You cannot invalidate it; only expire it</td></tr><tr><td><strong>CDN</strong></td><td>10–50 ms</td><td>Public, cacheable-by-URL content</td><td>Purge is eventually consistent</td></tr><tr><td><strong>API gateway</strong></td><td>~1 ms</td><td>Identical anonymous responses</td><td>Per-user content needs care</td></tr><tr><td><strong>In-process</strong></td><td>~0.1 ms</td><td>Tiny, hot, tolerant of staleness</td><td><strong>N copies, N inconsistencies</strong></td></tr><tr><td><strong>Distributed (Redis)</strong></td><td>~1 ms</td><td>The workhorse — shared, invalidatable</td><td>Network hop; it can fail</td></tr><tr><td><strong>DB buffer pool</strong></td><td>—</td><td>Free; already happening</td><td>Not something you design</td></tr></tbody></table></div><blockquote>
+<p><strong>In-process caching is faster and much more dangerous.</strong> Every instance holds
+its own copy, so an invalidation must reach all of them and a user can see a
+value flip back and forth depending on which server they hit. It is the right
+answer for small, slow-changing config; the wrong answer for anything a user
+just edited. Saying that distinction out loud is a depth signal.</p>
+</blockquote>
+<hr>
+<h2 id="2-the-read-patterns"><a class="anchor" href="#2-the-read-patterns">#</a>2 · The read patterns</h2><h3 id="cache-aside-lazy-loading-the-default"><a class="anchor" href="#cache-aside-lazy-loading-the-default">#</a>Cache-aside (lazy loading) — the default</h3><p>The application owns the logic.</p>
+<pre class="code"><code class="language-python">def get_user(user_id):
+    key = f&quot;user:{user_id}&quot;
+    cached = cache.get(key)
+    if cached is not None:
+        return cached                      # hit
+
+    user = db.query(&quot;SELECT ... WHERE id = ?&quot;, user_id)   # miss
+    cache.set(key, user, ttl=300)
+    return user</code></pre><div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>Good</strong></td><td>Only requested data is cached; a cache outage degrades rather than breaks; works with any store</td></tr><tr><td><strong>Bad</strong></td><td>Every miss pays cache + DB; the app repeats this logic everywhere; a window exists where cache and DB disagree</td></tr></tbody></table></div><p><strong>This is the right default and the right first answer.</strong> Say &quot;cache-aside&quot; by
+name.</p>
+<h3 id="read-through"><a class="anchor" href="#read-through">#</a>Read-through</h3><p>The cache sits inline and fetches on miss itself. Simpler application code,
+but the cache becomes a hard dependency — if it is down, you are down.</p>
+<hr>
+<h2 id="3-the-write-patterns"><a class="anchor" href="#3-the-write-patterns">#</a>3 · The write patterns</h2><p>This is where the interesting trade-off lives.</p>
+<div class="table-scroll"><table><thead><tr><th>Pattern</th><th>Write goes</th><th>Durability</th><th>Read-after-write</th><th>Use when</th></tr></thead><tbody><tr><td><strong>Write-through</strong></td><td>Cache <strong>and</strong> DB, synchronously</td><td>Safe</td><td>Consistent</td><td>Reads follow writes closely</td></tr><tr><td><strong>Write-around</strong></td><td>DB only; cache filled on read</td><td>Safe</td><td>Stale until miss</td><td>Write-heavy, rarely re-read</td></tr><tr><td><strong>Write-back</strong></td><td>Cache now, DB asynchronously</td><td><strong>Can lose data</strong></td><td>Consistent</td><td>Extreme write throughput</td></tr><tr><td><strong>Invalidate-on-write</strong></td><td>DB, then <strong>delete</strong> the key</td><td>Safe</td><td>Consistent</td><td>The pragmatic default</td></tr></tbody></table></div><blockquote>
+<p><strong>Delete the key; do not update it.</strong> Updating on write invites a lost-update
+race: two concurrent writers can leave the cache holding the older value
+permanently. Deleting means the next read repopulates from the source of
+truth. The worst case is an extra miss, not permanent corruption.</p>
+</blockquote>
+<p><strong>Write-back is the one to mention carefully.</strong> It is the fastest and the only
+one that can silently lose acknowledged writes when a cache node dies. Legitimate
+for view counters and metrics; unacceptable for anything a user would notice
+missing. Saying <em>&quot;write-back, but only because losing a few view counts is
+acceptable&quot;</em> is exactly the kind of scoped trade-off the round rewards.</p>
+<hr>
+<h2 id="4-eviction-and-ttl"><a class="anchor" href="#4-eviction-and-ttl">#</a>4 · Eviction and TTL</h2><div class="table-scroll"><table><thead><tr><th>Policy</th><th>Evicts</th><th>Good for</th></tr></thead><tbody><tr><td><strong>LRU</strong></td><td>Least recently used</td><td>General purpose — the default</td></tr><tr><td><strong>LFU</strong></td><td>Least frequently used</td><td>Stable hot sets; resists scan pollution</td></tr><tr><td><strong>FIFO</strong></td><td>Oldest inserted</td><td>Rarely right</td></tr><tr><td><strong>TTL only</strong></td><td>Whatever expired</td><td>Freshness matters more than hit rate</td></tr><tr><td><strong>Random</strong></td><td>Any</td><td>Cheap; surprisingly decent at scale</td></tr></tbody></table></div><p><strong>LRU&#39;s weakness is worth knowing:</strong> one large scan — a batch job reading every
+row — evicts the entire hot set. LFU or a segmented LRU resists this. Redis&#39;s
+<code>allkeys-lru</code> is approximate (it samples rather than maintaining an exact list),
+which is a good example of trading precision for O(1).</p>
+<p><strong>On TTLs:</strong></p>
+<ul>
+<li><strong>Always set one</strong>, even when you invalidate explicitly. It is the backstop
+for the invalidation you will eventually miss.</li>
+<li><strong>Jitter it.</strong> A thousand keys written together with <code>ttl=300</code> all expire in
+the same second. <code>ttl = 300 + random(0, 60)</code> spreads the reload.</li>
+</ul>
+<hr>
+<h2 id="5-the-three-failure-modes"><a class="anchor" href="#5-the-three-failure-modes">#</a>5 · The three failure modes</h2><p><strong>This section is the depth.</strong> Candidates who can name and fix these are visibly
+different from candidates who cannot.</p>
+<h3 id="stampede-dogpile"><a class="anchor" href="#stampede-dogpile">#</a>Stampede (dogpile)</h3><p>A hot key expires; 10,000 concurrent requests all miss and all hit the database
+at once.</p>
+<pre class="code"><code>t=0    key &quot;top_posts&quot; expires
+t=0.1  10,000 requests miss simultaneously
+t=0.1  10,000 identical queries hit the database
+t=0.2  database saturates -&gt; everything is slow -&gt; more requests pile up</code></pre><div class="table-scroll"><table><thead><tr><th>Fix</th><th>How</th></tr></thead><tbody><tr><td><strong>Lock / single-flight</strong></td><td>First miss takes a lock and recomputes; the others wait or serve stale</td></tr><tr><td><strong>Probabilistic early expiry</strong></td><td>Each read may refresh slightly before the TTL, with probability rising as expiry nears — so one request refreshes while the rest still hit a valid entry</td></tr><tr><td><strong>Never expire; refresh async</strong></td><td>A background job keeps hot keys warm</td></tr><tr><td><strong>Serve stale while revalidating</strong></td><td>Return the old value immediately, refresh behind it</td></tr></tbody></table></div><p><strong>Single-flight is the answer to give</strong>, and &quot;serve stale while revalidating&quot; is
+the one that impresses, because it keeps p99 flat during the refresh.</p>
+<h3 id="penetration"><a class="anchor" href="#penetration">#</a>Penetration</h3><p>Requests for keys that <em>do not exist</em> — often an attack. Every one misses the
+cache and hits the database, which is exactly what the cache was meant to
+prevent.</p>
+<div class="table-scroll"><table><thead><tr><th>Fix</th><th>How</th></tr></thead><tbody><tr><td><strong>Cache the negative</strong></td><td>Store a null marker with a short TTL (30–60s)</td></tr><tr><td><strong>Bloom filter</strong></td><td>Membership check in front; a definite &quot;no&quot; never reaches the DB</td></tr><tr><td><strong>Validate input</strong></td><td>Reject malformed IDs before any lookup</td></tr></tbody></table></div><p><strong>A Bloom filter is the textbook answer here</strong> and is worth being able to
+justify: it can produce false positives (a wasted lookup) but never false
+negatives, so it can only ever say &quot;definitely not present&quot; — which is exactly
+the guarantee you need, in a fraction of the memory of the full key set.</p>
+<h3 id="avalanche"><a class="anchor" href="#avalanche">#</a>Avalanche</h3><p>A large fraction of the cache disappears at once — a node dies, or many keys
+share an expiry — and the full read load lands on the database.</p>
+<div class="table-scroll"><table><thead><tr><th>Fix</th><th>How</th></tr></thead><tbody><tr><td><strong>Jittered TTLs</strong></td><td>Never let a batch of keys expire together</td></tr><tr><td><strong>Consistent hashing</strong></td><td>One dead node costs 1/N of the cache, not all of it</td></tr><tr><td><strong>Replicated cache</strong></td><td>A replica takes over with a warm dataset</td></tr><tr><td><strong>Circuit breaker</strong></td><td>Shed load rather than let the DB fall over</td></tr><tr><td><strong>Size the DB for a partial miss</strong></td><td>Assume you may lose a node and survive it</td></tr></tbody></table></div><blockquote>
+<p><strong>The question behind all three is the same: &quot;what is your cache hit rate, and
+is the database sized for what happens when it drops?&quot;</strong> A design that only
+works at 99% hit rate and collapses at 70% is fragile, and saying so about
+your own design is strong.</p>
+</blockquote>
+<hr>
+<h2 id="6-invalidation"><a class="anchor" href="#6-invalidation">#</a>6 · Invalidation</h2><p>The hard part, and the honest answer is that there are only three strategies:</p>
+<div class="table-scroll"><table><thead><tr><th>Strategy</th><th>Mechanism</th><th>Trade-off</th></tr></thead><tbody><tr><td><strong>TTL</strong></td><td>Let it expire</td><td>Simple; stale for up to the TTL</td></tr><tr><td><strong>Explicit</strong></td><td>Delete on write</td><td>Fresh; you <em>will</em> miss a path</td></tr><tr><td><strong>Versioned key</strong></td><td><code>user:42:v7</code> — bump the version</td><td>No deletion needed; old entries age out; costs memory</td></tr></tbody></table></div><p><strong>Versioned keys are underrated in interviews.</strong> Instead of invalidating, change
+the key: bump a version counter on write and every reader naturally computes a
+new key. There is no invalidation to get wrong, and no thundering delete. The
+cost is that the old entries linger until evicted.</p>
+<p>For a <em>group</em> of keys, keep the version on the group:</p>
+<pre class="code"><code>key = f&quot;feed:{user_id}:v{get_version(user_id)}&quot;
+# one INCR on the version invalidates every cached page of that feed</code></pre><hr>
+<h2 id="7-hit-rate"><a class="anchor" href="#7-hit-rate">#</a>7 · Hit rate</h2><pre class="code"><code>hit rate = hits / (hits + misses)</code></pre><p><strong>Effective latency</strong> is what actually matters:</p>
+<pre class="code"><code>90% hit:  0.9 x 1ms + 0.1 x 50ms  =  5.9 ms
+95% hit:  0.95 x 1ms + 0.05 x 50ms =  3.5 ms
+99% hit:  0.99 x 1ms + 0.01 x 50ms =  1.5 ms</code></pre><blockquote>
+<p><strong>Going from 90% to 99% roughly quarters your latency — and cuts database load
+by 10×.</strong> That second effect is the bigger one, and it is why hit rate is a
+capacity number rather than a performance nicety. Quoting this computation is
+a compact way to justify the whole cache tier.</p>
+</blockquote>
+<p>If the hit rate is genuinely low (&lt; 50%), the cache may be the wrong tool: the
+access pattern has no locality, and you are paying a network hop to miss.</p>
+<hr>
+<h2 id="8-what-to-say-in-the-round"><a class="anchor" href="#8-what-to-say-in-the-round">#</a>8 · What to say in the round</h2><blockquote>
+<p><em>&quot;Cache-aside in Redis for user and post lookups, TTL 5 minutes with jitter,
+and I delete the key on write rather than updating it — updating races. For
+the hot keys I&#39;d use single-flight so an expiry doesn&#39;t stampede the database,
+and I&#39;d rather serve stale for a moment than queue behind a refresh. Sizing
+assumes a 95% hit rate; if a cache node is lost, consistent hashing means we
+lose 1/N, and the database needs headroom for that.&quot;</em></p>
+</blockquote>
+<p><strong>Six decisions, each justified, in one breath</strong> — pattern, TTL, jitter,
+invalidation, stampede protection, and failure sizing. That is a complete
+caching answer.</p>
+<hr>
+<h2 id="9-interview-questions"><a class="anchor" href="#9-interview-questions">#</a>9 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Cache-aside or write-through?&quot;</td><td>Cache-aside by default — only requested data gets cached and a cache outage degrades instead of breaking. Write-through when reads follow writes closely enough that the extra write cost pays for itself.</td></tr><tr><td>⭐ &quot;How do you invalidate?&quot;</td><td>Delete the key on write rather than updating it, because updating races and can leave the stale value permanently. Always keep a TTL as the backstop. For groups, a versioned key prefix invalidates everything with one INCR.</td></tr><tr><td>⭐ &quot;A hot key expires and 10k requests miss at once.&quot;</td><td>That is a stampede. Single-flight — one request recomputes under a lock while others wait or serve stale — plus probabilistic early expiry so hot keys refresh before they actually expire. Serving stale during revalidation keeps p99 flat.</td></tr><tr><td>&quot;How do you handle lookups for keys that don&#39;t exist?&quot;</td><td>Cache the negative result with a short TTL, and put a Bloom filter in front if it is adversarial — it never gives a false negative, so a &quot;not present&quot; answer is safe to trust and never reaches the database.</td></tr><tr><td>&quot;What if the cache goes down?&quot;</td><td>With cache-aside the system degrades rather than fails, but only if the database can take the load. So the real question is whether it is sized for a 0% hit rate — usually not, which is why I&#39;d add a circuit breaker and load shedding rather than pretend it can.</td></tr><tr><td>&quot;Where would you <em>not</em> cache?&quot;</td><td>Data with no locality — a low hit rate means paying a network hop to miss. Data that must be strictly consistent. And anything where a stale read has real cost, like a balance check before a transfer.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>name the six cache layers and the danger of the in-process one,</li>
+<li>explain why you delete rather than update on write,</li>
+<li>name all three failure modes and a fix for each,</li>
+<li>justify a Bloom filter by its one-sided error, and</li>
+<li>compute effective latency at 90% versus 99% hit rate.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="load-balancing.html"><span>previous</span>Load balancing & the edge</a><a class="pager next" href="queues-and-streams.html"><span>next</span>Queues & streams</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-where-caches-live">1 · Where caches live</a></li><li class="d2"><a href="#2-the-read-patterns">2 · The read patterns</a></li><li class="d3"><a href="#cache-aside-lazy-loading-the-default">Cache-aside (lazy loading) — the default</a></li><li class="d3"><a href="#read-through">Read-through</a></li><li class="d2"><a href="#3-the-write-patterns">3 · The write patterns</a></li><li class="d2"><a href="#4-eviction-and-ttl">4 · Eviction and TTL</a></li><li class="d2"><a href="#5-the-three-failure-modes">5 · The three failure modes</a></li><li class="d3"><a href="#stampede-dogpile">Stampede (dogpile)</a></li><li class="d3"><a href="#penetration">Penetration</a></li><li class="d3"><a href="#avalanche">Avalanche</a></li><li class="d2"><a href="#6-invalidation">6 · Invalidation</a></li><li class="d2"><a href="#7-hit-rate">7 · Hit rate</a></li><li class="d2"><a href="#8-what-to-say-in-the-round">8 · What to say in the round</a></li><li class="d2"><a href="#9-interview-questions">9 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

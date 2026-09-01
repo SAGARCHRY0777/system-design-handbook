@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sharding &amp; partitioning · System Design Handbook</title>
+<meta name="description" content="Picking a shard key, the four strategies, hot spots and the celebrity problem, what breaks once you shard, and how to resplit without downtime.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html" class="active">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="sharding-and-partitioning"><a class="anchor" href="#sharding-and-partitioning">#</a>Sharding and partitioning</h1><blockquote>
+<p><strong>Sharding is the point of no return.</strong> It buys unbounded write throughput and
+costs you joins, transactions, and unique constraints. The interview is
+mostly about whether you know that, and whether you picked the key for a
+reason.</p>
+</blockquote>
+<p><strong>Vertical scaling first.</strong> A modern machine takes you a very long way, and
+&quot;I&#39;d vertically scale until roughly X, then shard by Y&quot; is a stronger answer
+than sharding on slide one.</p>
+<hr>
+<h2 id="1-choosing-the-shard-key"><a class="anchor" href="#1-choosing-the-shard-key">#</a>1 · Choosing the shard key</h2><p><strong>The single most consequential decision in the design</strong>, and it is very hard to
+change later. Three properties, and you usually cannot have all three:</p>
+<div class="table-scroll"><table><thead><tr><th>Property</th><th>Why</th><th>Violated by</th></tr></thead><tbody><tr><td><strong>High cardinality</strong></td><td>Enough distinct values to spread across shards</td><td><code>country</code>, <code>status</code></td></tr><tr><td><strong>Even distribution</strong></td><td>No shard takes disproportionate load</td><td>Celebrity <code>user_id</code>, <code>created_at</code></td></tr><tr><td><strong>Present in your queries</strong></td><td>Otherwise every read hits every shard</td><td>Sharding by <code>id</code> but querying by <code>email</code></td></tr></tbody></table></div><blockquote>
+<p><strong>The third is the one candidates miss.</strong> If you shard tweets by <code>tweet_id</code>
+but the main query is &quot;tweets by author, newest first&quot;, every timeline read
+becomes a scatter-gather across every shard. The key must match the dominant
+access pattern established during scoping — this is exactly why you asked
+those questions.</p>
+</blockquote>
+<p><strong>A scatter-gather query is as slow as your slowest shard</strong>, and with 100 shards
+you are sampling the tail of the latency distribution 100 times. That is why a
+p99 that looks fine per-shard becomes a p50 problem for the fan-out query.</p>
+<hr>
+<h2 id="2-the-four-strategies"><a class="anchor" href="#2-the-four-strategies">#</a>2 · The four strategies</h2><h3 id="range"><a class="anchor" href="#range">#</a>Range</h3><pre class="code"><code>shard 1: user_id 0        - 10,000,000
+shard 2: user_id 10M      - 20,000,000
+shard 3: user_id 20M      - 30,000,000</code></pre><p>Range scans work; <strong>sequential keys create a hot spot</strong> — with autoincrement IDs
+or timestamps, every new write lands on the last shard.</p>
+<h3 id="hash"><a class="anchor" href="#hash">#</a>Hash</h3><pre class="code"><code>shard = hash(user_id) % N</code></pre><p>Even distribution, <strong>no range scans</strong>, and resharding moves everything — which
+is why you use consistent hashing instead of plain modulo whenever N might
+change.</p>
+<h3 id="consistent-hashing"><a class="anchor" href="#consistent-hashing">#</a>Consistent hashing</h3><p>Servers and keys on a ring; a key belongs to the next server clockwise. Changing
+N moves <del>1/N of keys instead of all of them. <strong>Virtual nodes</strong> (</del>150 ring points
+per physical server) keep the load even and spread a dead node&#39;s keys across all
+survivors rather than dumping them on one neighbour.</p>
+<h3 id="directory-based"><a class="anchor" href="#directory-based">#</a>Directory-based</h3><p>A lookup service maps key → shard.</p>
+<p>Maximum flexibility — you can move an individual tenant, or give a large
+customer their own shard. The cost is a lookup on every request and a new
+component that must be highly available and is now a potential SPOF. <strong>Standard
+for multi-tenant SaaS</strong>, where tenants differ in size by orders of magnitude.</p>
+<div class="table-scroll"><table><thead><tr><th>Strategy</th><th>Even</th><th>Range scans</th><th>Rebalancing</th><th>Use when</th></tr></thead><tbody><tr><td>Range</td><td>✗</td><td>✓</td><td>Split ranges</td><td>Time-series with range queries</td></tr><tr><td>Hash</td><td>✓</td><td>✗</td><td>Everything moves</td><td>Fixed shard count</td></tr><tr><td>Consistent hash</td><td>✓</td><td>✗</td><td>~1/N moves</td><td>Shard count changes</td></tr><tr><td>Directory</td><td>✓ (managed)</td><td>Depends</td><td>Move one entry</td><td>Multi-tenant, uneven sizes</td></tr></tbody></table></div><hr>
+<h2 id="3-hot-spots"><a class="anchor" href="#3-hot-spots">#</a>3 · Hot spots</h2><p>Even distribution of <em>keys</em> does not mean even distribution of <em>load</em>.</p>
+<div class="table-scroll"><table><thead><tr><th>Hot spot</th><th>Example</th><th>Fix</th></tr></thead><tbody><tr><td><strong>Celebrity</strong></td><td>One user with 100M followers</td><td>Special-case them; do not fan out</td></tr><tr><td><strong>Sequential key</strong></td><td>Autoincrement or timestamp</td><td>Hash the key, or prefix with a bucket</td></tr><tr><td><strong>Time-based</strong></td><td>Today&#39;s partition takes all writes</td><td>Composite key: <code>(bucket, timestamp)</code></td></tr><tr><td><strong>Single hot record</strong></td><td>A viral post&#39;s counter</td><td>Split into N sub-counters, sum on read</td></tr><tr><td><strong>Uneven tenants</strong></td><td>One customer is 40% of the data</td><td>Directory sharding; isolate them</td></tr></tbody></table></div><p><strong>Key salting</strong>, concretely:</p>
+<pre class="code"><code>Hot:     key = &quot;post:12345:likes&quot;        one row, one shard, all writes
+Salted:  key = &quot;post:12345:likes:{0-99}&quot; 100 rows, spread across shards
+         write: increment a random one
+         read:  sum all 100</code></pre><p><strong>Writes spread 100×; reads cost 100 lookups.</strong> State that trade — it is the
+whole point, and it is only worth it when writes vastly outnumber reads, which
+is exactly the case for a counter on a viral post.</p>
+<blockquote>
+<p><strong>The celebrity problem is the canonical hot-spot question</strong> and it has a
+canonical answer: a hybrid. Fan out on write for ordinary users, skip fan-out
+entirely for accounts above a follower threshold, and merge their posts in at
+read time. One write to 100 million timelines is not a thing you do; merging
+five celebrity timelines at read time is cheap.</p>
+</blockquote>
+<hr>
+<h2 id="4-what-sharding-breaks"><a class="anchor" href="#4-what-sharding-breaks">#</a>4 · What sharding breaks</h2><p><strong>Volunteer this list.</strong> Knowing the costs is the senior signal; every candidate
+knows sharding scales writes.</p>
+<div class="table-scroll"><table><thead><tr><th>Breaks</th><th>Why</th><th>What you do instead</th></tr></thead><tbody><tr><td><strong>Joins</strong></td><td>The other table is on another machine</td><td>Denormalise, or join in the application</td></tr><tr><td><strong>Transactions</strong></td><td>ACID is per-shard</td><td>Keep related data on one shard; sagas across</td></tr><tr><td><strong>Unique constraints</strong></td><td>Uniqueness is per-shard</td><td>Central ID service, or make the key include the shard</td></tr><tr><td><strong>Aggregates</strong></td><td><code>COUNT(*)</code> must visit every shard</td><td>Precompute, or use an analytics store</td></tr><tr><td><strong><code>ORDER BY</code> + <code>LIMIT</code></strong></td><td>Global ordering needs all shards</td><td>Fetch k from each shard, merge</td></tr><tr><td><strong>Autoincrement IDs</strong></td><td>Two shards issue the same number</td><td>Snowflake IDs, or per-shard offsets</td></tr><tr><td><strong>Rebalancing</strong></td><td>Data must move while live</td><td>Consistent hashing, or virtual shards</td></tr></tbody></table></div><p><strong>Snowflake IDs</strong> are the standard fix for the ID problem and are worth being
+able to describe:</p>
+<pre class="code"><code>64 bits:  [ 41-bit timestamp ][ 10-bit machine ][ 12-bit sequence ]
+          ~69 years            1024 machines     4096 per ms each
+
+Sortable by time, unique without coordination, and generated locally --
+no central service on the write path.</code></pre><blockquote>
+<p><strong>&quot;Keep related data on the same shard&quot; is the design move that avoids most of
+this.</strong> Shard by <code>user_id</code> and a user&#39;s posts, comments and settings live
+together, so the common queries and transactions stay single-shard. Choosing
+the key so that your transactions do not cross shards is better than
+engineering distributed transactions.</p>
+</blockquote>
+<hr>
+<h2 id="5-resharding-without-downtime"><a class="anchor" href="#5-resharding-without-downtime">#</a>5 · Resharding without downtime</h2><p>A likely follow-up: <em>&quot;you&#39;re at capacity — how do you double the shards?&quot;</em></p>
+<p><strong>The trick most candidates miss: over-provision logical shards up front.</strong></p>
+<pre class="code"><code>Create 1024 LOGICAL shards on day one, mapped to 4 physical machines.
+  shard = hash(key) % 1024        &lt;- this NEVER changes
+  logical -&gt; physical is a small mapping table
+
+To grow: move logical shards between machines. The hash is untouched,
+so no key ever changes its logical shard. Rebalancing becomes a data
+move plus a mapping update, not a rehash.</code></pre><p>This is how Vitess, Citus and most large deployments actually work, and naming
+it is a strong answer.</p>
+<p>Without it, the live migration is:</p>
+<pre class="mermaid">flowchart TD
+    A[&quot;1. Add new shards,&lt;br/&gt;update the ring&quot;] --&gt; B[&quot;2. Dual-write:&lt;br/&gt;old and new&quot;]
+    B --&gt; C[&quot;3. Backfill historical&lt;br/&gt;data in batches&quot;]
+    C --&gt; D[&quot;4. Verify:&lt;br/&gt;compare checksums&quot;]
+    D --&gt; E[&quot;5. Shift reads&lt;br/&gt;gradually&quot;]
+    E --&gt; F[&quot;6. Stop dual-writing,&lt;br/&gt;drop old data&quot;]</pre><p><strong>Every step is reversible until step 6.</strong> Saying that — that you keep the old
+path live and shift reads gradually so you can roll back — is what distinguishes
+someone who has done a migration from someone who has read about one.</p>
+<hr>
+<h2 id="6-partitioning-within-a-shard"><a class="anchor" href="#6-partitioning-within-a-shard">#</a>6 · Partitioning within a shard</h2><p>Distinct from sharding and often conflated. <strong>Partitioning splits a table inside
+one database; sharding splits it across machines.</strong></p>
+<p>Range-partitioning a large table by month gives you:</p>
+<ul>
+<li><strong>Partition pruning</strong> — a query with a date filter reads one partition</li>
+<li><strong>Cheap deletion</strong> — dropping a month is a <code>DROP PARTITION</code>, not a mass <code>DELETE</code></li>
+<li><strong>Smaller indexes</strong> — per-partition indexes stay in memory</li>
+</ul>
+<p><strong>The retention argument is the strong one.</strong> Deleting 100M rows with <code>DELETE</code>
+generates enormous write-ahead log volume and bloat; dropping a partition is a
+metadata operation. For any table with a retention policy, partition by time.</p>
+<hr>
+<h2 id="7-what-to-say-in-the-round"><a class="anchor" href="#7-what-to-say-in-the-round">#</a>7 · What to say in the round</h2><blockquote>
+<p><em>&quot;I&#39;d shard the tweet store by <code>author_id</code> — timeline reads are &#39;posts by the
+people I follow&#39;, so the dominant read is by author, and it keeps a user&#39;s
+posts co-located for the write transaction. Consistent hashing with virtual
+nodes, and 1024 logical shards over however many machines we need so growth is
+a mapping change rather than a rehash. IDs are Snowflake, so no central
+allocator on the write path.</em></p>
+<p><em>What this costs me: no cross-shard joins, so the graph lives separately and I
+join in the application; global aggregates need precomputing; and celebrities
+break the even-distribution assumption, so accounts over about a million
+followers skip fan-out and get merged at read time instead.&quot;</em></p>
+</blockquote>
+<p><strong>The second paragraph is what scores.</strong> Anyone can pick a shard key; naming
+what you just gave up, unprompted, is the senior behaviour.</p>
+<hr>
+<h2 id="8-interview-questions"><a class="anchor" href="#8-interview-questions">#</a>8 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;What would you shard on?&quot;</td><td>Whatever the dominant read filters by — otherwise every query is a scatter-gather, and a scatter-gather is as slow as the slowest of N shards. Then check cardinality and distribution, and name the hot spot the key creates.</td></tr><tr><td>⭐ &quot;What does sharding break?&quot;</td><td>Joins, cross-shard transactions, unique constraints, global aggregates, global ordering, and autoincrement IDs. Most of it is avoidable by co-locating related data under the same key, which is why the key choice matters more than the mechanism.</td></tr><tr><td>⭐ &quot;One user has 100M followers.&quot;</td><td>Do not fan out to them. Above a follower threshold, skip the write-time fan-out and merge those authors in at read time. Fan-out on write for the long tail, fan-out on read for celebrities — a hybrid, because neither pure strategy survives the distribution.</td></tr><tr><td>&quot;How do you generate IDs across shards?&quot;</td><td>Snowflake: 41-bit timestamp, 10-bit machine ID, 12-bit sequence. Unique without coordination, roughly time-sortable, and generated locally so there is no central service on the write path.</td></tr><tr><td>⭐ &quot;Double the shards with no downtime.&quot;</td><td>Ideally there is nothing to do, because I provisioned 1024 logical shards up front and only move the logical-to-physical mapping. Otherwise: add capacity, dual-write, backfill, verify with checksums, shift reads gradually, then stop dual-writing — reversible until the last step.</td></tr><tr><td>&quot;Consistent hashing versus modulo?&quot;</td><td>Modulo moves every key when N changes, which means a total cache miss or a full data migration. Consistent hashing moves ~1/N. Add virtual nodes or the distribution is uneven and one neighbour inherits all of a dead node&#39;s load.</td></tr><tr><td>&quot;Sharding or partitioning?&quot;</td><td>Partitioning splits a table within one database — it buys pruning, smaller indexes, and instant retention deletes. Sharding splits across machines and is what you do when one machine cannot take the write volume. I would partition long before I shard.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>give the three properties of a good shard key and which one candidates forget,</li>
+<li>explain why a scatter-gather is worse than it looks,</li>
+<li>name six things sharding breaks and the co-location argument,</li>
+<li>describe salting and its read cost,</li>
+<li>describe the celebrity hybrid, and</li>
+<li>explain logical shards and the dual-write migration.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="databases.html"><span>previous</span>Databases & indexes</a><a class="pager next" href="replication-and-consistency.html"><span>next</span>Replication & consistency</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-choosing-the-shard-key">1 · Choosing the shard key</a></li><li class="d2"><a href="#2-the-four-strategies">2 · The four strategies</a></li><li class="d3"><a href="#range">Range</a></li><li class="d3"><a href="#hash">Hash</a></li><li class="d3"><a href="#consistent-hashing">Consistent hashing</a></li><li class="d3"><a href="#directory-based">Directory-based</a></li><li class="d2"><a href="#3-hot-spots">3 · Hot spots</a></li><li class="d2"><a href="#4-what-sharding-breaks">4 · What sharding breaks</a></li><li class="d2"><a href="#5-resharding-without-downtime">5 · Resharding without downtime</a></li><li class="d2"><a href="#6-partitioning-within-a-shard">6 · Partitioning within a shard</a></li><li class="d2"><a href="#7-what-to-say-in-the-round">7 · What to say in the round</a></li><li class="d2"><a href="#8-interview-questions">8 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

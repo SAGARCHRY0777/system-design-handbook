@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Databases &amp; indexes · System Design Handbook</title>
+<meta name="description" content="SQL versus NoSQL answered properly, B-tree versus LSM, what an index costs, and the isolation levels you should be able to name.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="rate-limiting.html">Rate limiting</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html" class="active">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="databases-and-indexes"><a class="anchor" href="#databases-and-indexes">#</a>Databases and indexes</h1><blockquote>
+<p><strong>&quot;SQL or NoSQL?&quot; is the most common question in the round and the one most
+often answered badly</strong> — usually as a list of properties rather than a
+decision. The good answer picks based on the access pattern you established in
+scoping, and states what you give up.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-choice-framed-properly"><a class="anchor" href="#1-the-choice-framed-properly">#</a>1 · The choice, framed properly</h2><p>The useful axis is not SQL versus NoSQL. It is <strong>do you know your queries in
+advance?</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Relational</th><th>Document</th><th>Wide-column</th><th>Key-value</th></tr></thead><tbody><tr><td><strong>Examples</strong></td><td>Postgres, MySQL</td><td>MongoDB, DynamoDB</td><td>Cassandra, HBase, Bigtable</td><td>Redis, DynamoDB</td></tr><tr><td><strong>Model</strong></td><td>Normalised tables, joins</td><td>Self-contained documents</td><td>Wide sparse rows by key</td><td>Opaque blob by key</td></tr><tr><td><strong>Query flexibility</strong></td><td>Any query, ad hoc</td><td>By document, some indexing</td><td><strong>Only by the key you designed for</strong></td><td>Key only</td></tr><tr><td><strong>Scale story</strong></td><td>Vertical first; sharding is work</td><td>Horizontal</td><td>Horizontal, very large</td><td>Horizontal</td></tr><tr><td><strong>Transactions</strong></td><td>Full ACID, multi-row</td><td>Usually single-document</td><td>Single-row</td><td>Single-key</td></tr><tr><td><strong>Best when</strong></td><td>Relationships, ad hoc queries, correctness</td><td>Varying shape, read whole objects</td><td>Huge write volume, known access</td><td>Cache, sessions, counters</td></tr></tbody></table></div><blockquote>
+<p><strong>The default should be Postgres, and you should be able to defend that.</strong>
+Modern relational databases handle tens of thousands of writes per second,
+hold JSON columns, do full-text search, and give you transactions — and you
+can always shard later. Reaching for Cassandra at 100 writes a second is
+over-engineering, and interviewers score it as one. <em>&quot;I&#39;d start with Postgres
+and move the timeline table to Cassandra when write volume justifies it&quot;</em> is a
+stronger answer than either extreme.</p>
+</blockquote>
+<p><strong>When to genuinely leave relational:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Signal</th><th>Choose</th></tr></thead><tbody><tr><td>Writes exceed what one primary can take, and the access pattern is a known key</td><td>Wide-column</td></tr><tr><td>Objects are read and written whole, with varying shape</td><td>Document</td></tr><tr><td>Access is purely by key and latency must be sub-millisecond</td><td>Key-value</td></tr><tr><td>Relationships are the query — &quot;friends of friends who like X&quot;</td><td>Graph</td></tr><tr><td>Time-ordered metrics with retention and rollups</td><td>Time-series</td></tr></tbody></table></div><hr>
+<h2 id="2-b-tree-versus-lsm-tree"><a class="anchor" href="#2-b-tree-versus-lsm-tree">#</a>2 · B-tree versus LSM-tree</h2><p><strong>This is the highest-value storage-engine question</strong>, because it explains <em>why</em>
+write-heavy systems choose different databases — and most candidates cannot
+answer it.</p>
+<pre class="code"><code>B-TREE  (Postgres, MySQL/InnoDB)
+  A balanced tree updated IN PLACE.
+    read:  O(log n), one seek to the leaf -- fast and predictable
+    write: find the page, modify it, write it back -- RANDOM I/O
+  Good reads, moderate writes, no compaction, mature range scans.
+
+LSM-TREE (Cassandra, RocksDB, LevelDB, Bigtable)
+  Writes go to an in-memory table, flushed to sorted immutable files.
+    write: APPEND to memtable -- sequential, very fast
+    read:  check memtable, then several SSTables, newest first
+           (a Bloom filter per file skips most of them)
+  Background COMPACTION merges files and discards overwritten values.</code></pre><div class="table-scroll"><table><thead><tr><th></th><th>B-tree</th><th>LSM-tree</th></tr></thead><tbody><tr><td><strong>Write path</strong></td><td>Random I/O, in place</td><td>Sequential append</td></tr><tr><td><strong>Write throughput</strong></td><td>Moderate</td><td><strong>High</strong></td></tr><tr><td><strong>Read path</strong></td><td>One lookup</td><td>Possibly several files</td></tr><tr><td><strong>Read latency</strong></td><td>Predictable</td><td>More variable</td></tr><tr><td><strong>Space</strong></td><td>Fragmentation</td><td><strong>Amplification</strong> until compaction</td></tr><tr><td><strong>The catch</strong></td><td>Write amplification on random updates</td><td>Compaction competes with live traffic</td></tr></tbody></table></div><blockquote>
+<p><strong>The sentence to have ready:</strong> <em>&quot;LSM trades read latency and background
+compaction work for much higher write throughput, because every write is a
+sequential append instead of a random in-place update. If this table is
+write-dominated and read by key, that trade is worth it.&quot;</em></p>
+<p>And the caveat that shows real experience: <strong>compaction is not free</strong> — it
+consumes disk I/O and CPU, and a poorly tuned compaction strategy shows up as
+unpredictable p99 latency spikes on an otherwise healthy cluster.</p>
+</blockquote>
+<hr>
+<h2 id="3-indexes"><a class="anchor" href="#3-indexes">#</a>3 · Indexes</h2><p>An index is a sorted structure that lets you find rows without scanning.</p>
+<p><strong>What it costs, which is the part people forget:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Cost</th><th>Detail</th></tr></thead><tbody><tr><td>Write slowdown</td><td>Every insert/update/delete maintains every index</td></tr><tr><td>Storage</td><td>Often 10–30% of the table per index</td></tr><tr><td>Planner risk</td><td>Too many indexes and the optimiser can choose badly</td></tr></tbody></table></div><p><strong>Rules that matter in a design round:</strong></p>
+<p><strong>Index the columns you filter and join on, not the ones you return.</strong></p>
+<p><strong>Composite index order follows the query.</strong> An index on <code>(user_id, created_at)</code>
+serves <code>WHERE user_id = ? ORDER BY created_at</code> perfectly, and `WHERE created_at</p>
+<blockquote>
+<p>?<code>not at all. Leftmost-prefix is the rule: an index on</code>(a, b, c)<code>can serve</code>a<code>, </code>a+b<code>, </code>a+b+c<code>— never</code>b` alone.</p>
+</blockquote>
+<p><strong>A covering index answers the query from the index alone</strong>, without touching the
+table. Adding the selected column to the index turns two I/Os into one, and it
+is a good, specific optimisation to name.</p>
+<div class="table-scroll"><table><thead><tr><th>Index type</th><th>Structure</th><th>For</th></tr></thead><tbody><tr><td>B-tree</td><td>Sorted tree</td><td>Equality, ranges, ordering — the default</td></tr><tr><td>Hash</td><td>Hash table</td><td>Equality only; no ranges</td></tr><tr><td>Inverted</td><td>Term → doc list</td><td>Full-text search</td></tr><tr><td>Geospatial</td><td>R-tree, geohash</td><td>&quot;Near me&quot;</td></tr><tr><td>Bitmap</td><td>Bit per row per value</td><td>Low-cardinality analytics</td></tr></tbody></table></div><blockquote>
+<p><strong>Low selectivity means the index is useless.</strong> An index on a boolean matching
+half the table is slower than a sequential scan, because it does random I/O per
+row and then reads most of the table anyway. Knowing that indexes are not free
+and not always used is a genuine signal.</p>
+</blockquote>
+<hr>
+<h2 id="4-isolation-levels"><a class="anchor" href="#4-isolation-levels">#</a>4 · Isolation levels</h2><p>Worth knowing by name — a common follow-up when you mention transactions.</p>
+<div class="table-scroll"><table><thead><tr><th>Level</th><th>Prevents</th><th>Still allows</th></tr></thead><tbody><tr><td><strong>Read uncommitted</strong></td><td>—</td><td>Dirty reads</td></tr><tr><td><strong>Read committed</strong></td><td>Dirty reads</td><td>Non-repeatable reads, phantoms</td></tr><tr><td><strong>Repeatable read</strong></td><td>+ non-repeatable reads</td><td>Phantoms (in the standard)</td></tr><tr><td><strong>Serializable</strong></td><td>Everything</td><td>Nothing — but it costs throughput</td></tr></tbody></table></div><p>The anomalies, concretely:</p>
+<pre class="code"><code>DIRTY READ         you read a value another transaction later rolls back
+NON-REPEATABLE     you read a row twice in one transaction, values differ
+PHANTOM            you run the same range query twice, rows appear
+LOST UPDATE        two read-modify-writes; one silently overwrites the other</code></pre><p><strong>Read committed is the common default</strong> (Postgres, Oracle). MySQL/InnoDB
+defaults to repeatable read.</p>
+<blockquote>
+<p><strong>The lost update is the one that bites real systems</strong>, and it is worth being
+able to fix out loud. <code>SELECT balance; balance -= 10; UPDATE</code> from two
+concurrent transactions loses one decrement. Fixes: <code>SELECT ... FOR UPDATE</code>
+(pessimistic), a version column checked on write (optimistic), or an atomic
+<code>UPDATE ... SET balance = balance - 10 WHERE balance &gt;= 10</code> that pushes the
+whole operation into the database. The third is best where it applies.</p>
+</blockquote>
+<hr>
+<h2 id="5-connection-pooling"><a class="anchor" href="#5-connection-pooling">#</a>5 · Connection pooling</h2><p>A small thing that comes up in deep dives and shows operational awareness.</p>
+<p>Each Postgres connection is a process with meaningful memory overhead, and the
+practical ceiling is a few hundred. With 50 app servers each holding a pool of
+20, you have asked for 1,000 connections and the database will fall over.</p>
+<p><strong>A pooler like PgBouncer multiplexes many client connections onto few database
+ones.</strong> Mentioning it when your design has a large stateless app tier in front of
+one database is a specific, credible detail.</p>
+<hr>
+<h2 id="6-polyglot-persistence"><a class="anchor" href="#6-polyglot-persistence">#</a>6 · Polyglot persistence</h2><p><strong>Different data, different store — and saying so is usually better than forcing
+one.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Data</th><th>Store</th><th>Why</th></tr></thead><tbody><tr><td>Users, orders, payments</td><td>Postgres</td><td>Transactions and correctness matter</td></tr><tr><td>Sessions, rate counters</td><td>Redis</td><td>Ephemeral, sub-ms, TTL built in</td></tr><tr><td>Photos, video, backups</td><td>Object storage</td><td>Cheap, unbounded, CDN-friendly</td></tr><tr><td>Search index</td><td>Elasticsearch</td><td>Inverted index, relevance ranking</td></tr><tr><td>Event log / analytics</td><td>Kafka → warehouse</td><td>Append-only, replayable, columnar</td></tr><tr><td>Timeline / feed</td><td>Cassandra or Redis</td><td>Huge write volume, key-based reads</td></tr></tbody></table></div><p>Volunteer the cost: <strong>each store is another thing to operate, monitor, back up,
+and keep consistent with the others.</strong> Three stores is often right; seven is a
+finding.</p>
+<hr>
+<h2 id="7-interview-questions"><a class="anchor" href="#7-interview-questions">#</a>7 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;SQL or NoSQL?&quot;</td><td>It depends on whether I know the queries in advance. Postgres by default — transactions, ad hoc queries, and it handles far more load than people assume. I&#39;d move a specific table to a wide-column store when its write volume exceeds a primary and its access is by a known key. Picking Cassandra for 100 writes a second is over-engineering.</td></tr><tr><td>⭐ &quot;Why is Cassandra better at writes?&quot;</td><td>LSM-tree. Every write is a sequential append to a memtable, later flushed to immutable sorted files, instead of a random in-place page update. The costs are read amplification — mitigated by per-file Bloom filters — and background compaction, which competes with live traffic and shows up as p99 spikes if tuned badly.</td></tr><tr><td>⭐ &quot;How would you index this query?&quot;</td><td>Composite index on the equality columns first, then the range or sort column — leftmost-prefix determines what it can serve. If the selected columns are few, add them to make it covering so the query never touches the table. And I&#39;d check selectivity: a low-cardinality index is worse than a scan.</td></tr><tr><td>&quot;What does an index cost?&quot;</td><td>Every write maintains every index, plus 10–30% storage each. That is why you index for the queries you actually run rather than defensively.</td></tr><tr><td>⭐ &quot;Two users withdraw at the same time.&quot;</td><td>Lost update. Either <code>SELECT ... FOR UPDATE</code> to lock pessimistically, an optimistic version check that retries on conflict, or best where it applies, a single atomic statement — <code>UPDATE ... SET balance = balance - 10 WHERE balance &gt;= 10</code> — and check the affected row count.</td></tr><tr><td>&quot;What isolation level?&quot;</td><td>Read committed for most things. Serializable where correctness is worth the throughput, like a booking or a ledger. And I&#39;d name the anomaly I am actually defending against rather than picking a level abstractly.</td></tr><tr><td>&quot;Your app tier has 50 servers and one database.&quot;</td><td>Connection limits become the bottleneck before query capacity does — a few hundred connections is the practical Postgres ceiling. I&#39;d put PgBouncer in front to multiplex.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>justify Postgres as a default and name what would change your mind,</li>
+<li>explain B-tree versus LSM including compaction&#39;s cost,</li>
+<li>state the leftmost-prefix rule and what a covering index buys,</li>
+<li>name four isolation anomalies and three fixes for the lost update, and</li>
+<li>say why a low-selectivity index is worse than a scan.</li>
+</ol>
+<p>Next: <a href="sharding.html">sharding</a>.</p>
+</article>
+    <div class="pager-row"><a class="pager previous" href="rate-limiting.html"><span>previous</span>Rate limiting</a><a class="pager next" href="sharding.html"><span>next</span>Sharding & partitioning</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-choice-framed-properly">1 · The choice, framed properly</a></li><li class="d2"><a href="#2-b-tree-versus-lsm-tree">2 · B-tree versus LSM-tree</a></li><li class="d2"><a href="#3-indexes">3 · Indexes</a></li><li class="d2"><a href="#4-isolation-levels">4 · Isolation levels</a></li><li class="d2"><a href="#5-connection-pooling">5 · Connection pooling</a></li><li class="d2"><a href="#6-polyglot-persistence">6 · Polyglot persistence</a></li><li class="d2"><a href="#7-interview-questions">7 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
