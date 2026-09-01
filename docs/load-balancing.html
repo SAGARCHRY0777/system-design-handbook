@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Load balancing &amp; the edge · System Design Handbook</title>
+<meta name="description" content="DNS, L4 and L7, the algorithms and when each is wrong, health checks, and why sticky sessions are usually a smell.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html" class="active">Load balancing & the edge</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="load-balancing-and-the-edge"><a class="anchor" href="#load-balancing-and-the-edge">#</a>Load balancing and the edge</h1><blockquote>
+<p><strong>Almost every design starts with the same arrow: client → load balancer →
+servers.</strong> It is worth knowing what happens inside that box, because &quot;and then
+a load balancer&quot; with nothing behind it is the most common shallow answer in
+the round.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-layers-a-request-passes"><a class="anchor" href="#1-the-layers-a-request-passes">#</a>1 · The layers a request passes</h2><pre class="mermaid">flowchart TD
+    U[&quot;User&quot;] --&gt; DNS[&quot;DNS&lt;br/&gt;geo / weighted&quot;]
+    DNS --&gt; CDN[&quot;CDN edge&lt;br/&gt;static + cached&quot;]
+    CDN --&gt;|&quot;dynamic&quot;| GLB[&quot;Global LB&lt;br/&gt;anycast&quot;]
+    GLB --&gt; R1[&quot;Region A&quot;]
+    GLB --&gt; R2[&quot;Region B&quot;]
+    R1 --&gt; L4[&quot;L4 LB&lt;br/&gt;TCP, fast&quot;]
+    L4 --&gt; L7[&quot;L7 LB / gateway&lt;br/&gt;HTTP, routing, TLS&quot;]
+    L7 --&gt; S1[&quot;Service instances&quot;]</pre><p><strong>Load balancing happens at four levels, not one</strong>, and saying so is a quick way
+to show depth:</p>
+<div class="table-scroll"><table><thead><tr><th>Level</th><th>Mechanism</th><th>Balances</th><th>Cost of change</th></tr></thead><tbody><tr><td><strong>DNS</strong></td><td>Multiple A records, geo or weighted routing</td><td>Users → regions</td><td>Minutes to hours (TTL)</td></tr><tr><td><strong>Anycast</strong></td><td>Same IP announced from many sites</td><td>Packets → nearest PoP</td><td>Seconds</td></tr><tr><td><strong>L4</strong></td><td>TCP/UDP, connection-level</td><td>Connections → machines</td><td>Immediate</td></tr><tr><td><strong>L7</strong></td><td>HTTP-aware proxy</td><td>Requests → services</td><td>Immediate</td></tr></tbody></table></div><blockquote>
+<p><strong>DNS is a poor failover mechanism</strong> and this is worth knowing: clients and
+resolvers cache records past the TTL, so a dead region keeps receiving traffic
+for minutes. That is why serious deployments use anycast or a health-checked
+global LB for failover and treat DNS as coarse routing only.</p>
+</blockquote>
+<hr>
+<h2 id="2-l4-versus-l7"><a class="anchor" href="#2-l4-versus-l7">#</a>2 · L4 versus L7</h2><p>The distinction the interviewer is checking for:</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>L4 (transport)</th><th>L7 (application)</th></tr></thead><tbody><tr><td><strong>Sees</strong></td><td>IP + port</td><td>Method, path, headers, cookies, body</td></tr><tr><td><strong>Can route on</strong></td><td>Connection tuple only</td><td><code>/api/*</code> vs <code>/static/*</code>, tenant header, version</td></tr><tr><td><strong>TLS</strong></td><td>Passes through</td><td>Usually terminates</td></tr><tr><td><strong>Throughput</strong></td><td>Millions of connections/node</td><td>Lower — it parses every request</td></tr><tr><td><strong>Retries</strong></td><td>No — it does not know what a request is</td><td>Yes, safely, on idempotent methods</td></tr><tr><td><strong>Examples</strong></td><td>AWS NLB, IPVS, Maglev</td><td>AWS ALB, Envoy, NGINX, HAProxy</td></tr></tbody></table></div><p><strong>The practical answer is usually both:</strong> L4 at the front for raw throughput and
+DDoS absorption, L7 behind it for routing, TLS, retries, and observability.</p>
+<blockquote>
+<p><strong>The single most useful thing L7 buys you is the retry.</strong> An L4 balancer sees
+a broken connection and can only drop it. An L7 balancer knows the request was
+a <code>GET</code>, knows it never reached the application, and can retry it on another
+instance — the failure never reaches the user. That is why &quot;L7 for anything
+user-facing&quot; is a defensible default.</p>
+</blockquote>
+<hr>
+<h2 id="3-the-algorithms"><a class="anchor" href="#3-the-algorithms">#</a>3 · The algorithms</h2><div class="table-scroll"><table><thead><tr><th>Algorithm</th><th>How</th><th>Use when</th><th>Fails when</th></tr></thead><tbody><tr><td><strong>Round robin</strong></td><td>Next in rotation</td><td>Uniform requests, uniform servers</td><td>Request costs vary widely</td></tr><tr><td><strong>Weighted RR</strong></td><td>Rotation, biased by capacity</td><td>Heterogeneous hardware</td><td>Same as above</td></tr><tr><td><strong>Least connections</strong></td><td>Fewest in-flight</td><td>Variable request duration</td><td>Slow-start after a node returns</td></tr><tr><td><strong>Least response time</strong></td><td>Lowest latency × connections</td><td>Latency-sensitive</td><td>Noisy on low traffic</td></tr><tr><td><strong>Consistent hashing</strong></td><td>Hash key → ring position</td><td>Cache affinity, sharded state</td><td>Hot keys still concentrate</td></tr><tr><td><strong>Power of two choices</strong></td><td>Sample 2 at random, pick the less loaded</td><td>Large fleets</td><td>—</td></tr></tbody></table></div><p><strong>Two are worth being able to justify:</strong></p>
+<p><strong>Power of two choices.</strong> Sample two servers at random, send to whichever has
+fewer connections. It is nearly as good as querying every server and vastly
+cheaper — and it avoids the herd problem where every balancer independently
+decides the same idle server is best and floods it. Naming this is a strong
+signal.</p>
+<p><strong>Consistent hashing.</strong> The one to reach for when the backend holds state.</p>
+<pre class="code"><code>Plain hash:  server = hash(key) % N
+             N changes -&gt; EVERY key moves. A cache tier restart becomes
+             a total cache miss and the database falls over.
+
+Consistent:  servers and keys both hashed onto a ring; a key belongs to
+             the next server clockwise.
+             N changes -&gt; only ~1/N of keys move.
+
+Virtual nodes: each physical server occupies ~150 points on the ring
+             rather than one, so load is even and removing a node spreads
+             its keys across all survivors rather than dumping them on
+             its single neighbour.</code></pre><p><strong>Virtual nodes are the part people omit</strong>, and without them consistent hashing
+has badly uneven load and a cascading-failure mode when a node dies.</p>
+<hr>
+<h2 id="4-health-checks"><a class="anchor" href="#4-health-checks">#</a>4 · Health checks</h2><p>A balancer is only as good as its idea of &quot;healthy&quot;.</p>
+<div class="table-scroll"><table><thead><tr><th>Kind</th><th>Checks</th><th>Catches</th></tr></thead><tbody><tr><td><strong>Passive</strong></td><td>Watches real traffic for errors/timeouts</td><td>Fast, free, no synthetic load</td></tr><tr><td><strong>Active shallow</strong></td><td><code>GET /healthz</code> → 200</td><td>Process is alive</td></tr><tr><td><strong>Active deep</strong></td><td>Endpoint verifies DB, cache, dependencies</td><td>Alive but non-functional</td></tr></tbody></table></div><blockquote>
+<p><strong>Deep health checks have a well-known failure mode</strong>: if the shared database
+is briefly slow, <em>every</em> instance reports unhealthy at once and the balancer
+removes the entire fleet — turning a degradation into an outage. The standard
+mitigation is a <strong>minimum healthy fraction</strong>: never remove more than, say, 50%
+of a pool, and fail open when everything looks unhealthy. Mentioning this is
+genuine senior signal.</p>
+</blockquote>
+<p>Two more things a good answer includes:</p>
+<ul>
+<li><strong>Slow start.</strong> A returning instance has cold caches and empty connection
+pools. Ramp its share over ~30 seconds instead of sending it a full slice
+immediately.</li>
+<li><strong>Connection draining.</strong> On removal, stop new requests but let in-flight ones
+finish for a grace period. Otherwise every deploy is a burst of 502s.</li>
+</ul>
+<hr>
+<h2 id="5-sticky-sessions"><a class="anchor" href="#5-sticky-sessions">#</a>5 · Sticky sessions</h2><p>Route a user consistently to one server — via cookie or source-IP hash.</p>
+<p><strong>Usually the wrong answer, and knowing why matters:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Cost</th><th>Detail</th></tr></thead><tbody><tr><td>Uneven load</td><td>Long-lived sessions concentrate</td></tr><tr><td>Bad failover</td><td>That server dies and the session is gone</td></tr><tr><td>Blocks deploys</td><td>You cannot drain a node without dropping sessions</td></tr><tr><td>Blocks autoscaling</td><td>New capacity gets no existing traffic</td></tr></tbody></table></div><blockquote>
+<p><strong>Prefer stateless services with session state in a shared store</strong> — Redis, or
+a signed token the client carries. Then any instance can serve any request,
+and every problem above disappears.</p>
+</blockquote>
+<p><strong>Legitimate exceptions</strong>, and being able to name them is better than a blanket
+rule: WebSockets and other long-lived connections are inherently sticky; and
+local caches with a high hit rate can justify affinity — but use consistent
+hashing so a lost node costs 1/N, not everything.</p>
+<hr>
+<h2 id="6-making-the-balancer-not-be-the-spof"><a class="anchor" href="#6-making-the-balancer-not-be-the-spof">#</a>6 · Making the balancer not be the SPOF</h2><p>An obvious follow-up: <em>&quot;what if the load balancer fails?&quot;</em></p>
+<div class="table-scroll"><table><thead><tr><th>Approach</th><th>How</th></tr></thead><tbody><tr><td><strong>Active-passive pair</strong></td><td>Two nodes share a virtual IP; the standby takes it over on failure</td></tr><tr><td><strong>Active-active</strong></td><td>Several nodes, all live, DNS or anycast in front</td></tr><tr><td><strong>Anycast</strong></td><td>Same IP announced from many sites; BGP withdraws a dead one</td></tr><tr><td><strong>Client-side balancing</strong></td><td>Clients get the instance list and choose — no middlebox at all</td></tr></tbody></table></div><p><strong>Client-side load balancing is worth knowing</strong> because it is how large internal
+service meshes work: the client library holds the endpoint list from a service
+registry and picks with power-of-two-choices. It removes a network hop and a
+failure domain, at the cost of putting policy in every client.</p>
+<hr>
+<h2 id="7-what-to-say-in-the-round"><a class="anchor" href="#7-what-to-say-in-the-round">#</a>7 · What to say in the round</h2><p>At the high-level stage, one sentence beyond the box:</p>
+<blockquote>
+<p><em>&quot;L7 in front of the app tier — I want path-based routing, TLS termination,
+and automatic retries on idempotent requests. Least-connections, since request
+cost varies. The instances are stateless so any of them can serve any request,
+which keeps deploys and autoscaling simple.&quot;</em></p>
+</blockquote>
+<p>That is four justified decisions in twenty seconds, and it pre-empts the
+follow-up.</p>
+<p>If pushed deeper, the three places to go: <strong>consistent hashing with virtual
+nodes</strong> when the backend is stateful, <strong>the deep-health-check cascade</strong> and
+minimum healthy fraction, and <strong>why sticky sessions are a smell</strong>.</p>
+<hr>
+<h2 id="8-interview-questions"><a class="anchor" href="#8-interview-questions">#</a>8 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;L4 or L7?&quot;</td><td>Both, usually — L4 at the edge for throughput and DDoS absorption, L7 behind it because only it can route on path, terminate TLS, and retry a failed idempotent request on another instance.</td></tr><tr><td>⭐ &quot;Why consistent hashing?&quot;</td><td>With <code>hash % N</code>, changing N moves every key — a cache tier resize becomes a full cache miss and the database takes the load. Consistent hashing moves ~1/N. Add virtual nodes, or load is uneven and a dead node dumps all its keys on one neighbour.</td></tr><tr><td>&quot;What if the LB dies?&quot;</td><td>It must not be a single instance: active-passive with a floating VIP, active-active behind anycast, or client-side balancing with a service registry, which removes the middlebox entirely.</td></tr><tr><td>⭐ &quot;Are sticky sessions OK?&quot;</td><td>Rarely. They cause uneven load, lose state on failover, and block draining and autoscaling. Put session state in Redis or a signed token instead. The real exceptions are long-lived connections and high-value local caches — and there I&#39;d use consistent hashing so losing a node costs 1/N.</td></tr><tr><td>&quot;How do you avoid overloading a recovering server?&quot;</td><td>Slow start — ramp its traffic share over ~30s, because it has cold caches and empty pools. And connection draining on the way out so deploys do not throw 502s.</td></tr><tr><td>&quot;Health checks — shallow or deep?&quot;</td><td>Deep is better at catching alive-but-broken, but it can take out the whole fleet when a shared dependency is slow. Cap removals at a minimum healthy fraction and fail open.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>name the four levels balancing happens at,</li>
+<li>give the L4/L7 split and the retry argument,</li>
+<li>explain consistent hashing <em>including virtual nodes</em>,</li>
+<li>describe the deep-health-check cascade and its mitigation, and</li>
+<li>argue both for and against sticky sessions.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="estimation.html"><span>previous</span>Estimation</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-layers-a-request-passes">1 · The layers a request passes</a></li><li class="d2"><a href="#2-l4-versus-l7">2 · L4 versus L7</a></li><li class="d2"><a href="#3-the-algorithms">3 · The algorithms</a></li><li class="d2"><a href="#4-health-checks">4 · Health checks</a></li><li class="d2"><a href="#5-sticky-sessions">5 · Sticky sessions</a></li><li class="d2"><a href="#6-making-the-balancer-not-be-the-spof">6 · Making the balancer not be the SPOF</a></li><li class="d2"><a href="#7-what-to-say-in-the-round">7 · What to say in the round</a></li><li class="d2"><a href="#8-interview-questions">8 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

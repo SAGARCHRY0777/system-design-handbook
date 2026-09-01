@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The 45-minute framework · System Design Handbook</title>
+<meta name="description" content="Six phases with a clock attached, what to say entering and leaving each, and the recovery moves for when it goes wrong.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html" class="active">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="the-45-minute-framework"><a class="anchor" href="#the-45-minute-framework">#</a>The 45-minute framework</h1><blockquote>
+<p><strong>Learn this before any architecture.</strong> The framework is what stops you
+freezing at minute three, and it is what makes the interviewer stop steering.
+The same six phases work for every prompt in the round.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-clock"><a class="anchor" href="#1-the-clock">#</a>1 · The clock</h2><p>A 45-minute round. Adjust proportionally for 60.</p>
+<pre class="mermaid">gantt
+    dateFormat mm
+    axisFormat %M
+    section Round
+    Requirements and scope   :a, 00, 5m
+    Estimation               :b, after a, 3m
+    API and data model       :c, after b, 5m
+    High-level design        :d, after c, 12m
+    Deep dive                :e, after d, 15m
+    Failure and wrap         :f, after e, 5m</pre><div class="table-scroll"><table><thead><tr><th>Phase</th><th>Minutes</th><th>You leave it with</th></tr></thead><tbody><tr><td>1 · Requirements &amp; scope</td><td>0–5</td><td>A written list of what is in and out</td></tr><tr><td>2 · Estimation</td><td>5–8</td><td>QPS, storage, and one number that shapes the design</td></tr><tr><td>3 · API &amp; data model</td><td>8–13</td><td>Three or four endpoints and the core entities</td></tr><tr><td>4 · High-level design</td><td>13–25</td><td>A diagram that satisfies the functional requirements</td></tr><tr><td>5 · Deep dive</td><td>25–40</td><td>One or two components taken three levels down</td></tr><tr><td>6 · Failure &amp; wrap</td><td>40–45</td><td>What breaks, how you know, what you would do next</td></tr></tbody></table></div><p><strong>Say the plan out loud at minute one.</strong> <em>&quot;Let me spend five minutes on
+requirements, do some quick estimates, sketch the API, then a high-level design,
+and leave us fifteen minutes to go deep on whatever you find most
+interesting.&quot;</em> This single sentence tells the interviewer you have done this
+before, and it buys you the scoping time that impatient candidates skip.</p>
+<hr>
+<h2 id="2-phase-1-requirements-and-scope-05"><a class="anchor" href="#2-phase-1-requirements-and-scope-05">#</a>2 · Phase 1 — Requirements and scope (0–5)</h2><p>The prompt is deliberately underspecified. <em>&quot;Design Twitter&quot;</em> is not a problem
+statement; it is an invitation to produce one.</p>
+<p><strong>Three questions, always:</strong></p>
+<ol>
+<li><strong>Who uses it and how many?</strong> — scale changes everything downstream</li>
+<li><strong>What are the top three things they do?</strong> — the functional core</li>
+<li><strong>What must never break?</strong> — the quality attribute that drives the design</li>
+</ol>
+<p>Then state the split explicitly:</p>
+<blockquote>
+<p><em>&quot;So in scope: post a tweet, follow a user, and read a home timeline. Out of
+scope for today: search, DMs, ads, trending. And I&#39;m hearing that timeline
+reads must be fast and always available — a few seconds of staleness is
+acceptable. Is that the right emphasis?&quot;</em></p>
+</blockquote>
+<p><strong>Write in-scope and out-of-scope on the board.</strong> It is a visible contract. When
+you later skip something, you are not forgetting it — you scoped it out, and the
+board proves it.</p>
+<div class="table-scroll"><table><thead><tr><th>Requirement kind</th><th>Ask about</th><th>Why it matters</th></tr></thead><tbody><tr><td>Functional</td><td>The three core actions</td><td>Defines the API and the happy path</td></tr><tr><td>Scale</td><td>Users, requests, data volume, growth</td><td>Decides single-node vs distributed</td></tr><tr><td>Latency</td><td>p50 and p99 targets, read vs write</td><td>Decides caching and precomputation</td></tr><tr><td>Consistency</td><td>Is stale data acceptable, and for how long?</td><td>Decides replication and the database</td></tr><tr><td>Availability</td><td>What is the cost of downtime?</td><td>Decides redundancy and failover</td></tr><tr><td>Durability</td><td>Can you ever lose a write?</td><td>Decides replication factor and acks</td></tr></tbody></table></div><blockquote>
+<p><strong>The read/write ratio is the single most useful number you can extract</strong>, and
+most candidates never ask for it. 1000:1 reads-to-writes says <em>cache
+aggressively, precompute, denormalise</em>. 1:1 says <em>the write path is the
+problem</em>. Ask for it in phase 1 and refer back to it all round.</p>
+</blockquote>
+<hr>
+<h2 id="3-phase-2-estimation-58"><a class="anchor" href="#3-phase-2-estimation-58">#</a>3 · Phase 2 — Estimation (5–8)</h2><p>Not arithmetic for its own sake. <strong>One number that changes a decision</strong>, then
+move on. See <a href="estimation.html">estimation</a> for the method and the numbers.</p>
+<p>The three that usually matter:</p>
+<ul>
+<li><strong>Write QPS</strong> → does this fit on one database?</li>
+<li><strong>Storage per year</strong> → one machine, or a sharded fleet?</li>
+<li><strong>Peak read QPS</strong> → how many cache and app servers?</li>
+</ul>
+<blockquote>
+<p><em>&quot;500M daily actives, each reading their timeline twice a day, is about 1
+billion reads a day — roughly 12,000 QPS average, call it 30,000 at peak.
+That is well past a single database, so reads have to be served from cache
+and the timeline has to be precomputed.&quot;</em></p>
+</blockquote>
+<p><strong>Three sentences, one conclusion, and it justified an architectural decision.</strong>
+That is what estimation is for. Deriving seven numbers nobody uses burns four
+minutes you needed for the deep dive.</p>
+<hr>
+<h2 id="4-phase-3-api-and-data-model-813"><a class="anchor" href="#4-phase-3-api-and-data-model-813">#</a>4 · Phase 3 — API and data model (8–13)</h2><p>Cheap, fast, and disproportionately valuable — it forces both of you to agree on
+what the system <em>does</em> before arguing about how.</p>
+<pre class="code"><code>POST /v1/tweets            { text }              -&gt; { tweet_id, created_at }
+GET  /v1/timeline?cursor=  &amp;limit=20             -&gt; { tweets[], next_cursor }
+POST /v1/users/{id}/follow                       -&gt; 204</code></pre><p><strong>Three or four endpoints. Not fifteen.</strong></p>
+<p>Two details that get noticed:</p>
+<ul>
+<li><strong>Cursor pagination, not offset.</strong> <code>?page=3</code> re-scans and skips rows, and
+shifts under concurrent writes so users see duplicates or gaps. A cursor on
+<code>(created_at, id)</code> is stable and indexable. Say why in one clause.</li>
+<li><strong>Version the path.</strong> <code>/v1/</code> costs three characters and signals that you have
+had to evolve an API someone else was calling.</li>
+</ul>
+<p>Then the entities — fields and access patterns, not full DDL:</p>
+<div class="table-scroll"><table><thead><tr><th>Entity</th><th>Key fields</th><th>Accessed by</th></tr></thead><tbody><tr><td><code>User</code></td><td>id, handle, created_at</td><td>id, handle</td></tr><tr><td><code>Tweet</code></td><td>id, author_id, text, created_at</td><td>id; author_id + created_at</td></tr><tr><td><code>Follow</code></td><td>follower_id, followee_id</td><td>follower_id; <strong>followee_id</strong></td></tr></tbody></table></div><blockquote>
+<p><strong>Design the schema around the access patterns, not the nouns.</strong> That
+<code>Follow</code> needs indexing in <em>both</em> directions is exactly the kind of detail
+that decides whether fan-out is feasible, and noticing it here rather than at
+minute 35 is a strong signal.</p>
+</blockquote>
+<hr>
+<h2 id="5-phase-4-high-level-design-1325"><a class="anchor" href="#5-phase-4-high-level-design-1325">#</a>5 · Phase 4 — High-level design (13–25)</h2><p>Now draw. Client → load balancer → services → storage, plus whatever
+asynchronous path the problem needs.</p>
+<p><strong>Rules that keep the board readable:</strong></p>
+<ol>
+<li><strong>Boxes are services, arrows are calls, and every arrow gets a label.</strong> An
+unlabelled arrow is an unanswered question.</li>
+<li><strong>Start with the simplest thing that satisfies the requirements</strong>, then
+evolve it under pressure you name. Beginning with the fully-sharded
+multi-region version skips the reasoning, which was the point.</li>
+<li><strong>Narrate a request end to end.</strong> <em>&quot;A tweet comes in, hits the LB, the write
+service validates and writes to the tweet store, then publishes to a queue —
+and the fan-out worker picks it up from there.&quot;</em> This is what the
+interviewer is actually assessing.</li>
+<li><strong>Leave room.</strong> You will add to this diagram for another twenty minutes.</li>
+</ol>
+<pre class="mermaid">flowchart LR
+    C[&quot;Client&quot;] --&gt; LB[&quot;Load balancer&quot;]
+    LB --&gt; W[&quot;Write service&quot;]
+    LB --&gt; R[&quot;Read service&quot;]
+    W --&gt; DB[(&quot;Tweet store&quot;)]
+    W --&gt; Q[[&quot;Queue&quot;]]
+    Q --&gt; F[&quot;Fan-out worker&quot;]
+    F --&gt; Cache[(&quot;Timeline cache&quot;)]
+    R --&gt; Cache
+    R -.-&gt;|&quot;cache miss&quot;| DB</pre><p><strong>Evolve, do not present.</strong> <em>&quot;The simplest version has the read service query
+the database directly. At 30,000 QPS that will not hold, so I&#39;ll put a cache in
+front — and because I want reads to be a single lookup, I&#39;ll precompute the
+timeline on write instead of assembling it on read.&quot;</em> The interviewer now sees
+the reasoning, which is the thing being scored.</p>
+<hr>
+<h2 id="6-phase-5-deep-dive-2540"><a class="anchor" href="#6-phase-5-deep-dive-2540">#</a>6 · Phase 5 — Deep dive (25–40)</h2><p><strong>The longest phase and where the score is decided.</strong> Everything before it was
+setup.</p>
+<p>Offer a choice — it shows judgement and it lets the interviewer steer to the
+rubric they are filling in:</p>
+<blockquote>
+<p><em>&quot;I could go deep on the fan-out path and the celebrity problem, or on how the
+timeline cache is sharded and kept warm. Which is more useful?&quot;</em></p>
+</blockquote>
+<p>If they say &quot;you pick&quot;, <strong>pick the hardest thing you can actually defend.</strong> The
+depth score comes from one component explored properly, not six touched.</p>
+<p>Three levels is the target:</p>
+<div class="table-scroll"><table><thead><tr><th>Level</th><th>Example — the fan-out worker</th></tr></thead><tbody><tr><td>1</td><td>&quot;A worker pushes each new tweet into followers&#39; timeline caches&quot;</td></tr><tr><td>2</td><td>&quot;It reads from a queue, batches by follower shard, and writes with a capped list per user — 800 entries, trimmed on insert&quot;</td></tr><tr><td>3</td><td>&quot;Delivery is at-least-once, so writes are idempotent on <code>tweet_id</code>. A crashed worker&#39;s messages are reclaimed by the consumer group after a visibility timeout. For users with millions of followers, fan-out is skipped entirely and their tweets are merged in at read time — otherwise one write costs millions&quot;</td></tr></tbody></table></div><p><strong>Level 3 is the interview.</strong> Levels 1 and 2 are what everyone says.</p>
+<hr>
+<h2 id="7-phase-6-failure-and-wrap-4045"><a class="anchor" href="#7-phase-6-failure-and-wrap-4045">#</a>7 · Phase 6 — Failure and wrap (40–45)</h2><p>Do not let the round end on the happy path. <strong>Volunteer the failure analysis</strong> —
+it is a rubric line, and most candidates run out of clock before reaching it.</p>
+<p>Walk the diagram and kill each box:</p>
+<div class="table-scroll"><table><thead><tr><th>Component</th><th>Fails how</th><th>Mitigation</th></tr></thead><tbody><tr><td>App server</td><td>Crashes</td><td>Stateless, health-checked, LB removes it</td></tr><tr><td>Cache</td><td>Node lost</td><td>Cold reads hit the DB — is the DB sized for that?</td></tr><tr><td>Queue</td><td>Backs up</td><td>Consumer lag alarm; the system degrades, not breaks</td></tr><tr><td>Database leader</td><td>Fails over</td><td>Writes pause for ~30s; replicas may lag</td></tr><tr><td>Whole region</td><td>Lost</td><td>In scope? If not, say so</td></tr></tbody></table></div><p>Then close deliberately:</p>
+<blockquote>
+<p><em>&quot;To summarise: precomputed timelines in a cache for read latency, async
+fan-out with a celebrity carve-out for write amplification, at-least-once
+delivery with idempotent writes for correctness. The main thing I&#39;d want to
+validate is the cache hit rate — the whole read path assumes 95%+, and if it
+is really 70% the database is undersized by 6×. Given more time I&#39;d look at
+multi-region.&quot;</em></p>
+</blockquote>
+<p><strong>Naming the assumption your design most depends on</strong> is the strongest possible
+closing sentence. It shows you know where the design is load-bearing.</p>
+<hr>
+<h2 id="8-recovery-moves"><a class="anchor" href="#8-recovery-moves">#</a>8 · Recovery moves</h2><p>Things go wrong. These are the moves.</p>
+<div class="table-scroll"><table><thead><tr><th>Situation</th><th>What to do</th></tr></thead><tbody><tr><td><strong>You don&#39;t know a technology they named</strong></td><td><em>&quot;I haven&#39;t used it — I&#39;d reach for X here; how does it differ?&quot;</em> Bluffing loses more than not knowing.</td></tr><tr><td><strong>Blank on the whole problem</strong></td><td>Fall back to phase 1. Ask about scale and the three core actions. Structure buys thinking time.</td></tr><tr><td><strong>They push back on a choice</strong></td><td>Do not immediately fold. <em>&quot;My reasoning was X — what am I missing?&quot;</em> Then update if they are right, and say what changed your mind.</td></tr><tr><td><strong>You are at minute 30 with no diagram</strong></td><td>Say it: <em>&quot;I&#39;m over-indexing on requirements — let me sketch the high level now.&quot;</em> Naming it recovers most of the cost.</td></tr><tr><td><strong>You realise something earlier was wrong</strong></td><td>Fix it out loud. Self-correction scores; a wrong design defended does not.</td></tr><tr><td><strong>They go silent</strong></td><td>Silence is usually note-taking, not disapproval. Keep narrating.</td></tr><tr><td><strong>You finish early</strong></td><td>You scoped too small. Add a requirement: <em>&quot;What if we needed this multi-region?&quot;</em></td></tr></tbody></table></div><blockquote>
+<p><strong>Pushback is usually a probe, not a correction.</strong> Interviewers test whether
+you fold under pressure or reason under it. Both instant capitulation and
+stubbornness score badly; &quot;here was my reasoning, what am I missing?&quot; scores
+well either way.</p>
+</blockquote>
+<hr>
+<h2 id="9-the-framework-as-a-card"><a class="anchor" href="#9-the-framework-as-a-card">#</a>9 · The framework as a card</h2><pre class="code"><code>1. SCOPE      5m   functional, scale, latency, consistency. Write in/out.
+2. ESTIMATE   3m   QPS, storage. ONE number that changes a decision.
+3. API        5m   3-4 endpoints, cursor pagination, core entities.
+4. HIGH LEVEL 12m  simplest thing first, then evolve under named pressure.
+5. DEEP DIVE  15m  offer a choice, go THREE levels, this is the score.
+6. FAILURE    5m   kill each box, then summarise + name the key assumption.</code></pre><p>Learn this well enough to run it without thinking, because during the round you
+will need the thinking for the problem.</p>
+<hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You are ready to move on when you can:</p>
+<ol>
+<li>recite the six phases and their minute budgets,</li>
+<li>give the three questions that open phase 1,</li>
+<li>explain why the read/write ratio matters more than most numbers,</li>
+<li>describe the difference between a level-2 and a level-3 answer, and</li>
+<li>name three recovery moves.</li>
+</ol>
+<p>Next: <a href="requirements-and-scope.html">requirements and scope</a>.</p>
+</article>
+    <div class="pager-row"><a class="pager previous" href="index.html"><span>previous</span>Start here</a><a class="pager next" href="requirements-and-scope.html"><span>next</span>Requirements & scope</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-clock">1 · The clock</a></li><li class="d2"><a href="#2-phase-1-requirements-and-scope-05">2 · Phase 1 — Requirements and scope (0–5)</a></li><li class="d2"><a href="#3-phase-2-estimation-58">3 · Phase 2 — Estimation (5–8)</a></li><li class="d2"><a href="#4-phase-3-api-and-data-model-813">4 · Phase 3 — API and data model (8–13)</a></li><li class="d2"><a href="#5-phase-4-high-level-design-1325">5 · Phase 4 — High-level design (13–25)</a></li><li class="d2"><a href="#6-phase-5-deep-dive-2540">6 · Phase 5 — Deep dive (25–40)</a></li><li class="d2"><a href="#7-phase-6-failure-and-wrap-4045">7 · Phase 6 — Failure and wrap (40–45)</a></li><li class="d2"><a href="#8-recovery-moves">8 · Recovery moves</a></li><li class="d2"><a href="#9-the-framework-as-a-card">9 · The framework as a card</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

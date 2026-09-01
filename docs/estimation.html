@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimation · System Design Handbook</title>
+<meta name="description" content="Back-of-envelope maths that finishes in three minutes: the numbers to memorise, the four shortcuts, and how to turn an estimate into an architectural decision.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html" class="active">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="estimation"><a class="anchor" href="#estimation">#</a>Estimation</h1><blockquote>
+<p><strong>The point is not the number. The point is the decision the number forces.</strong>
+An estimate that does not change anything about the design was three wasted
+minutes.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-three-that-matter"><a class="anchor" href="#1-the-three-that-matter">#</a>1 · The three that matter</h2><p>Almost every round needs these and nothing else:</p>
+<div class="table-scroll"><table><thead><tr><th>Estimate</th><th>Decides</th></tr></thead><tbody><tr><td><strong>Write QPS</strong></td><td>Does this fit on one database, or must it shard?</td></tr><tr><td><strong>Read QPS (peak)</strong></td><td>How much cache, how many replicas, how many app servers?</td></tr><tr><td><strong>Storage per year</strong></td><td>One machine, or a fleet? Hot/cold tiering?</td></tr></tbody></table></div><p>Occasionally a fourth: <strong>bandwidth</strong>, when the payload is media rather than
+text. A 5 MB photo changes the answer in a way a 300-byte tweet does not.</p>
+<hr>
+<h2 id="2-numbers-to-memorise"><a class="anchor" href="#2-numbers-to-memorise">#</a>2 · Numbers to memorise</h2><p>Eleven numbers. They are enough.</p>
+<h3 id="time"><a class="anchor" href="#time">#</a>Time</h3><div class="table-scroll"><table><thead><tr><th>Operation</th><th>Latency</th><th>In human terms</th></tr></thead><tbody><tr><td>L1 cache reference</td><td>1 ns</td><td>—</td></tr><tr><td>Main memory reference</td><td>100 ns</td><td>100× L1</td></tr><tr><td>SSD random read</td><td>100 µs</td><td>1,000× memory</td></tr><tr><td>Round trip within a datacentre</td><td>500 µs</td><td>—</td></tr><tr><td>Disk seek (spinning)</td><td>10 ms</td><td>100× SSD</td></tr><tr><td>Round trip US ↔ Europe</td><td>150 ms</td><td>Physics; you cannot cache around it</td></tr></tbody></table></div><p><strong>The two ratios worth internalising:</strong> memory is ~1,000× faster than SSD, and
+cross-continent is ~300× a datacentre round trip. The first is why you cache.
+The second is why you put a CDN in front and why multi-region writes are
+genuinely hard.</p>
+<h3 id="size"><a class="anchor" href="#size">#</a>Size</h3><div class="table-scroll"><table><thead><tr><th>Item</th><th>Size</th></tr></thead><tbody><tr><td>A character (ASCII)</td><td>1 byte</td></tr><tr><td>A UUID</td><td>16 bytes</td></tr><tr><td>A typical database row</td><td>~1 KB</td></tr><tr><td>A tweet, with metadata</td><td>~1 KB</td></tr><tr><td>A compressed photo</td><td>~1 MB</td></tr><tr><td>A minute of 1080p video</td><td>~50 MB</td></tr></tbody></table></div><h3 id="throughput-per-commodity-machine"><a class="anchor" href="#throughput-per-commodity-machine">#</a>Throughput per commodity machine</h3><div class="table-scroll"><table><thead><tr><th>Component</th><th>Rough capacity</th></tr></thead><tbody><tr><td>Web/app server</td><td>10k–50k QPS (simple requests)</td></tr><tr><td>Cache node (Redis/Memcached)</td><td>~100k QPS</td></tr><tr><td>SQL database</td><td>~5k–10k writes/s per primary</td></tr><tr><td>Message queue (Kafka broker)</td><td>~100k messages/s</td></tr><tr><td>Server RAM</td><td>64–256 GB</td></tr><tr><td>Server SSD</td><td>1–10 TB</td></tr></tbody></table></div><blockquote>
+<p><strong>The 5k-writes-per-primary figure is the one that earns its keep.</strong> It is why
+&quot;40 writes a second&quot; means one database and &quot;40,000 writes a second&quot; means
+sharding — and being able to say that instantly is the difference between a
+justified decision and a guess.</p>
+</blockquote>
+<hr>
+<h2 id="3-four-shortcuts"><a class="anchor" href="#3-four-shortcuts">#</a>3 · Four shortcuts</h2><h3 id="seconds-in-a-day-use-100000"><a class="anchor" href="#seconds-in-a-day-use-100000">#</a>Seconds in a day: use 100,000</h3><p>The real number is 86,400. Using 100,000 makes every division trivial and is
+within 16% — far inside the precision anyone cares about.</p>
+<pre class="code"><code>1 billion events/day  -&gt;  1e9 / 1e5  =  10,000 QPS
+100 million/day       -&gt;  1e8 / 1e5  =  1,000 QPS
+1 million/day         -&gt;  1e6 / 1e5  =  10 QPS</code></pre><p><strong>Memorise the middle one.</strong> 100M/day ≈ 1,000 QPS anchors everything else by
+factors of ten.</p>
+<h3 id="peak-is-23-average"><a class="anchor" href="#peak-is-23-average">#</a>Peak is 2–3× average</h3><p>Traffic is not flat. Multiply the average by 2 for a global service, 3 for one
+with a concentrated timezone. <strong>Say which you are using and why</strong> — it shows you
+know the average is not the number you provision for.</p>
+<h3 id="powers-of-two-in-bytes"><a class="anchor" href="#powers-of-two-in-bytes">#</a>Powers of two, in bytes</h3><div class="table-scroll"><table><thead><tr><th>Power</th><th>Value</th><th>Name</th></tr></thead><tbody><tr><td>2¹⁰</td><td>~1 thousand</td><td>KB</td></tr><tr><td>2²⁰</td><td>~1 million</td><td>MB</td></tr><tr><td>2³⁰</td><td>~1 billion</td><td>GB</td></tr><tr><td>2⁴⁰</td><td>~1 trillion</td><td>TB</td></tr></tbody></table></div><p>Also: <strong>2³² ≈ 4 billion</strong> (why 32-bit IDs run out) and <strong>2⁶⁴ ≈ 1.8 × 10¹⁹</strong>
+(why 64-bit ones do not).</p>
+<h3 id="round-aggressively-and-say-so"><a class="anchor" href="#round-aggressively-and-say-so">#</a>Round aggressively and say so</h3><p><em>&quot;Call it 12,000 — I&#39;ll round to 10,000.&quot;</em> Nobody is checking your arithmetic;
+they are checking whether you can hold magnitudes. Precision theatre wastes
+clock and creates opportunities to make an error that derails you.</p>
+<hr>
+<h2 id="4-the-template"><a class="anchor" href="#4-the-template">#</a>4 · The template</h2><pre class="code"><code>1. USERS       DAU, and actions per user per day
+2. QPS         actions/day / 100,000  -&gt;  average.  x2-3  -&gt;  peak
+3. STORAGE     writes/day x bytes/write x 365 x replication factor
+4. BANDWIDTH   QPS x payload size     (only if payloads are large)
+5. CONCLUDE    &quot;so this needs / does not need X&quot;</code></pre><p>Step 5 is not optional. It is the only step being scored.</p>
+<hr>
+<h2 id="5-worked-twitter-scale-timeline"><a class="anchor" href="#5-worked-twitter-scale-timeline">#</a>5 · Worked — Twitter-scale timeline</h2><pre class="code"><code>USERS
+  500M DAU
+  each posts 0.2 tweets/day   -&gt;  100M tweets/day
+  each reads timeline 2x/day  -&gt;  1B reads/day
+
+QPS
+  writes:  1e8 / 1e5  = 1,000/s average,  ~3,000/s peak
+  reads:   1e9 / 1e5  = 10,000/s average, ~30,000/s peak
+
+STORAGE
+  1e8 tweets/day x 1 KB       = 100 GB/day
+  x 365                       = ~36 TB/year
+  x 3 (replication)           = ~110 TB/year
+
+CONCLUSION
+  - 3,000 writes/s is past a single primary (~5-10k, and that is optimistic
+    with indexes) -&gt; shard the tweet store, by tweet ID
+  - 30,000 reads/s cannot hit the database -&gt; timelines served from cache
+  - 36 TB/year of tweets is fine on a modest sharded fleet; the graph and
+    the timeline cache will cost more RAM than the tweets cost disk</code></pre><p><strong>Three numbers, three decisions.</strong> That is a complete estimation phase, and it
+took under three minutes.</p>
+<h3 id="the-follow-up-that-separates-candidates"><a class="anchor" href="#the-follow-up-that-separates-candidates">#</a>The follow-up that separates candidates</h3><blockquote>
+<p><em>&quot;How much RAM does the timeline cache need?&quot;</em></p>
+</blockquote>
+<pre class="code"><code>500M users x 800 cached tweet IDs x 8 bytes = 3.2 TB
+
+...but 80% of users are not active on a given day, and inactive users can
+be rebuilt on demand. Cache only the active 20%:
+
+100M x 800 x 8 = 640 GB  -&gt;  ~10 cache nodes at 64 GB</code></pre><p><strong>The refinement is the answer, not the first number.</strong> Noticing that you do not
+have to cache everyone, and saying what the miss path costs, is the difference
+between a level-2 and a level-3 answer.</p>
+<hr>
+<h2 id="6-worked-a-photo-service"><a class="anchor" href="#6-worked-a-photo-service">#</a>6 · Worked — a photo service</h2><p>Media changes which number binds.</p>
+<pre class="code"><code>USERS
+  100M DAU, 0.5 uploads/day  -&gt;  50M uploads/day
+  20 photo views/day         -&gt;  2B views/day
+
+QPS
+  writes: 5e7 / 1e5 = 500/s,  peak ~1,500/s
+  reads:  2e9 / 1e5 = 20,000/s, peak ~60,000/s
+
+STORAGE
+  5e7 x 1 MB      = 50 TB/day        (!)
+  x 365           = ~18 PB/year
+  x 3 replication = ~55 PB/year
+
+BANDWIDTH
+  reads: 20,000/s x 200 KB (thumbnail) = 4 GB/s = 32 Gbps
+
+CONCLUSION
+  - 18 PB/year rules out storing blobs in a database. Object storage for
+    the bytes; the DB holds metadata only.
+  - 32 Gbps of egress is the dominant COST, not a capacity problem. A CDN
+    is not an optimisation here, it is the architecture.
+  - Serve resized variants, not originals. The 200 KB vs 1 MB choice is a
+    5x bandwidth difference and dwarfs every other saving on the table.</code></pre><blockquote>
+<p><strong>Notice the shape changed.</strong> For Twitter the binding constraint was read QPS.
+Here it is bandwidth and cost. Saying <em>&quot;the interesting number here is egress,
+not QPS&quot;</em> demonstrates you are reading the problem rather than running a
+ritual.</p>
+</blockquote>
+<hr>
+<h2 id="7-turning-numbers-into-decisions"><a class="anchor" href="#7-turning-numbers-into-decisions">#</a>7 · Turning numbers into decisions</h2><p>The table to have in your head:</p>
+<div class="table-scroll"><table><thead><tr><th>If you compute…</th><th>And it is…</th><th>Then</th></tr></thead><tbody><tr><td>Write QPS</td><td>&lt; 1,000</td><td>Single primary; do not shard</td></tr><tr><td>Write QPS</td><td>&gt; 10,000</td><td>Shard; name the shard key</td></tr><tr><td>Read QPS</td><td>&gt; 10× writes</td><td>Cache layer; consider precomputation</td></tr><tr><td>Read QPS</td><td>&gt; 100k</td><td>CDN or edge cache, not just a cache tier</td></tr><tr><td>Storage/year</td><td>&lt; 1 TB</td><td>One machine; it fits in RAM territory</td></tr><tr><td>Storage/year</td><td>&gt; 100 TB</td><td>Sharded, tiered, lifecycle policies</td></tr><tr><td>Payload</td><td>&gt; 1 MB</td><td>Object storage + CDN; DB holds metadata</td></tr><tr><td>Bandwidth</td><td>&gt; 10 Gbps</td><td>CDN is the architecture, and cost is the driver</td></tr><tr><td>Peak/average</td><td>&gt; 5×</td><td>Queue to absorb; autoscaling alone is too slow</td></tr></tbody></table></div><hr>
+<h2 id="8-mistakes"><a class="anchor" href="#8-mistakes">#</a>8 · Mistakes</h2><div class="table-scroll"><table><thead><tr><th>Mistake</th><th>Why it costs</th></tr></thead><tbody><tr><td>Skipping estimation entirely</td><td>Every capacity decision becomes a guess</td></tr><tr><td>Ten minutes of arithmetic</td><td>Eats the deep dive, which is where the score is</td></tr><tr><td>Numbers with no conclusion</td><td>The phase had no purpose</td></tr><tr><td>Using the average, provisioning for it</td><td>Peak is 2–3×; you designed for the wrong load</td></tr><tr><td>Forgetting the replication factor</td><td>Storage off by 3×</td></tr><tr><td>Ignoring indexes and metadata</td><td>Real usage is often 2× the raw row size</td></tr><tr><td>False precision</td><td>86,400 instead of 100,000 buys nothing and costs clock</td></tr><tr><td>Not sanity-checking</td><td>&quot;40 PB of tweets a year&quot; should feel wrong; catch it</td></tr></tbody></table></div><p><strong>Sanity-check out loud.</strong> <em>&quot;That gives 200 TB a day, which is more than
+YouTube — let me check… I dropped a factor of a thousand.&quot;</em> Catching your own
+error is a positive signal, not a negative one.</p>
+<hr>
+<h2 id="9-questions-on-estimation"><a class="anchor" href="#9-questions-on-estimation">#</a>9 · Questions on estimation</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;How many servers would you need?&quot;</td><td>Peak QPS divided by per-server capacity, plus headroom for failure. 30,000 QPS at 10k per server is 3, so provision 5 — you need to survive losing one and still absorb a spike.</td></tr><tr><td>&quot;How do you size a cache?&quot;</td><td>Working set, not total data. Estimate the active fraction, multiply by entry size, and state the assumed hit rate — then say what happens on a miss, because that determines the database sizing.</td></tr><tr><td>⭐ &quot;What if your estimate is off by 10×?&quot;</td><td>The tiering conclusions mostly hold; the counts change. I&#39;d design so capacity is a config change — stateless services, a chosen shard key, autoscaling — rather than an architecture change. The dangerous errors are the ones that change the <em>shape</em>: blobs in a database, or no shard key.</td></tr><tr><td>&quot;Why 100,000 seconds a day?&quot;</td><td>It is 86,400 rounded so every division is a power of ten. 16% error, and no arithmetic risk under pressure.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can move on when you can:</p>
+<ol>
+<li>recall the eleven numbers without looking,</li>
+<li>convert events/day to QPS instantly,</li>
+<li>state the per-primary write ceiling and what it implies,</li>
+<li>run the Twitter estimate in three minutes out loud, and</li>
+<li>finish every estimate with a <em>&quot;so this means…&quot;</em> sentence.</li>
+</ol>
+<p>Next: the <a href="load-balancing.html">building blocks</a>.</p>
+</article>
+    <div class="pager-row"><a class="pager previous" href="requirements-and-scope.html"><span>previous</span>Requirements & scope</a><a class="pager next" href="load-balancing.html"><span>next</span>Load balancing & the edge</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-three-that-matter">1 · The three that matter</a></li><li class="d2"><a href="#2-numbers-to-memorise">2 · Numbers to memorise</a></li><li class="d3"><a href="#time">Time</a></li><li class="d3"><a href="#size">Size</a></li><li class="d3"><a href="#throughput-per-commodity-machine">Throughput per commodity machine</a></li><li class="d2"><a href="#3-four-shortcuts">3 · Four shortcuts</a></li><li class="d3"><a href="#seconds-in-a-day-use-100000">Seconds in a day: use 100,000</a></li><li class="d3"><a href="#peak-is-23-average">Peak is 2–3× average</a></li><li class="d3"><a href="#powers-of-two-in-bytes">Powers of two, in bytes</a></li><li class="d3"><a href="#round-aggressively-and-say-so">Round aggressively and say so</a></li><li class="d2"><a href="#4-the-template">4 · The template</a></li><li class="d2"><a href="#5-worked-twitter-scale-timeline">5 · Worked — Twitter-scale timeline</a></li><li class="d3"><a href="#the-follow-up-that-separates-candidates">The follow-up that separates candidates</a></li><li class="d2"><a href="#6-worked-a-photo-service">6 · Worked — a photo service</a></li><li class="d2"><a href="#7-turning-numbers-into-decisions">7 · Turning numbers into decisions</a></li><li class="d2"><a href="#8-mistakes">8 · Mistakes</a></li><li class="d2"><a href="#9-questions-on-estimation">9 · Questions on estimation</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

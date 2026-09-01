@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start here · System Design Handbook</title>
+<meta name="description" content="What the system design round actually scores, why most preparation misses it, and the order to read this handbook in.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html" class="active">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="system-design-handbook"><a class="anchor" href="#system-design-handbook">#</a>System Design Handbook</h1><blockquote>
+<p>The coding round asks <em>can you produce a correct algorithm</em>. The system design
+round asks something different and rarely stated: <strong>can I put you in a room
+with an ambiguous problem and trust the result?</strong></p>
+</blockquote>
+<p>That is why the round has no answer key, why two candidates can produce the same
+architecture and get different scores, and why reading a hundred design
+write-ups does not by itself make you good at it.</p>
+<hr>
+<h2 id="1-what-is-actually-being-scored"><a class="anchor" href="#1-what-is-actually-being-scored">#</a>1 · What is actually being scored</h2><p>Interviewers at large companies score a rubric. The wording varies; the
+dimensions do not.</p>
+<div class="table-scroll"><table><thead><tr><th>Dimension</th><th>What a strong candidate does</th><th>What a weak one does</th></tr></thead><tbody><tr><td><strong>Scoping</strong></td><td>Turns a vague prompt into a bounded problem, out loud, before designing</td><td>Starts drawing boxes in minute two</td></tr><tr><td><strong>Structure</strong></td><td>Drives the hour; the interviewer never has to ask &quot;what next?&quot;</td><td>Waits to be prompted at each step</td></tr><tr><td><strong>Justification</strong></td><td>Every choice has a <em>because</em>, tied to a requirement</td><td>Names technologies with no reason</td></tr><tr><td><strong>Trade-offs</strong></td><td>Volunteers the cost of their own decision</td><td>Presents one option as obviously right</td></tr><tr><td><strong>Depth</strong></td><td>Can go three levels down on at least one component</td><td>Stays at the box-and-arrow level everywhere</td></tr><tr><td><strong>Failure thinking</strong></td><td>Asks what breaks and how it is detected</td><td>Designs only the happy path</td></tr><tr><td><strong>Communication</strong></td><td>The interviewer can follow the diagram without help</td><td>Diagram becomes unreadable by minute 30</td></tr></tbody></table></div><p><strong>Note what is absent: correctness.</strong> There is no single right architecture, and
+producing the one from a popular write-up scores nothing on its own. The
+reasoning is the artefact.</p>
+<blockquote>
+<p><strong>The single biggest differentiator</strong>, and the one most candidates miss:
+<em>volunteering the weakness of your own design before the interviewer finds
+it.</em> &quot;This gives me strong consistency but the leader is now a write
+bottleneck at about 10k QPS — if we exceed that I&#39;d shard by user ID&quot; reads as
+senior. Defending a choice as flawless reads as junior, regardless of whether
+the choice was good.</p>
+</blockquote>
+<hr>
+<h2 id="2-why-most-preparation-fails"><a class="anchor" href="#2-why-most-preparation-fails">#</a>2 · Why most preparation fails</h2><p>Three failure modes, in descending order of how common they are:</p>
+<p><strong>Memorising architectures.</strong> You read the standard news-feed design, reproduce
+it, and get asked &quot;why fan-out on write rather than read?&quot; — and have nothing,
+because you learned the <em>conclusion</em> without the <em>derivation</em>. The follow-up is
+always where the score is decided.</p>
+<p><strong>Building blocks without a framework.</strong> You know what a message queue is and
+what consistent hashing does, but with 45 minutes and a blank whiteboard you
+freeze, because knowing components is not the same as knowing the order to
+introduce them in.</p>
+<p><strong>Never speaking it aloud.</strong> Design is a talking round. Reading is a silent
+activity. The gap between &quot;I understand this&quot; and &quot;I can explain this while
+drawing and being interrupted&quot; is enormous, and only rehearsal closes it.</p>
+<hr>
+<h2 id="3-how-this-handbook-is-organised"><a class="anchor" href="#3-how-this-handbook-is-organised">#</a>3 · How this handbook is organised</h2><pre class="mermaid">flowchart TD
+    A[&quot;Driving the round&lt;br/&gt;the 45-minute framework&quot;] --&gt; B[&quot;Building blocks&lt;br/&gt;what the pieces do&quot;]
+    A --&gt; C[&quot;Data and storage&lt;br/&gt;where state lives&quot;]
+    B --&gt; E[&quot;Worked designs&lt;br/&gt;the derivations&quot;]
+    C --&gt; E
+    D[&quot;Distributed systems&lt;br/&gt;what goes wrong&quot;] --&gt; E
+    B --&gt; D
+    E --&gt; F[&quot;Reference&lt;br/&gt;numbers, checklist, anti-patterns&quot;]</pre><div class="table-scroll"><table><thead><tr><th>Section</th><th>What it gives you</th></tr></thead><tbody><tr><td><strong>Driving the round</strong></td><td>The repeatable structure: scope → estimate → API → high level → deep dive → failure. Learn this first; it is the thing you use in every question.</td></tr><tr><td><strong>Building blocks</strong></td><td>Load balancing, caching, queues, CDNs, rate limiting, search. Not encyclopaedic — the parts that come up and the reasons to choose between them.</td></tr><tr><td><strong>Data &amp; storage</strong></td><td>Databases, sharding, replication. Where most deep-dive follow-ups live.</td></tr><tr><td><strong>Distributed systems</strong></td><td>Consistency, idempotency, failure and recovery, observability. The senior-signal material.</td></tr><tr><td><strong>Worked designs</strong></td><td>Full derivations, not conclusions. Every choice traced back to a requirement.</td></tr><tr><td><strong>Reference</strong></td><td>Numbers to know, a pre-interview checklist, anti-patterns, question bank.</td></tr></tbody></table></div><hr>
+<h2 id="4-the-reading-order"><a class="anchor" href="#4-the-reading-order">#</a>4 · The reading order</h2><p><strong>If you have four weeks:</strong></p>
+<ol>
+<li><strong>Driving the round</strong> — all of it, first. It is short and it is the spine.</li>
+<li><strong>Building blocks</strong> and <strong>Data &amp; storage</strong> — one page a day.</li>
+<li><strong>Worked designs</strong> — one per sitting, and <em>design it yourself before reading</em>.</li>
+<li><strong>Distributed systems</strong> — after the designs, when the problems it solves have become concrete.</li>
+<li><strong>Reference</strong> — the week of.</li>
+</ol>
+<p><strong>If you have one week:</strong> the framework, numbers to know, and four designs done
+properly with your own attempt first. Four derived beats twelve read.</p>
+<p><strong>If you have two days:</strong> the framework, the checklist, the anti-patterns, and
+rehearse one design out loud twice.</p>
+<hr>
+<h2 id="5-the-one-rule"><a class="anchor" href="#5-the-one-rule">#</a>5 · The one rule</h2><blockquote>
+<p><strong>Design it yourself before you read the answer.</strong> Twenty minutes on a blank
+page, out loud, with a timer. Then read, and mark the specific places you
+differed and why.</p>
+</blockquote>
+<p>A design you read is a design you recognise. A design you derived is one you can
+defend under follow-ups — and follow-ups are the round.</p>
+<hr>
+<h2 id="6-related-handbooks"><a class="anchor" href="#6-related-handbooks">#</a>6 · Related handbooks</h2><div class="table-scroll"><table><thead><tr><th>Handbook</th><th>Round it prepares</th></tr></thead><tbody><tr><td><a href="https://SAGARCHRY0777.github.io/dsa-handbook/">DSA Handbook</a></td><td>The coding round — patterns, ladders, worked solutions</td></tr><tr><td><a href="https://SAGARCHRY0777.github.io/llm-handbook/">LLM Handbook</a></td><td>ML/LLM systems — RAG, evaluation, serving, agents</td></tr><tr><td>This one</td><td>The system design round</td></tr></tbody></table></div><p>Start with <a href="the-framework.html">the framework</a>.</p>
+</article>
+    <div class="pager-row"><a class="pager next" href="the-framework.html"><span>next</span>The 45-minute framework</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-what-is-actually-being-scored">1 · What is actually being scored</a></li><li class="d2"><a href="#2-why-most-preparation-fails">2 · Why most preparation fails</a></li><li class="d2"><a href="#3-how-this-handbook-is-organised">3 · How this handbook is organised</a></li><li class="d2"><a href="#4-the-reading-order">4 · The reading order</a></li><li class="d2"><a href="#5-the-one-rule">5 · The one rule</a></li><li class="d2"><a href="#6-related-handbooks">6 · Related handbooks</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

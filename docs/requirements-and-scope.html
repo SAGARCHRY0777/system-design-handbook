@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Requirements &amp; scope · System Design Handbook</title>
+<meta name="description" content="How to turn a four-word prompt into a bounded problem in five minutes — the questions, the order, and the answers that change the architecture.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html" class="active">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="requirements-and-scope"><a class="anchor" href="#requirements-and-scope">#</a>Requirements and scope</h1><blockquote>
+<p><strong>The prompt is deliberately vague.</strong> &quot;Design Instagram&quot; is not a problem
+statement, and treating it as one is the first mistake. Producing a bounded
+problem from it is the first thing being scored.</p>
+</blockquote>
+<p>Five minutes. Roughly eight questions. Everything downstream depends on it.</p>
+<hr>
+<h2 id="1-why-this-phase-is-scored-so-heavily"><a class="anchor" href="#1-why-this-phase-is-scored-so-heavily">#</a>1 · Why this phase is scored so heavily</h2><p>The round simulates a real design task, and in a real design task the hardest
+part is deciding what you are building. An engineer who starts coding on a
+one-line ticket without asking anything is a liability regardless of how good
+their code is — and the interviewer is checking for exactly that.</p>
+<p>There is a second, more mechanical reason: <strong>scoping protects you.</strong> A candidate
+who scoped search out of Instagram at minute three and runs out of time has
+delivered what they promised. One who never scoped has simply not finished.</p>
+<hr>
+<h2 id="2-the-question-set"><a class="anchor" href="#2-the-question-set">#</a>2 · The question set</h2><p>Not all of these every time. The first three, always.</p>
+<pre class="mermaid">flowchart TD
+    A[&quot;1. Who uses it,&lt;br/&gt;and how many?&quot;] --&gt; B[&quot;2. What are the&lt;br/&gt;top 3 actions?&quot;]
+    B --&gt; C[&quot;3. Read-heavy&lt;br/&gt;or write-heavy?&quot;]
+    C --&gt; D[&quot;4. Latency target?&quot;]
+    C --&gt; E[&quot;5. Is stale data OK?&quot;]
+    D --&gt; F[&quot;6. What must&lt;br/&gt;never break?&quot;]
+    E --&gt; F
+    F --&gt; G[&quot;7. Scale now,&lt;br/&gt;and in 2 years?&quot;]
+    G --&gt; H[&quot;Restate scope:&lt;br/&gt;IN / OUT&quot;]</pre><h3 id="the-three-that-always-come-first"><a class="anchor" href="#the-three-that-always-come-first">#</a>The three that always come first</h3><p><strong>&quot;Who uses this and roughly how many?&quot;</strong>
+Consumer or enterprise, 10k users or 500M. This one number decides whether the
+answer is &quot;a Postgres instance and a cache&quot; or a sharded fleet, and both can be
+correct.</p>
+<p><strong>&quot;What are the two or three most important things a user does?&quot;</strong>
+Forces the interviewer to name the functional core. Everything else you are then
+entitled to defer.</p>
+<p><strong>&quot;Is this read-heavy or write-heavy, and roughly what ratio?&quot;</strong>
+The most decision-changing question in the round, and the one candidates skip
+most often.</p>
+<div class="table-scroll"><table><thead><tr><th>Ratio</th><th>What it implies</th></tr></thead><tbody><tr><td>1000:1 reads</td><td>Cache everything, precompute, denormalise, read replicas</td></tr><tr><td>100:1 reads</td><td>Cache the hot set; a primary plus replicas is fine</td></tr><tr><td>1:1</td><td>The write path is the design problem</td></tr><tr><td>Write-heavy</td><td>Batching, queues, LSM-tree storage, append-only</td></tr></tbody></table></div><h3 id="the-four-that-shape-the-architecture"><a class="anchor" href="#the-four-that-shape-the-architecture">#</a>The four that shape the architecture</h3><p><strong>&quot;What is the latency target — and at p99, not average?&quot;</strong>
+p99 is where the design lives. Averages hide the tail, and the tail is what
+users experience as &quot;the app is slow.&quot;</p>
+<p><strong>&quot;How stale can data be?&quot;</strong>
+The cheapest question you can ask. &quot;A few seconds is fine&quot; unlocks async
+replication, caching, and precomputation — most of your performance budget. &quot;It
+must be immediately consistent&quot; removes them.</p>
+<p><strong>&quot;What is the cost of downtime versus the cost of a wrong answer?&quot;</strong>
+This is the availability/consistency question asked in a way that gets a real
+answer. A social feed prefers stale-and-up; a payment ledger prefers
+down-and-correct. Ask it in business terms and people answer honestly.</p>
+<p><strong>&quot;What scale should I design for — today&#39;s, or a year out?&quot;</strong>
+Prevents both over- and under-engineering, and demonstrates that you know
+premature distribution is a real cost.</p>
+<h3 id="the-one-that-buys-goodwill"><a class="anchor" href="#the-one-that-buys-goodwill">#</a>The one that buys goodwill</h3><p><strong>&quot;Anything explicitly out of scope?&quot;</strong>
+Interviewers often have a component they want you to reach. Asking gives them
+permission to steer, which is what they want to do anyway.</p>
+<hr>
+<h2 id="3-functional-versus-non-functional"><a class="anchor" href="#3-functional-versus-non-functional">#</a>3 · Functional versus non-functional</h2><p>Keep them visibly separate on the board.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Functional</th><th>Non-functional</th></tr></thead><tbody><tr><td><strong>Asks</strong></td><td>What can a user do?</td><td>How well must it do it?</td></tr><tr><td><strong>Examples</strong></td><td>Post, follow, read timeline</td><td>200ms p99, 99.9% uptime, no lost writes</td></tr><tr><td><strong>Decides</strong></td><td>The API and the entities</td><td>The architecture</td></tr></tbody></table></div><blockquote>
+<p><strong>Non-functional requirements are where the design comes from.</strong> Two systems
+with identical functional requirements and different latency and consistency
+targets are completely different systems. Candidates who list only functional
+requirements end up designing a CRUD app for every prompt.</p>
+</blockquote>
+<hr>
+<h2 id="4-writing-the-scope-down"><a class="anchor" href="#4-writing-the-scope-down">#</a>4 · Writing the scope down</h2><p>Board, top-left, and leave it there:</p>
+<pre class="code"><code>IN SCOPE                      OUT OF SCOPE
+- post a photo                - stories, reels
+- follow a user               - direct messages
+- view home feed              - search, explore
+                              - ads, moderation
+
+NON-FUNCTIONAL
+- 500M DAU, 100:1 read:write
+- feed p99 &lt; 200ms
+- feed may be seconds stale
+- availability &gt; consistency for reads
+- no lost uploads (durability is hard)</code></pre><p><strong>Five lines that pay for themselves three times:</strong> they stop you drifting, they
+let you skip things without looking forgetful, and they give you the summary you
+need at minute 42.</p>
+<hr>
+<h2 id="5-the-requirement-to-decision-map"><a class="anchor" href="#5-the-requirement-to-decision-map">#</a>5 · The requirement-to-decision map</h2><p>Every non-functional requirement should visibly cause something later. This is
+the mapping to have ready.</p>
+<div class="table-scroll"><table><thead><tr><th>Requirement</th><th>Forces</th></tr></thead><tbody><tr><td>Very read-heavy</td><td>Cache layer, read replicas, precomputation</td></tr><tr><td>Write-heavy</td><td>Queue + async workers, batching, LSM storage</td></tr><tr><td>Low latency p99</td><td>Cache, CDN, precompute, colocate data with compute</td></tr><tr><td>Stale reads acceptable</td><td>Async replication, cache TTLs, eventual consistency</td></tr><tr><td>Strong consistency needed</td><td>Single leader per key, transactions, quorum reads</td></tr><tr><td>Must never lose a write</td><td>Replicated durable log, ack after quorum, idempotency</td></tr><tr><td>Availability over consistency</td><td>Multi-leader or leaderless, conflict resolution</td></tr><tr><td>Huge objects (video, images)</td><td>Object storage + CDN; DB holds metadata only</td></tr><tr><td>Unbounded growth</td><td>Sharding from the start, and a chosen shard key</td></tr><tr><td>Spiky traffic</td><td>Queue to absorb, autoscaling, rate limiting, backpressure</td></tr></tbody></table></div><blockquote>
+<p><strong>In the deep dive, refer back explicitly.</strong> <em>&quot;Because we said a few seconds of
+staleness is fine, I can serve this from an async replica instead of the
+leader.&quot;</em> Traceability from requirement to decision is the clearest available
+signal that you are designing rather than reciting.</p>
+</blockquote>
+<hr>
+<h2 id="6-scoping-mistakes"><a class="anchor" href="#6-scoping-mistakes">#</a>6 · Scoping mistakes</h2><div class="table-scroll"><table><thead><tr><th>Mistake</th><th>Why it costs</th><th>Instead</th></tr></thead><tbody><tr><td>No questions at all</td><td>Fails the top rubric line</td><td>Three questions minimum</td></tr><tr><td>Twenty minutes of questions</td><td>No time to design</td><td>Timebox to five</td></tr><tr><td>Only functional requirements</td><td>You design a CRUD app</td><td>Always get latency + consistency</td></tr><tr><td>Accepting &quot;design Uber&quot; as-is</td><td>Unbounded problem</td><td>Narrow to rider-driver matching</td></tr><tr><td>Not writing it down</td><td>You drift; nothing to point at</td><td>Board, top-left, all round</td></tr><tr><td>Asking with no follow-through</td><td>Looks like a checklist ritual</td><td>Cite requirements when deciding</td></tr><tr><td>Designing for 1B users unasked</td><td>Over-engineering is a real finding</td><td>Ask what scale to target</td></tr></tbody></table></div><p><strong>Asking questions and then ignoring the answers is worse than not asking</strong>, and
+it is common. If you learn the ratio is 1:1 and still build a read-through cache
+as the centrepiece, the interviewer saw both things.</p>
+<hr>
+<h2 id="7-a-worked-opening"><a class="anchor" href="#7-a-worked-opening">#</a>7 · A worked opening</h2><blockquote>
+<p><strong>Interviewer:</strong> Design a URL shortener.</p>
+<p><strong>You:</strong> Let me scope it first. Who&#39;s using this — is it a public service like
+bit.ly, or internal link management?</p>
+<p><em>Public.</em></p>
+<p>Roughly what scale — writes per day, and read-to-write ratio?</p>
+<p><em>Say 100 million new URLs a month, and reads are about 100 times writes.</em></p>
+<p>Good — so about 40 writes and 4,000 reads a second, and reads dominate, which
+means the redirect path is the design. Latency target on the redirect?</p>
+<p><em>Under 100ms, p99.</em></p>
+<p>Do users need custom aliases, and do links expire?</p>
+<p><em>Custom aliases yes. Expiry, let&#39;s say optional TTL.</em></p>
+<p>Last one — analytics? Click counts, referrers?</p>
+<p><em>Out of scope.</em></p>
+<p>So: in scope, shorten with optional custom alias and TTL, and redirect.
+Out of scope, analytics and user accounts. Non-functional: 4,000 read QPS,
+redirect p99 under 100ms, high availability — a redirect failing is worse than
+it being briefly stale — and short codes must never collide. Sound right?</p>
+</blockquote>
+<p><strong>Four questions, ninety seconds, and the design is now determined:</strong> read-heavy
+means cache-first, collision-free means the ID generation strategy is the deep
+dive, and analytics being out of scope means nobody expects a streaming
+pipeline.</p>
+<hr>
+<h2 id="8-questions-on-this-phase"><a class="anchor" href="#8-questions-on-this-phase">#</a>8 · Questions on this phase</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Where do you start with a vague prompt?&quot;</td><td>Bound it: users and scale, the two or three core actions, then the non-functional requirements — especially read/write ratio and staleness tolerance. Write in-scope and out-of-scope down before designing.</td></tr><tr><td>&quot;Why does the read/write ratio matter so much?&quot;</td><td>It decides whether the design problem is the read path or the write path. 1000:1 means precompute and cache; 1:1 means the write path is the bottleneck and caching barely helps.</td></tr><tr><td>⭐ &quot;How do you decide consistency requirements?&quot;</td><td>Ask it in business terms — what is the cost of stale data versus the cost of unavailability. Feeds tolerate staleness; balances and inventory do not. Then apply it per operation, not per system: the same product can have an eventually consistent feed and a strongly consistent checkout.</td></tr><tr><td>&quot;How do you avoid over-engineering?&quot;</td><td>Ask what scale to design for, and start with the simplest thing that meets it — then evolve under pressure I name out loud. Presenting a multi-region sharded design for 10k users is a finding, not a strength.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can move on when you can:</p>
+<ol>
+<li>list the three questions you always ask,</li>
+<li>explain why staleness tolerance is the cheapest question in the round,</li>
+<li>produce the requirement-to-decision map from memory for six rows, and</li>
+<li>run the URL-shortener opening in under two minutes, out loud.</li>
+</ol>
+<p>Next: <a href="estimation.html">estimation</a>.</p>
+</article>
+    <div class="pager-row"><a class="pager previous" href="the-framework.html"><span>previous</span>The 45-minute framework</a><a class="pager next" href="estimation.html"><span>next</span>Estimation</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-why-this-phase-is-scored-so-heavily">1 · Why this phase is scored so heavily</a></li><li class="d2"><a href="#2-the-question-set">2 · The question set</a></li><li class="d3"><a href="#the-three-that-always-come-first">The three that always come first</a></li><li class="d3"><a href="#the-four-that-shape-the-architecture">The four that shape the architecture</a></li><li class="d3"><a href="#the-one-that-buys-goodwill">The one that buys goodwill</a></li><li class="d2"><a href="#3-functional-versus-non-functional">3 · Functional versus non-functional</a></li><li class="d2"><a href="#4-writing-the-scope-down">4 · Writing the scope down</a></li><li class="d2"><a href="#5-the-requirement-to-decision-map">5 · The requirement-to-decision map</a></li><li class="d2"><a href="#6-scoping-mistakes">6 · Scoping mistakes</a></li><li class="d2"><a href="#7-a-worked-opening">7 · A worked opening</a></li><li class="d2"><a href="#8-questions-on-this-phase">8 · Questions on this phase</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

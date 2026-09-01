@@ -1,0 +1,13 @@
+{
+  "name": "system-design-handbook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The system design interview round: a repeatable 45-minute framework, the building blocks, and worked designs with the trade-offs stated out loud.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "devDependencies": { "marked": "^14.1.3" },
+  "engines": { "node": ">=20" }
+}
