@@ -80,7 +80,7 @@ read is one you recognise; a design you derived is one you can defend.
 ```bash
 npm ci
 npm run build     # content/*.md -> docs/
-npm run serve     # preview at http://localhost:4182
+npm run serve     # preview at http://localhost:4282
 ```
 
 `docs/` is committed so GitHub Pages serves it straight from `main` with no

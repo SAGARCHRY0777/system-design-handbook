@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { join, extname } from "node:path";
 
 const ROOT = new URL("../docs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-const PORT = Number(process.env.PORT || 4182);
+const PORT = Number(process.env.PORT || 4282);
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
