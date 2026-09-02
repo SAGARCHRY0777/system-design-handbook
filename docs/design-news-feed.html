@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a news feed · System Design Handbook</title>
+<meta name="description" content="Fan-out on write versus read, derived rather than asserted, the celebrity hybrid, the timeline cache, and ranking.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html" class="active">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-news-feed"><a class="anchor" href="#design-a-news-feed">#</a>Design a news feed</h1><blockquote>
+<p><strong>The most-asked system design question</strong>, and the one where reciting the
+answer is most obvious. The entire value is in <em>deriving</em> fan-out on write
+rather than announcing it.</p>
+</blockquote>
+<p>Twitter, Instagram, Facebook, LinkedIn — same problem.</p>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- post                            - search, DMs, ads
+- follow / unfollow               - stories, notifications
+- home timeline (feed)            - media upload internals
+                                    (assume object storage + CDN)
+
+NON-FUNCTIONAL
+- 500M DAU
+- read:write ~ 100:1
+- feed load p99 &lt; 200ms
+- feed may be a few seconds stale  &lt;- unlocks everything
+- availability &gt; consistency
+- an author must see their OWN post immediately</code></pre><blockquote>
+<p><strong>&quot;The feed may be seconds stale, but authors must see their own post
+immediately&quot; is the requirement pair that defines the design.</strong> The first
+permits asynchronous fan-out; the second forces the read-your-writes carve-out
+that most candidates forget until the interviewer asks.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>WRITES  500M DAU x 0.2 posts/day = 100M/day = ~1,000/s, peak ~3,000/s
+READS   500M x 2 feed loads/day  =   1B/day = ~12,000/s, peak ~30,000/s
+
+FAN-OUT AMPLIFICATION  &lt;- the number that matters
+  average followers ~ 200
+  1,000 posts/s x 200 = 200,000 timeline writes/s average
+  peak                            ~600,000/s
+
+STORAGE
+  posts: 1e8/day x 1 KB = 100 GB/day = 36 TB/year
+  timeline cache: 100M active users x 800 entries x 8B = ~640 GB
+
+CONCLUSION
+  - 30,000 feed reads/s cannot assemble from the graph on demand
+  - 200,000 timeline writes/s is large but sequential and cheap
+  - THE TRADE: do the work once per post, or once per read?</code></pre><p><strong>That final line is the whole question</strong>, and arriving at it through the
+amplification number is what makes the answer a derivation.</p>
+<hr>
+<h2 id="3-the-core-decision"><a class="anchor" href="#3-the-core-decision">#</a>3 · The core decision</h2><h3 id="fan-out-on-read-pull"><a class="anchor" href="#fan-out-on-read-pull">#</a>Fan-out on read (pull)</h3><p>On feed load: get the people I follow, query their recent posts, merge, rank.</p>
+<pre class="code"><code>read:  N follows -&gt; N queries -&gt; merge k-way -&gt; rank
+write: one insert. done.</code></pre><div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>Good</strong></td><td>Cheap writes; no wasted work for inactive users; always fresh</td></tr><tr><td><strong>Bad</strong></td><td><strong>Read cost scales with follow count</strong>; 30,000 reads/s × 200 queries = 6M queries/s</td></tr></tbody></table></div><p><strong>Fails on the numbers.</strong> With reads 100× writes, doing the expensive work on
+read is backwards.</p>
+<h3 id="fan-out-on-write-push"><a class="anchor" href="#fan-out-on-write-push">#</a>Fan-out on write (push)</h3><p>On post: write the post ID into every follower&#39;s timeline list.</p>
+<pre class="code"><code>write: one insert + N timeline appends (async)
+read:  ONE lookup of a precomputed list</code></pre><div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>Good</strong></td><td>Reads are a single cache lookup — O(1) and fast</td></tr><tr><td><strong>Bad</strong></td><td>Write amplification (200× average); wasted work for inactive followers; <strong>celebrities are catastrophic</strong></td></tr></tbody></table></div><p><strong>The celebrity problem, concretely:</strong></p>
+<pre class="code"><code>100M followers x one post = 100 MILLION timeline writes
+at 200,000 writes/s that is over 8 minutes for ONE post</code></pre><h3 id="the-hybrid-the-actual-answer"><a class="anchor" href="#the-hybrid-the-actual-answer">#</a>The hybrid — the actual answer</h3><pre class="code"><code>IF the author has &lt; ~100,000 followers:
+    fan out on write   (the long tail: ~99.9% of users)
+ELSE:
+    do NOT fan out. Mark them a &quot;celebrity&quot;.
+
+ON READ:
+    timeline = precomputed_list
+             + recent posts from the celebrities I follow (merge)</code></pre><p><strong>Why it works:</strong> ordinary users have few followers so fan-out is cheap;
+celebrities are few so merging them at read time is cheap. <strong>The distribution is
+the reason</strong> — follower counts are power-law, so neither pure strategy survives
+but the split does.</p>
+<blockquote>
+<p><strong>State the threshold as tunable, not magic.</strong> <em>&quot;Around 100,000 followers, but
+that is a knob — it trades fan-out write volume against read-time merge cost,
+and I&#39;d tune it on real data.&quot;</em></p>
+</blockquote>
+<p><strong>Also fan out lazily for inactive users.</strong> If someone has not opened the app in
+30 days, do not maintain their timeline; rebuild it on their next login. That
+cuts fan-out volume substantially at the cost of one slow first load.</p>
+<hr>
+<h2 id="4-high-level-design"><a class="anchor" href="#4-high-level-design">#</a>4 · High-level design</h2><pre class="mermaid">flowchart TD
+    C[&quot;Client&quot;] --&gt; LB[&quot;Load balancer&quot;]
+    LB --&gt; PS[&quot;Post service&quot;]
+    LB --&gt; FS[&quot;Feed service&quot;]
+
+    PS --&gt; PDB[(&quot;Post store&lt;br/&gt;sharded by post_id&quot;)]
+    PS --&gt; Q[[&quot;Fan-out queue&quot;]]
+
+    Q --&gt; FW[&quot;Fan-out workers&quot;]
+    GS[(&quot;Graph store&lt;br/&gt;follower lists&quot;)] --&gt; FW
+    FW --&gt; TC[(&quot;Timeline cache&lt;br/&gt;Redis, capped lists&quot;)]
+
+    FS --&gt; TC
+    FS --&gt; CEL[&quot;Celebrity merge&lt;br/&gt;read-time&quot;]
+    CEL --&gt; PDB
+    FS --&gt; RANK[&quot;Ranking&quot;]
+    FS --&gt; HY[(&quot;Hydrate:&lt;br/&gt;post + author&quot;)]</pre><p><strong>Write path:</strong></p>
+<pre class="code"><code>1. POST /tweets -&gt; validate, write to post store (sharded by post_id)
+2. Write into the AUTHOR&#39;S OWN timeline synchronously   &lt;- read-your-writes
+3. Publish {post_id, author_id} to the fan-out queue -&gt; 201 returned
+4. Worker: look up followers, filter celebrities/inactive,
+   batch-append post_id to each follower&#39;s timeline list</code></pre><p><strong>Step 2 is the detail worth calling out.</strong> Everything else is async, but the
+author&#39;s own view is written inline so they always see their post immediately —
+satisfying the requirement set in scoping, at the cost of one extra write.</p>
+<p><strong>Read path:</strong></p>
+<pre class="code"><code>1. LRANGE timeline:{user_id} 0 49        &lt;- precomputed IDs, ~1ms
+2. Fetch recent posts from followed celebrities (small, cached)
+3. Merge by time, rank
+4. Hydrate: MGET post bodies + author profiles from cache
+5. Return</code></pre><blockquote>
+<p><strong>Store IDs in the timeline, not post bodies.</strong> An edited or deleted post
+would otherwise need updating in millions of timelines. IDs plus hydration
+means the post is fetched fresh every time — one indirection that removes an
+entire class of consistency bug.</p>
+</blockquote>
+<p><strong>Cap the list.</strong> <code>LPUSH</code> then <code>LTRIM timeline:{user} 0 799</code> keeps it bounded —
+nobody scrolls past 800, and unbounded lists are how the cache tier runs out of
+memory.</p>
+<hr>
+<h2 id="5-deep-dive-material"><a class="anchor" href="#5-deep-dive-material">#</a>5 · Deep dive material</h2><h3 id="the-timeline-cache"><a class="anchor" href="#the-timeline-cache">#</a>The timeline cache</h3><div class="table-scroll"><table><thead><tr><th>Decision</th><th>Choice</th><th>Why</th></tr></thead><tbody><tr><td>Structure</td><td>Redis list or sorted set</td><td>Sorted set if you need score-based ordering</td></tr><tr><td>Size</td><td>800 entries</td><td>Covers realistic scrolling; bounded memory</td></tr><tr><td>Who is cached</td><td>Active users only (~20%)</td><td>640 GB rather than 3.2 TB</td></tr><tr><td>Miss</td><td>Rebuild from the post store</td><td>Slow (~1s) but rare</td></tr><tr><td>Sharding</td><td>By <code>user_id</code>, consistent hashing</td><td>Each user&#39;s timeline on one node</td></tr></tbody></table></div><h3 id="the-graph-store"><a class="anchor" href="#the-graph-store">#</a>The graph store</h3><p>Follower lookup is on the hot write path — a fan-out needs <em>the follower list of
+the author</em>, so the edge must be indexed by <code>followee_id</code>, not just
+<code>follower_id</code>. <strong>This is exactly the &quot;index both directions&quot; observation from
+the data-model phase</strong>, and it is why that phase matters.</p>
+<p>Celebrity follower lists are enormous, so pagination and batching matter; but
+since celebrities are excluded from fan-out, the huge lists are mostly not read
+on the write path at all — which is a nice second-order benefit of the hybrid.</p>
+<h3 id="ranking"><a class="anchor" href="#ranking">#</a>Ranking</h3><p>Chronological is the honest baseline and you should offer it first. If ranked:</p>
+<pre class="code"><code>score = w1·recency + w2·affinity(viewer, author)
+      + w3·engagement_rate + w4·content_type + ...</code></pre><p>Practical points that show maturity: rank only the top few hundred candidates,
+not the whole timeline; precompute affinity offline rather than per request; and
+<strong>keep a chronological fallback</strong> for when the ranking service is unavailable —
+a degraded feed beats no feed.</p>
+<h3 id="deletes-and-unfollows"><a class="anchor" href="#deletes-and-unfollows">#</a>Deletes and unfollows</h3><p><strong>Do not scan millions of timelines to remove a post.</strong> Filter at read time: the
+hydration step drops IDs whose posts no longer exist or are no longer visible.
+Same for unfollow — the stale entries age out of the capped list naturally.</p>
+<blockquote>
+<p><strong>&quot;Filter on read rather than fix on write&quot; is the general principle here</strong>,
+and it generalises well: for a bounded, frequently-rewritten structure,
+lazy cleanup beats eager correction.</p>
+</blockquote>
+<hr>
+<h2 id="6-failure-and-wrap"><a class="anchor" href="#6-failure-and-wrap">#</a>6 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Fan-out workers lag</td><td>Feeds go stale</td><td>Alert on consumer lag; authors still see their own posts</td></tr><tr><td>Timeline cache node</td><td>Those users&#39; feeds rebuild slowly</td><td>Consistent hashing; rebuild from post store</td></tr><tr><td>Ranking service</td><td>—</td><td>Fall back to chronological</td></tr><tr><td>Post store shard</td><td>Some posts unfetchable</td><td>Replicas; skip missing IDs on hydration</td></tr><tr><td>Celebrity posts</td><td>Fan-out storm</td><td>Already excluded by the hybrid</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: fan-out on write for the long tail so reads are a single cache
+lookup, with celebrities excluded and merged at read time — the follower
+distribution is power-law, so neither pure strategy works but the split does.
+Timelines store IDs and hydrate on read, which means edits and deletes need no
+timeline rewriting. The author&#39;s own timeline is written synchronously so they
+always see their own post.</em></p>
+<p><em>The number I&#39;d want to validate is fan-out lag at peak. The design assumes
+workers keep up at 600,000 timeline writes a second; if they fall behind, feeds
+get stale and the failure is silent — so consumer lag is the metric I&#39;d page
+on. Given more time I&#39;d look at ranking quality, which is where the real
+product value is.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="7-follow-ups"><a class="anchor" href="#7-follow-ups">#</a>7 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;Push or pull?&quot;</td><td>Push for the long tail, pull for celebrities. With reads 100× writes, doing the work on read means 6M queries a second. But one celebrity post is 100M timeline writes. Follower counts are power-law, so the hybrid is not a compromise — it is the only thing that fits the distribution.</td></tr><tr><td>⭐ &quot;Where is the threshold?&quot;</td><td>Around 100k followers, and tunable — it trades fan-out volume against read-time merge cost. I&#39;d set it from real data rather than assert it.</td></tr><tr><td>&quot;A user posts and doesn&#39;t see it.&quot;</td><td>Their own timeline is written synchronously on the write path; only other people&#39;s are async. It costs one extra write and removes the most-noticed staleness bug.</td></tr><tr><td>⭐ &quot;A post is deleted — do you rewrite 10M timelines?&quot;</td><td>No. Timelines hold IDs, and hydration drops what no longer exists or is no longer visible. Filtering on read is far cheaper than correcting on write, and it also covers unfollows and blocks.</td></tr><tr><td>&quot;How big is the timeline cache?&quot;</td><td>Only active users need one — roughly 20% — so 100M × 800 IDs × 8 bytes ≈ 640 GB, not 3.2 TB. Inactive users get rebuilt on login.</td></tr><tr><td>&quot;What if fan-out workers fall behind?&quot;</td><td>Feeds go stale silently, which is why consumer lag is the alert. Scale workers, capped by partition count; prioritise active users&#39; queues if it persists.</td></tr><tr><td>&quot;How do you rank?&quot;</td><td>Chronological is the baseline. If ranked, score a few hundred candidates on recency, affinity, and engagement, with affinity precomputed offline — and keep chronological as the fallback when ranking is down.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>derive the 200,000-writes/s amplification number,</li>
+<li>reject both pure strategies on the numbers,</li>
+<li>explain why power-law follower counts force the hybrid,</li>
+<li>justify storing IDs and hydrating,</li>
+<li>handle deletes with read-time filtering, and</li>
+<li>name consumer lag as the thing to page on.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-url-shortener.html"><span>previous</span>Design a URL shortener</a><a class="pager next" href="design-chat.html"><span>next</span>Design a chat system</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-the-core-decision">3 · The core decision</a></li><li class="d3"><a href="#fan-out-on-read-pull">Fan-out on read (pull)</a></li><li class="d3"><a href="#fan-out-on-write-push">Fan-out on write (push)</a></li><li class="d3"><a href="#the-hybrid-the-actual-answer">The hybrid — the actual answer</a></li><li class="d2"><a href="#4-high-level-design">4 · High-level design</a></li><li class="d2"><a href="#5-deep-dive-material">5 · Deep dive material</a></li><li class="d3"><a href="#the-timeline-cache">The timeline cache</a></li><li class="d3"><a href="#the-graph-store">The graph store</a></li><li class="d3"><a href="#ranking">Ranking</a></li><li class="d3"><a href="#deletes-and-unfollows">Deletes and unfollows</a></li><li class="d2"><a href="#6-failure-and-wrap">6 · Failure and wrap</a></li><li class="d2"><a href="#7-follow-ups">7 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

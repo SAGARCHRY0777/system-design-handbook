@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a chat system · System Design Handbook</title>
+<meta name="description" content="WebSockets and connection state, the message-store schema that decides everything, ordering, delivery receipts, and how presence is genuinely hard.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html" class="active">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-chat-system"><a class="anchor" href="#design-a-chat-system">#</a>Design a chat system</h1><blockquote>
+<p><strong>A different shape from the request/response designs.</strong> The hard parts are
+stateful connections, per-conversation ordering, and the fact that the
+<em>cheapest-looking</em> feature — presence — is the most expensive thing in the
+system.</p>
+</blockquote>
+<p>WhatsApp, Messenger, Slack — same core.</p>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- 1:1 messaging                   - voice / video calls
+- small group chat (&lt;= 100)       - end-to-end encryption details
+- online/offline presence         - message search
+- delivery + read receipts        - large broadcast channels
+- message history
+
+NON-FUNCTIONAL
+- 50M DAU, ~40 messages/user/day
+- delivery latency p99 &lt; 500ms when both online
+- messages must NEVER be lost      &lt;- durability is the hard requirement
+- ordering consistent WITHIN a conversation
+- offline users receive on reconnect</code></pre><blockquote>
+<p><strong>&quot;Never lost&quot; is the requirement that shapes everything.</strong> It means persist
+before acknowledging, at-least-once delivery, and client-side deduplication —
+and it rules out fire-and-forget push as the primary path.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>MESSAGES  50M x 40 = 2B/day = ~23,000/s, peak ~70,000/s
+
+CONNECTIONS  ~10M concurrent WebSockets
+  at ~10k-50k connections per server -&gt; 200-1,000 gateway servers
+  each connection costs memory (buffers + TLS state), roughly 10-50 KB
+  -&gt; 10M x 30 KB = ~300 GB of RAM across the fleet, just to hold sockets
+
+STORAGE  2e9/day x 300 B = 600 GB/day = ~220 TB/year
+         x3 replication = ~660 TB/year  -&gt; sharded, with tiering
+
+CONCLUSION
+  - Connection COUNT, not message rate, sizes the gateway fleet
+  - 70,000 writes/s of small immutable rows, read by conversation and
+    time -&gt; wide-column store, not a relational primary
+  - Presence updates could dwarf messages -- see below</code></pre><p><strong>The insight to voice: this is a connection-management problem more than a
+throughput problem.</strong> 23,000 messages/s is unremarkable; 10 million persistent
+connections is the engineering.</p>
+<hr>
+<h2 id="3-transport"><a class="anchor" href="#3-transport">#</a>3 · Transport</h2><div class="table-scroll"><table><thead><tr><th>Option</th><th>Latency</th><th>Cost</th><th>Verdict</th></tr></thead><tbody><tr><td>Short polling</td><td>Bad</td><td>Wasteful</td><td>No</td></tr><tr><td>Long polling</td><td>OK</td><td>Held connections anyway</td><td>Fallback</td></tr><tr><td>Server-sent events</td><td>Good</td><td>One-directional</td><td>Not for chat</td></tr><tr><td><strong>WebSocket</strong></td><td><strong>Best</strong></td><td>Stateful, full duplex</td><td><strong>Yes</strong></td></tr></tbody></table></div><p><strong>WebSocket, with long polling as a fallback</strong> for restrictive networks. Say
+that — it shows awareness that not every client can hold a WebSocket.</p>
+<p><strong>The consequence of stateful connections</strong> is the thing to discuss:</p>
+<div class="table-scroll"><table><thead><tr><th>Problem</th><th>Handling</th></tr></thead><tbody><tr><td>Gateways are stateful</td><td>Cannot load balance freely; need a connection registry</td></tr><tr><td>Deploys drop connections</td><td>Drain slowly; clients reconnect with backoff + jitter</td></tr><tr><td>Reconnect storms</td><td><strong>Jittered backoff is mandatory</strong> — 10M clients reconnecting together will kill you</td></tr><tr><td>Idle detection</td><td>Application-level heartbeat; TCP alone will not tell you</td></tr></tbody></table></div><blockquote>
+<p><strong>The reconnect storm is the failure mode worth naming.</strong> If a gateway fleet
+restarts, every disconnected client reconnects at once. Without jittered
+backoff that thundering herd takes down the fleet that just came back — the
+outage becomes self-sustaining.</p>
+</blockquote>
+<hr>
+<h2 id="4-the-routing-problem"><a class="anchor" href="#4-the-routing-problem">#</a>4 · The routing problem</h2><p>Alice is on gateway 7; Bob is on gateway 412. How does Alice&#39;s message reach
+Bob?</p>
+<pre class="mermaid">flowchart TD
+    A[&quot;Alice&quot;] --&gt;|WebSocket| G1[&quot;Gateway 7&quot;]
+    G1 --&gt; MS[&quot;Message service&quot;]
+    MS --&gt; DB[(&quot;Message store&lt;br/&gt;persist FIRST&quot;)]
+    MS --&gt; REG[(&quot;Connection registry&lt;br/&gt;user -&gt; gateway&quot;)]
+    MS --&gt; Q[[&quot;Router / pub-sub&quot;]]
+    Q --&gt; G2[&quot;Gateway 412&quot;]
+    G2 --&gt;|WebSocket| B[&quot;Bob&quot;]
+    MS -.-&gt;|&quot;offline&quot;| PUSH[&quot;Push notification&lt;br/&gt;APNs / FCM&quot;]</pre><p><strong>The order of operations is the correctness question:</strong></p>
+<pre class="code"><code>1. Alice&#39;s client sends {client_msg_id, conversation_id, text}
+2. Gateway -&gt; message service
+3. PERSIST to the message store          &lt;- BEFORE anything else
+4. ACK to Alice (&quot;sent&quot;)                  &lt;- she can stop retrying
+5. Look up Bob&#39;s gateway in the registry
+6. Route to that gateway -&gt; push over Bob&#39;s socket
+7. Bob&#39;s client ACKs -&gt; mark &quot;delivered&quot;
+8. Bob opens the chat -&gt; &quot;read&quot;</code></pre><blockquote>
+<p><strong>Persist before acknowledging.</strong> If you ack first and the store write fails,
+the message is gone and the sender believes it was sent — which violates the
+one hard requirement. This ordering is the single most important thing in the
+design and is worth stating explicitly.</p>
+</blockquote>
+<p><strong>The connection registry</strong> maps <code>user_id → gateway_id</code>, in Redis with a TTL
+refreshed by heartbeat. It is hot and small. If the lookup says a user is
+connected but the gateway has since died, the send fails and falls through to
+the offline path — so <strong>the offline path must be the fallback for every failed
+delivery</strong>, not just for genuinely offline users.</p>
+<p><strong>Group messages</strong> fan out to each member&#39;s gateway. For groups capped at 100
+this is trivial; for large channels it becomes the news-feed problem again, and
+saying so connects the two designs.</p>
+<hr>
+<h2 id="5-the-message-store"><a class="anchor" href="#5-the-message-store">#</a>5 · The message store</h2><p><strong>The schema is the design.</strong> Access is always &quot;messages in this conversation,
+newest first, paginated backwards.&quot;</p>
+<pre class="code"><code>Wide-column (Cassandra / DynamoDB):
+
+  partition key:  conversation_id       &lt;- all of a chat on one partition
+  clustering key: message_id DESC       &lt;- sorted within it, newest first
+
+  SELECT * FROM messages
+   WHERE conversation_id = ?
+   AND message_id &lt; ?          -- cursor
+   ORDER BY message_id DESC
+   LIMIT 50</code></pre><p><strong>Why this shape:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Property</th><th>Reason</th></tr></thead><tbody><tr><td>Partition by conversation</td><td>Every read is one partition — no scatter-gather</td></tr><tr><td>Clustered by message ID descending</td><td>The dominant query needs no sort</td></tr><tr><td>Write-heavy, append-only</td><td>LSM storage is exactly right</td></tr><tr><td>Immutable rows</td><td>No update contention</td></tr></tbody></table></div><p><strong>The hot-partition caveat, which you should volunteer:</strong> a very active group
+chat is a single hot partition. For groups above some size, bucket the partition
+key by time — <code>(conversation_id, day)</code> — so load spreads. The cost is that a
+read may span two buckets at a boundary.</p>
+<p><strong>Message IDs must sort correctly.</strong> Snowflake IDs (timestamp-prefixed, unique
+without coordination) give ordering and uniqueness without a central allocator,
+and reuse the point from <a href="sharding.html">sharding</a>.</p>
+<hr>
+<h2 id="6-ordering"><a class="anchor" href="#6-ordering">#</a>6 · Ordering</h2><p><strong>Global ordering is unnecessary and expensive. Per-conversation ordering is
+what users perceive</strong>, and saying that distinction is the answer.</p>
+<div class="table-scroll"><table><thead><tr><th>Approach</th><th>Note</th></tr></thead><tbody><tr><td>Server-assigned sequence per conversation</td><td>Simple, authoritative, needs a per-conversation counter</td></tr><tr><td>Snowflake IDs</td><td>Roughly time-ordered; clock skew can reorder near-simultaneous messages</td></tr><tr><td>Lamport / vector clocks</td><td>Correct causal order; heavier</td></tr></tbody></table></div><p><strong>Client timestamps cannot be trusted</strong> — device clocks are wrong, sometimes by
+hours. Order by server-assigned ID, and display the client&#39;s time only as a
+label.</p>
+<p>Because delivery is at-least-once, <strong>the client deduplicates on
+<code>client_msg_id</code></strong> — a UUID the sender generates, which also makes the sender&#39;s
+own retry safe. Same idempotency-key idea as everywhere else.</p>
+<hr>
+<h2 id="7-presence-the-expensive-feature"><a class="anchor" href="#7-presence-the-expensive-feature">#</a>7 · Presence — the expensive feature</h2><p><strong>Naive presence generates more traffic than messages</strong>, and noticing that is a
+genuine differentiator.</p>
+<pre class="code"><code>10M online users, each with ~200 contacts.
+A status change notifies every contact who is watching.
+
+If users toggle a few times an hour:
+  10M x 3/hour x 200 contacts = 6 BILLION notifications/hour
+                              = ~1.7M/s
+
+...for a green dot. Messages are 23,000/s.</code></pre><p><strong>Fixes, in order of value:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Fix</th><th>Effect</th></tr></thead><tbody><tr><td><strong>Only push to contacts with the chat open</strong></td><td>Massive reduction — most contacts aren&#39;t looking</td></tr><tr><td><strong>Pull on demand</strong></td><td>Fetch presence when a list is rendered, not on change</td></tr><tr><td><strong>Debounce</strong></td><td>Do not broadcast flapping; wait ~30s before marking offline</td></tr><tr><td><strong>Coarse granularity</strong></td><td>&quot;Active recently&quot; rather than exact online/offline</td></tr><tr><td><strong>Heartbeat TTL</strong></td><td>Client heartbeats every ~30s into Redis with a 60s TTL; absence <em>is</em> offline — no explicit disconnect needed</td></tr></tbody></table></div><blockquote>
+<p><strong>The heartbeat-TTL trick is the elegant part</strong>: you never need a reliable
+&quot;user went offline&quot; event, which is good, because you will not get one when a
+phone loses signal. Expiry does the work.</p>
+</blockquote>
+<hr>
+<h2 id="8-failure-and-wrap"><a class="anchor" href="#8-failure-and-wrap">#</a>8 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Gateway dies</td><td>Those clients drop</td><td>Jittered reconnect; registry TTL expires</td></tr><tr><td>Registry unavailable</td><td>Cannot route</td><td>Fall back to push notifications for everyone</td></tr><tr><td>Message store shard</td><td>Some history unreadable</td><td>Replicas; new messages still deliverable</td></tr><tr><td>Client offline</td><td>—</td><td>Persisted; delivered on reconnect + push</td></tr><tr><td>Duplicate delivery</td><td>—</td><td>Client dedupes on <code>client_msg_id</code></td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: WebSockets terminated on a stateful gateway fleet sized by
+connection count rather than message rate, a Redis registry mapping users to
+gateways, and messages persisted before they are acknowledged — that ordering
+is what makes &#39;never lost&#39; true. Storage is wide-column partitioned by
+conversation and clustered by message ID descending, so the only query we run
+is one partition read with no sort. Ordering is per-conversation, not global,
+because that is what users can perceive.</em></p>
+<p><em>The part I&#39;d watch hardest is presence — done naively it generates two orders
+of magnitude more traffic than the messages, so it is heartbeat-with-TTL and
+only pushed to contacts actually viewing. And the operational risk is the
+reconnect storm: if the gateway fleet restarts, ten million clients come back
+at once, so jittered backoff is not optional.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="9-follow-ups"><a class="anchor" href="#9-follow-ups">#</a>9 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;WebSocket or polling?&quot;</td><td>WebSocket — full duplex and no per-message handshake — with long polling as a fallback for restrictive networks. The cost is stateful servers, which complicates load balancing, deploys, and failure.</td></tr><tr><td>⭐ &quot;How does a message get from one server to another?&quot;</td><td>A registry maps user to gateway; the message service looks up the recipient&#39;s gateway and routes to it, via pub/sub. If the lookup is stale or the send fails, it falls through to the offline push path — which therefore has to handle failed deliveries, not just offline users.</td></tr><tr><td>⭐ &quot;How do you guarantee no message is lost?&quot;</td><td>Persist to the store before acknowledging the sender. Acking first means a failed write loses a message the sender believes was delivered. Then at-least-once delivery to the recipient with client-side dedupe on a sender-generated message ID.</td></tr><tr><td>&quot;How do you order messages?&quot;</td><td>Per conversation, using server-assigned IDs — Snowflake or a per-conversation sequence. Never client timestamps; device clocks are unreliable. Global ordering would need coordination and nobody can perceive it.</td></tr><tr><td>⭐ &quot;Why is presence hard?&quot;</td><td>Because it is chattier than messaging by two orders of magnitude if done naively — status changes times contacts. Heartbeat with a TTL so expiry means offline, debounce flapping, and only push to contacts who currently have the conversation open.</td></tr><tr><td>&quot;How do you store the messages?&quot;</td><td>Wide-column, partitioned by conversation, clustered by message ID descending — the dominant query becomes a single partition read that is already in order. Bucket the partition by time for very active groups, or you get a hot partition.</td></tr><tr><td>&quot;A gateway fleet restarts.&quot;</td><td>Ten million clients reconnect simultaneously. Jittered exponential backoff on the client, connection draining on the way out, and enough headroom to absorb the return — otherwise the recovery kills the fleet again.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>size the gateway fleet from connection count rather than message rate,</li>
+<li>state the persist-then-ack ordering and why it is the durability guarantee,</li>
+<li>describe the registry and the fall-through to push,</li>
+<li>give the partition/clustering key and the hot-partition fix,</li>
+<li>explain per-conversation ordering and client dedupe, and</li>
+<li>do the presence arithmetic and give the heartbeat-TTL design.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-news-feed.html"><span>previous</span>Design a news feed</a><a class="pager next" href="design-web-crawler.html"><span>next</span>Design a web crawler</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-transport">3 · Transport</a></li><li class="d2"><a href="#4-the-routing-problem">4 · The routing problem</a></li><li class="d2"><a href="#5-the-message-store">5 · The message store</a></li><li class="d2"><a href="#6-ordering">6 · Ordering</a></li><li class="d2"><a href="#7-presence-the-expensive-feature">7 · Presence — the expensive feature</a></li><li class="d2"><a href="#8-failure-and-wrap">8 · Failure and wrap</a></li><li class="d2"><a href="#9-follow-ups">9 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

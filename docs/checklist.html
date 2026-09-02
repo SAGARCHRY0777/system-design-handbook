@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The checklist · System Design Handbook</title>
+<meta name="description" content="One page to review before the round — the phases, the questions, the decisions with their triggers, and the sentences worth having ready.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html" class="active">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="the-checklist"><a class="anchor" href="#the-checklist">#</a>The checklist</h1><blockquote>
+<p>One page. Review it the morning of.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-round"><a class="anchor" href="#1-the-round">#</a>1 · The round</h2><pre class="code"><code>1. SCOPE      0-5    functional / scale / latency / consistency. Write IN and OUT.
+2. ESTIMATE   5-8    QPS, storage. ONE number that changes a decision.
+3. API        8-13   3-4 endpoints, cursor pagination, entities + access patterns.
+4. HIGH LEVEL 13-25  simplest thing first, then evolve under NAMED pressure.
+5. DEEP DIVE  25-40  offer a choice. THREE levels. This is the score.
+6. FAILURE    40-45  kill each box, summarise, name the key assumption.</code></pre><p><strong>Minute one:</strong> <em>&quot;Let me spend five minutes on requirements, do some quick
+estimates, sketch the API, then a high-level design, and leave fifteen minutes to
+go deep wherever you find most interesting.&quot;</em></p>
+<hr>
+<h2 id="2-scoping-questions"><a class="anchor" href="#2-scoping-questions">#</a>2 · Scoping questions</h2><pre class="code"><code>[ ] Who uses it, and how many?
+[ ] What are the top 2-3 things they do?
+[ ] Read-heavy or write-heavy, and roughly what ratio?   &lt;- most decisive
+[ ] Latency target at p99?
+[ ] How stale can data be?                               &lt;- cheapest question
+[ ] What is the cost of downtime vs the cost of a wrong answer?
+[ ] What scale — today, or a year out?
+[ ] Anything explicitly out of scope?</code></pre><p>Write on the board: <strong>IN SCOPE / OUT OF SCOPE / NON-FUNCTIONAL.</strong></p>
+<hr>
+<h2 id="3-estimation"><a class="anchor" href="#3-estimation">#</a>3 · Estimation</h2><pre class="code"><code>actions/day / 100,000 = avg QPS      x2-3 = peak
+writes/day x bytes x 365 x 3 = storage/year
+peak QPS / 10,000 = app servers (round up)
+hot data x entry size = cache RAM</code></pre><div class="table-scroll"><table><thead><tr><th>Threshold</th><th>Then</th></tr></thead><tbody><tr><td>&lt; 1,000 writes/s</td><td>One primary. <strong>Do not shard.</strong></td></tr><tr><td>&gt; 10,000 writes/s</td><td>Shard — and name the key</td></tr><tr><td>Reads &gt; 10× writes</td><td>Cache; consider precomputation</td></tr><tr><td>&gt; 100k reads/s</td><td>CDN / edge, not just a cache tier</td></tr><tr><td>Payload &gt; 1 MB</td><td>Object storage + CDN; DB holds metadata</td></tr><tr><td>Peak &gt; 5× average</td><td>Queue to absorb</td></tr></tbody></table></div><p><strong>Finish every estimate with &quot;so this means…&quot;.</strong></p>
+<hr>
+<h2 id="4-the-decision-table"><a class="anchor" href="#4-the-decision-table">#</a>4 · The decision table</h2><div class="table-scroll"><table><thead><tr><th>Requirement</th><th>Reach for</th><th>Say the cost</th></tr></thead><tbody><tr><td>Read-heavy</td><td>Cache, replicas, precompute</td><td>Staleness, invalidation</td></tr><tr><td>Write-heavy</td><td>Queue, batching, LSM store</td><td>Eventual consistency</td></tr><tr><td>Low p99</td><td>Cache, CDN, precompute</td><td>Cost, complexity</td></tr><tr><td>Strong consistency</td><td>Single leader, transactions</td><td>Lower availability, higher latency</td></tr><tr><td>High availability</td><td>Redundancy, quorums</td><td>Conflicts, staleness</td></tr><tr><td>Huge objects</td><td>Object storage + CDN</td><td>Extra system</td></tr><tr><td>Spiky traffic</td><td>Queue, rate limit, shed</td><td>Delay, rejected work</td></tr><tr><td>Unbounded growth</td><td>Shard</td><td>Joins, transactions, aggregates</td></tr></tbody></table></div><hr>
+<h2 id="5-component-defaults"><a class="anchor" href="#5-component-defaults">#</a>5 · Component defaults</h2><div class="table-scroll"><table><thead><tr><th>Need</th><th>Default</th><th>Change when</th></tr></thead><tbody><tr><td>Database</td><td><strong>Postgres</strong></td><td>Writes past a primary; access is by a known key</td></tr><tr><td>Cache</td><td>Redis, cache-aside, TTL + jitter</td><td>—</td></tr><tr><td>Queue</td><td>SQS for work; Kafka for events</td><td>Replay or multiple consumers → Kafka</td></tr><tr><td>Blobs</td><td>Object storage + CDN</td><td>Never a database</td></tr><tr><td>LB</td><td>L7, least connections</td><td>—</td></tr><tr><td>Search</td><td>Elasticsearch</td><td>—</td></tr><tr><td>IDs</td><td>Snowflake</td><td>—</td></tr><tr><td>Rate limit</td><td>Token bucket at the edge, Redis + Lua</td><td>—</td></tr></tbody></table></div><hr>
+<h2 id="6-deep-dive-depth-ladder"><a class="anchor" href="#6-deep-dive-depth-ladder">#</a>6 · Deep-dive depth ladder</h2><div class="table-scroll"><table><thead><tr><th>Level</th><th>Sounds like</th></tr></thead><tbody><tr><td>1</td><td>&quot;A worker pushes posts into followers&#39; timelines&quot;</td></tr><tr><td>2</td><td>&quot;It reads from a queue, batches by shard, capped list of 800, trimmed on insert&quot;</td></tr><tr><td>3</td><td><strong>&quot;Delivery is at-least-once so writes are idempotent on <code>tweet_id</code>; a crashed worker&#39;s messages are reclaimed by the consumer group after the visibility timeout; celebrities skip fan-out entirely and merge at read time&quot;</strong></td></tr></tbody></table></div><p><strong>Level 3 is the interview.</strong></p>
+<hr>
+<h2 id="7-failure-sweep"><a class="anchor" href="#7-failure-sweep">#</a>7 · Failure sweep</h2><pre class="code"><code>[ ] App server dies      -&gt; stateless, health-checked, LB removes it
+[ ] Cache node lost      -&gt; consistent hashing; is the DB sized for the miss?
+[ ] Whole cache tier     -&gt; circuit breaker + load shedding
+[ ] Queue backs up       -&gt; alert on consumer lag; degrade, not break
+[ ] DB leader fails      -&gt; ~30s write pause, cold cache, possible lost async writes
+[ ] Dependency SLOW      -&gt; worse than down. Timeouts, breaker, bulkhead.
+[ ] Retry storm          -&gt; backoff + jitter + cap + retry budget
+[ ] Region lost          -&gt; in scope? If not, say so.</code></pre><hr>
+<h2 id="8-sentences-worth-having-ready"><a class="anchor" href="#8-sentences-worth-having-ready">#</a>8 · Sentences worth having ready</h2><p><strong>Opening:</strong></p>
+<blockquote>
+<p><em>&quot;Before I design anything — who uses this, how many, and what are the two or
+three most important things they do?&quot;</em></p>
+</blockquote>
+<p><strong>On staleness:</strong></p>
+<blockquote>
+<p><em>&quot;How stale can this data be? That single answer decides most of the
+architecture.&quot;</em></p>
+</blockquote>
+<p><strong>Anti-over-engineering:</strong></p>
+<blockquote>
+<p><em>&quot;At this scale one primary handles it. I&#39;d shard when writes approach 5,000 a
+second, and I&#39;d shard on X.&quot;</em></p>
+</blockquote>
+<p><strong>Offering the deep dive:</strong></p>
+<blockquote>
+<p><em>&quot;I could go deep on the fan-out path or on how the cache is sharded and kept
+warm — which is more useful?&quot;</em></p>
+</blockquote>
+<p><strong>Under pushback:</strong></p>
+<blockquote>
+<p><em>&quot;My reasoning was X — what am I missing?&quot;</em></p>
+</blockquote>
+<p><strong>On not knowing:</strong></p>
+<blockquote>
+<p><em>&quot;I haven&#39;t used it. I&#39;d reach for X here — how does it differ?&quot;</em></p>
+</blockquote>
+<p><strong>Volunteering a weakness (the highest-value sentence in the round):</strong></p>
+<blockquote>
+<p><em>&quot;This gives me strong consistency, but the leader is now a write bottleneck at
+around 10,000 QPS. If we exceed that I&#39;d shard by user ID.&quot;</em></p>
+</blockquote>
+<p><strong>Closing:</strong></p>
+<blockquote>
+<p><em>&quot;To summarise: [three decisions and their reasons]. The assumption this design
+leans on hardest is [X] — I&#39;d validate that first. Given more time I&#39;d look at
+[Y].&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="9-the-night-before"><a class="anchor" href="#9-the-night-before">#</a>9 · The night before</h2><pre class="code"><code>[ ] Review numbers-to-know
+[ ] Review anti-patterns
+[ ] Rehearse ONE design out loud, timed, standing at a whiteboard
+[ ] Prepare two questions for your interviewer
+[ ] Sleep</code></pre><p><strong>Do not learn a new design the night before.</strong> Rehearsing one you know beats
+half-learning one you do not — under pressure you fall back on what is fluent,
+not on what is fresh.</p>
+<hr>
+<h2 id="10-during"><a class="anchor" href="#10-during">#</a>10 · During</h2><pre class="code"><code>[ ] Say the plan at minute one
+[ ] Write scope on the board and leave it there
+[ ] Narrate — silence is unscored
+[ ] Cite requirements when deciding
+[ ] Watch the clock; be drawing by minute 13
+[ ] Offer a deep-dive choice at minute 25
+[ ] Stop adding at minute 40 and start killing boxes
+[ ] Volunteer one weakness before being asked
+[ ] Close with a summary and the key assumption</code></pre></article>
+    <div class="pager-row"><a class="pager previous" href="anti-patterns.html"><span>previous</span>Anti-patterns</a><a class="pager next" href="question-bank.html"><span>next</span>Question bank</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-round">1 · The round</a></li><li class="d2"><a href="#2-scoping-questions">2 · Scoping questions</a></li><li class="d2"><a href="#3-estimation">3 · Estimation</a></li><li class="d2"><a href="#4-the-decision-table">4 · The decision table</a></li><li class="d2"><a href="#5-component-defaults">5 · Component defaults</a></li><li class="d2"><a href="#6-deep-dive-depth-ladder">6 · Deep-dive depth ladder</a></li><li class="d2"><a href="#7-failure-sweep">7 · Failure sweep</a></li><li class="d2"><a href="#8-sentences-worth-having-ready">8 · Sentences worth having ready</a></li><li class="d2"><a href="#9-the-night-before">9 · The night before</a></li><li class="d2"><a href="#10-during">10 · During</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

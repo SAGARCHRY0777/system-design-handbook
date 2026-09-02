@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a web crawler · System Design Handbook</title>
+<meta name="description" content="The frontier and why politeness makes it hard, URL deduplication with Bloom filters, content deduplication with simhash, traps, and freshness.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html" class="active">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-web-crawler"><a class="anchor" href="#design-a-web-crawler">#</a>Design a web crawler</h1><blockquote>
+<p><strong>The interesting constraint is not scale, it is politeness.</strong> A crawler that
+maximises throughput by hammering one host is a denial-of-service tool. The
+design is mostly about the queue structure that makes politeness and
+parallelism coexist.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- fetch pages from seed URLs      - indexing / ranking (that&#39;s search)
+- extract and follow links        - JavaScript rendering (mention it)
+- deduplicate URLs and content    - image/video crawling
+- respect robots.txt + politeness
+- recrawl for freshness
+
+NON-FUNCTIONAL
+- 1B pages/month
+- polite: &lt;= 1 request/second/host by default; honour crawl-delay
+- must not re-crawl identical content wastefully
+- must survive restarts without losing the frontier
+- must not get trapped</code></pre><hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>RATE     1e9/month / 30 / 86,400 = ~400 pages/s, peak ~1,200/s
+
+BANDWIDTH  400/s x 500 KB (average page + assets) = 200 MB/s = 1.6 Gbps
+
+STORAGE  raw HTML: 1e9 x 100 KB compressed ~= 100 TB/month
+         URL metadata: 1e9 x 200 B = 200 GB/month
+
+URL SET  10B known URLs x 100 B = 1 TB  -- too big to keep in RAM as a set
+         -&gt; Bloom filter: 10B URLs at ~10 bits each = ~12 GB. Fits.
+
+POLITENESS MATH   &lt;- the number that shapes the design
+  400 pages/s at 1 request/s/host means at least 400 DISTINCT hosts
+  in flight at all times. Fetchers cannot simply pull from one queue.
+
+CONCLUSION
+  - The frontier must be organised BY HOST, not as a flat queue
+  - Bloom filter for URL dedup; exact store behind it if needed
+  - Raw HTML to object storage, metadata to a database</code></pre><blockquote>
+<p><strong>The politeness arithmetic is the derivation that matters.</strong> It is what turns
+&quot;a queue of URLs&quot; into the two-level frontier below, and arriving at it from
+the numbers is much stronger than presenting the structure as known.</p>
+</blockquote>
+<hr>
+<h2 id="3-the-architecture"><a class="anchor" href="#3-the-architecture">#</a>3 · The architecture</h2><pre class="mermaid">flowchart TD
+    S[&quot;Seed URLs&quot;] --&gt; F[[&quot;URL frontier&quot;]]
+    F --&gt; FE[&quot;Fetchers&quot;]
+    FE --&gt; RB[&quot;robots.txt cache&quot;]
+    FE --&gt; DNS[&quot;DNS cache&quot;]
+    FE --&gt; ST[(&quot;Raw store&lt;br/&gt;object storage&quot;)]
+    FE --&gt; P[&quot;Parser&quot;]
+    P --&gt; CD{&quot;Content&lt;br/&gt;seen before?&quot;}
+    CD --&gt;|&quot;yes&quot;| X[&quot;Discard&quot;]
+    CD --&gt;|&quot;no&quot;| EX[&quot;Extract links&quot;]
+    EX --&gt; N[&quot;Normalise URLs&quot;]
+    N --&gt; UD{&quot;URL seen?&lt;br/&gt;Bloom filter&quot;}
+    UD --&gt;|&quot;no&quot;| F
+    UD --&gt;|&quot;yes&quot;| X</pre><hr>
+<h2 id="4-the-frontier-the-core-of-the-design"><a class="anchor" href="#4-the-frontier-the-core-of-the-design">#</a>4 · The frontier — the core of the design</h2><p>Two levels: one for <strong>priority</strong>, one for <strong>politeness</strong>.</p>
+<pre class="code"><code>FRONT QUEUES -- priority
+  f1  high priority (news, frequently-changing)
+  f2  medium
+  f3  low
+      a selector picks from these with a bias toward high priority
+
+BACK QUEUES -- politeness.  INVARIANT: one host maps to exactly one queue,
+                            and each queue is served by one worker.
+  b1: [ example.com urls... ]     &lt;- worker 1, &gt;= 1s between fetches
+  b2: [ wikipedia.org urls... ]   &lt;- worker 2
+  ...
+  bN: (N &gt;= number of concurrent fetchers)
+
+  Each back queue has a next-allowed-fetch TIME. A worker sleeps until
+  then. Because a host lives in exactly ONE queue served by ONE worker,
+  the rate limit per host is enforced structurally -- no locking, no
+  shared counters.</code></pre><blockquote>
+<p><strong>&quot;One host, one queue, one worker&quot; is the whole trick</strong>, and it is worth
+stating as an invariant. It converts a distributed rate-limiting problem into a
+data-structure property. Without it, every fetcher would need to coordinate on
+a shared per-host counter — the slow, contended alternative.</p>
+</blockquote>
+<p><strong>The frontier must be durable.</strong> A crash that loses it means recrawling
+everything. Persist it — Kafka partitioned by host hash, or a database-backed
+queue — and shard by <code>hash(host)</code> so a host stays with one crawler node.</p>
+<hr>
+<h2 id="5-deduplication"><a class="anchor" href="#5-deduplication">#</a>5 · Deduplication</h2><h3 id="url-deduplication-bloom-filter"><a class="anchor" href="#url-deduplication-bloom-filter">#</a>URL deduplication — Bloom filter</h3><p>Ten billion URLs cannot sit in memory as a hash set (~1 TB). A Bloom filter at
+~10 bits per element is ~12 GB with roughly a 1% false-positive rate.</p>
+<p><strong>The error direction is what makes it safe</strong>, and this is the point to make:</p>
+<pre class="code"><code>False POSITIVE: says &quot;seen&quot; when it was not  -&gt; we skip a page. Acceptable.
+False NEGATIVE: impossible.                  -&gt; we NEVER refetch endlessly.
+
+A Bloom filter can only over-report membership, so the failure mode is
+&quot;miss a page&quot;, never &quot;loop forever&quot;.</code></pre><p><strong>Normalise before checking</strong>, or dedup does nothing: lowercase the host, strip
+default ports and fragments, sort or drop tracking query parameters, resolve
+<code>.</code> and <code>..</code>. <code>HTTP://Example.com:80/a/../b?utm_source=x#frag</code> and
+<code>http://example.com/b</code> are the same page.</p>
+<h3 id="content-deduplication-simhash"><a class="anchor" href="#content-deduplication-simhash">#</a>Content deduplication — simhash</h3><p>Different URLs frequently serve identical or near-identical content — mirrors,
+print versions, session IDs in the path.</p>
+<div class="table-scroll"><table><thead><tr><th>Method</th><th>Catches</th></tr></thead><tbody><tr><td>MD5/SHA of the body</td><td>Byte-identical duplicates only</td></tr><tr><td><strong>Simhash</strong></td><td><strong>Near-duplicates</strong> — same article, different ads</td></tr></tbody></table></div><p><strong>Simhash produces similar fingerprints for similar documents</strong>, so a small
+Hamming distance (typically ≤ 3 bits in 64) means near-duplicate. That is what
+you want, because byte-identical is rare on the real web — a timestamp or a
+rotating advert defeats an exact hash.</p>
+<hr>
+<h2 id="6-traps-and-hazards"><a class="anchor" href="#6-traps-and-hazards">#</a>6 · Traps and hazards</h2><p><strong>Volunteering this list demonstrates you have thought about the adversarial
+web, which is most of what a real crawler deals with.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Hazard</th><th>Example</th><th>Defence</th></tr></thead><tbody><tr><td><strong>Infinite space</strong></td><td>Calendars: <code>?date=2099-01-01</code> forever</td><td>Depth limit; per-host page cap; URL-pattern detection</td></tr><tr><td><strong>Spider trap</strong></td><td>Dynamically generated infinite links</td><td>Same, plus similarity detection on URLs</td></tr><tr><td><strong>Redirect loop</strong></td><td>A → B → A</td><td>Cap redirect hops (5)</td></tr><tr><td><strong>Huge files</strong></td><td>A 4 GB &quot;page&quot;</td><td><code>Content-Length</code> check; hard byte cap; stream and abort</td></tr><tr><td><strong>Slow-loris server</strong></td><td>Responds one byte per minute</td><td>Aggressive read timeout</td></tr><tr><td><strong>Soft 404</strong></td><td>200 status, &quot;not found&quot; body</td><td>Content heuristics</td></tr><tr><td><strong>Session IDs in URLs</strong></td><td>Infinite unique URLs, same page</td><td>Normalisation; content dedup catches the rest</td></tr><tr><td><strong>DNS latency</strong></td><td>100 ms+ per lookup, on every fetch</td><td>Local DNS cache — a large win at 400 fetches/s</td></tr></tbody></table></div><p><strong>robots.txt</strong>: fetch, cache per host (respect its own TTL), honour <code>Disallow</code>
+and <code>Crawl-delay</code>. <strong>Cache it</strong>, or you double your request volume to every host
+— which is itself impolite.</p>
+<hr>
+<h2 id="7-freshness"><a class="anchor" href="#7-freshness">#</a>7 · Freshness</h2><p>Recrawling everything uniformly is wasteful — most pages never change.</p>
+<div class="table-scroll"><table><thead><tr><th>Strategy</th><th>How</th></tr></thead><tbody><tr><td><strong>Adaptive</strong></td><td>Track observed change rate per URL; crawl proportionally</td></tr><tr><td><strong>Conditional GET</strong></td><td><code>If-Modified-Since</code> / <code>If-None-Match</code> → 304 costs almost nothing</td></tr><tr><td><strong>Sitemaps</strong></td><td><code>lastmod</code> tells you what changed, free</td></tr><tr><td><strong>Priority by importance</strong></td><td>A news homepage hourly; an archived PDF yearly</td></tr></tbody></table></div><blockquote>
+<p><strong>Conditional GET is the highest-value, lowest-effort item</strong>, and mentioning it
+shows practical awareness: a 304 response is a few hundred bytes instead of
+500 KB. For a recrawl-heavy workload it cuts bandwidth by an order of
+magnitude for a one-line change.</p>
+</blockquote>
+<hr>
+<h2 id="8-failure-and-wrap"><a class="anchor" href="#8-failure-and-wrap">#</a>8 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Fetcher dies</td><td>Its back queues stall</td><td>Reassign host ranges; frontier is durable</td></tr><tr><td>Frontier lost</td><td>Total restart</td><td>Persist it; that is why it is not in memory</td></tr><tr><td>Bloom filter lost</td><td>Re-crawling</td><td>Snapshot periodically; rebuild is tolerable</td></tr><tr><td>A host goes down</td><td>Wasted retries</td><td>Exponential backoff per host; drop after N</td></tr><tr><td>We are too aggressive</td><td>Blocked / legal complaint</td><td>Conservative default rate, honour <code>Crawl-delay</code>, identify in User-Agent, publish contact info</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: a two-level frontier — front queues for priority, back queues for
+politeness with the invariant that one host maps to one queue served by one
+worker, which makes per-host rate limiting structural rather than
+coordinated. Bloom filter for URL dedup because its only error is over-
+reporting, so we may skip a page but can never loop. Simhash for content
+dedup, because byte-identical duplicates are rare on the real web.</em></p>
+<p><em>The thing I&#39;d be most careful about is politeness, not throughput — being
+blocked is the real failure mode, so conservative defaults, honour crawl-delay,
+identify ourselves, and back off hard on errors. And I&#39;d add conditional GETs
+before anything else on the recrawl path; it is close to free and cuts recrawl
+bandwidth by an order of magnitude.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="9-follow-ups"><a class="anchor" href="#9-follow-ups">#</a>9 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;How do you stay polite while crawling fast?&quot;</td><td>Two-level frontier. Priority queues feed politeness queues, and each host maps to exactly one back queue served by one worker with a next-allowed-fetch time. Rate limiting becomes a structural property instead of a shared counter every fetcher contends on. And at 400 pages a second with one request per host per second, you need at least 400 distinct hosts in flight — which is why a flat queue cannot work.</td></tr><tr><td>⭐ &quot;How do you know if a URL was already crawled?&quot;</td><td>Bloom filter over normalised URLs — 10B URLs at 10 bits each is about 12 GB, versus a terabyte for an exact set. Its only error is claiming to have seen something it hasn&#39;t, so we may skip a page but can never loop forever. Normalisation matters more than the filter: without it the same page arrives under a dozen URLs.</td></tr><tr><td>⭐ &quot;Two URLs, same content.&quot;</td><td>Simhash fingerprints and a Hamming-distance threshold. An exact hash only catches byte-identical pages, and on the real web a rotating advert or a timestamp defeats that — near-duplicate detection is what you actually need.</td></tr><tr><td>&quot;How do you avoid infinite crawls?&quot;</td><td>Depth limits, per-host page caps, redirect-hop caps, and pattern detection for parameterised traps like calendars. Content dedup catches much of the rest, since traps usually serve near-identical pages.</td></tr><tr><td>&quot;How do you keep the index fresh?&quot;</td><td>Adaptive recrawl based on observed change rate, plus conditional GETs so unchanged pages cost a 304 instead of a full fetch, plus sitemaps where published. Uniform recrawling wastes most of its bandwidth.</td></tr><tr><td>&quot;What about JavaScript-rendered pages?&quot;</td><td>A headless browser pool, which is roughly 10–50× the cost per page — so it is a separate, prioritised pipeline for pages that need it, decided by heuristics, not the default path.</td></tr><tr><td>&quot;How do you distribute it?&quot;</td><td>Shard the frontier by host hash so a host always lands on the same crawler node — that preserves the politeness invariant across machines. The Bloom filter shards the same way.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>derive the &quot;400 distinct hosts in flight&quot; politeness constraint,</li>
+<li>describe the two-level frontier and its one-host-one-queue invariant,</li>
+<li>justify the Bloom filter by its one-sided error,</li>
+<li>explain why simhash beats an exact hash,</li>
+<li>name five traps and their defences, and</li>
+<li>give conditional GET as the cheapest freshness win.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-chat.html"><span>previous</span>Design a chat system</a><a class="pager next" href="design-ticketing.html"><span>next</span>Design a ticket booking system</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-the-architecture">3 · The architecture</a></li><li class="d2"><a href="#4-the-frontier-the-core-of-the-design">4 · The frontier — the core of the design</a></li><li class="d2"><a href="#5-deduplication">5 · Deduplication</a></li><li class="d3"><a href="#url-deduplication-bloom-filter">URL deduplication — Bloom filter</a></li><li class="d3"><a href="#content-deduplication-simhash">Content deduplication — simhash</a></li><li class="d2"><a href="#6-traps-and-hazards">6 · Traps and hazards</a></li><li class="d2"><a href="#7-freshness">7 · Freshness</a></li><li class="d2"><a href="#8-failure-and-wrap">8 · Failure and wrap</a></li><li class="d2"><a href="#9-follow-ups">9 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

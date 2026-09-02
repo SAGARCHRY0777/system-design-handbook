@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observability · System Design Handbook</title>
+<meta name="description" content="Metrics, logs and traces; why percentiles beat averages and cannot be averaged; RED and USE; SLOs and error budgets; and what to actually alert on.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html" class="active">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="observability"><a class="anchor" href="#observability">#</a>Observability</h1><blockquote>
+<p><strong>Almost nobody brings this up unprompted, which makes it cheap signal.</strong> Two
+sentences on what you would measure and alert on, at the end of a design, marks
+you as someone who has operated a system rather than only drawn one.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-three-signals"><a class="anchor" href="#1-the-three-signals">#</a>1 · The three signals</h2><div class="table-scroll"><table><thead><tr><th>Signal</th><th>Is</th><th>Cost</th><th>Answers</th></tr></thead><tbody><tr><td><strong>Metrics</strong></td><td>Numbers over time, aggregated</td><td>Cheap, bounded</td><td><em>Is something wrong?</em></td></tr><tr><td><strong>Logs</strong></td><td>Discrete events with detail</td><td>Expensive at volume</td><td><em>What exactly happened?</em></td></tr><tr><td><strong>Traces</strong></td><td>One request across services</td><td>Sampled</td><td><em>Where did the time go?</em></td></tr></tbody></table></div><p><strong>They form a workflow, and describing it that way is better than listing
+them:</strong> a metric alert tells you something is wrong, a trace tells you which
+service, and logs from that service tell you why.</p>
+<p><strong>Structured logs, not prose.</strong> <code>{&quot;event&quot;:&quot;charge_failed&quot;,&quot;user_id&quot;:42, &quot;provider&quot;:&quot;stripe&quot;,&quot;code&quot;:&quot;card_declined&quot;,&quot;latency_ms&quot;:230}</code> is queryable;
+<code>&quot;Failed to charge user 42&quot;</code> is not. At scale, logs you cannot aggregate are
+logs you cannot use.</p>
+<hr>
+<h2 id="2-percentiles-and-the-mistake"><a class="anchor" href="#2-percentiles-and-the-mistake">#</a>2 · Percentiles, and the mistake</h2><p><strong>Averages hide everything that matters.</strong></p>
+<pre class="code"><code>1,000 requests: 990 at 10ms, 10 at 5,000ms
+
+  average = 59ms          &quot;looks fine&quot;
+  p99     = 5,000ms       1 in 100 users waits 5 seconds</code></pre><div class="table-scroll"><table><thead><tr><th>Percentile</th><th>Means</th></tr></thead><tbody><tr><td>p50</td><td>The typical experience</td></tr><tr><td>p95</td><td>Where degradation first shows</td></tr><tr><td><strong>p99</strong></td><td><strong>The number to design against</strong></td></tr><tr><td>p99.9</td><td>Where your worst-hit customers live</td></tr></tbody></table></div><blockquote>
+<p><strong>Two things worth saying about p99, and the second is the one that impresses:</strong></p>
+<ol>
+<li><strong>A p99 is not one unlucky user.</strong> A page making 100 backend calls hits its
+p99 on nearly every page load — the tail becomes the median experience.</li>
+<li><strong>You cannot average percentiles.</strong> The p99 of two servers is not the mean
+of their p99s; you need the merged distribution. This is why percentiles
+must be computed from histograms rather than pre-aggregated numbers, and
+naming it shows you have actually built dashboards.</li>
+</ol>
+</blockquote>
+<hr>
+<h2 id="3-red-and-use"><a class="anchor" href="#3-red-and-use">#</a>3 · RED and USE</h2><p>Two checklists that stop you inventing metrics ad hoc.</p>
+<p><strong>RED — for services (request-driven):</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>R</strong>ate</td><td>Requests per second</td></tr><tr><td><strong>E</strong>rrors</td><td>Failed requests per second</td></tr><tr><td><strong>D</strong>uration</td><td>Latency distribution</td></tr></tbody></table></div><p><strong>USE — for resources (CPU, disk, pools):</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>U</strong>tilisation</td><td>% of time busy</td></tr><tr><td><strong>S</strong>aturation</td><td>Queue depth — work waiting</td></tr><tr><td><strong>E</strong>rrors</td><td>Error count</td></tr></tbody></table></div><blockquote>
+<p><strong>Saturation is the leading indicator, and it is the one people omit.</strong>
+Utilisation at 80% tells you today; a queue that is growing tells you about
+ten minutes from now. Connection-pool wait time, thread-pool queue depth and
+consumer lag are the metrics that give you warning rather than confirmation.</p>
+</blockquote>
+<hr>
+<h2 id="4-distributed-tracing"><a class="anchor" href="#4-distributed-tracing">#</a>4 · Distributed tracing</h2><p>A trace ID generated at the edge and propagated through every call.</p>
+<pre class="code"><code>trace_id: 7b3f...            [=========== 340ms ===========]
+  api-gateway                [==]                             12ms
+  user-service                 [====]                         45ms
+    postgres:SELECT              [==]                          18ms
+  feed-service                       [==================]     240ms
+    redis:MGET                        [=]                        8ms
+    ranking-service                     [===============]     210ms  &lt;-- here
+  render                                                [==]   30ms</code></pre><p><strong>Propagation is the whole trick</strong>: every service passes the trace context
+(W3C <code>traceparent</code>) to everything it calls. One service that drops it breaks the
+trace from there down.</p>
+<p><strong>Sample, don&#39;t record everything</strong> — 1% of traces plus 100% of errors and slow
+requests is the standard approach. Head-based sampling decides at the start and
+is cheap; tail-based decides after seeing the result and always keeps the
+interesting ones, at the cost of buffering.</p>
+<p><strong>Put the trace ID in every log line and return it in error responses.</strong> A user
+reports a problem, quotes the ID, and you have the whole request. It is a small
+thing that is obviously born of experience.</p>
+<hr>
+<h2 id="5-slis-slos-and-error-budgets"><a class="anchor" href="#5-slis-slos-and-error-budgets">#</a>5 · SLIs, SLOs and error budgets</h2><div class="table-scroll"><table><thead><tr><th>Term</th><th>Is</th></tr></thead><tbody><tr><td><strong>SLI</strong></td><td>The measurement — &quot;% of requests under 200ms&quot;</td></tr><tr><td><strong>SLO</strong></td><td>The internal target — &quot;99.9% under 200ms over 30 days&quot;</td></tr><tr><td><strong>SLA</strong></td><td>The contractual promise, with penalties — always looser than the SLO</td></tr></tbody></table></div><p><strong>The error budget is the useful idea:</strong></p>
+<pre class="code"><code>SLO 99.9% over 30 days  -&gt;  budget = 0.1% = ~43 minutes of failure
+
+Budget remaining  -&gt; ship features, take risks
+Budget exhausted  -&gt; freeze features, spend the time on reliability</code></pre><blockquote>
+<p><strong>This converts &quot;how reliable should it be?&quot; from an argument into a
+measurement.</strong> 100% is the wrong target — it is unachievable and the last
+nine costs more than it returns. The budget makes the trade explicit and gives
+both sides an agreed rule. Mentioning error budgets in a design round is
+unusual and lands well.</p>
+</blockquote>
+<p><strong>Set the SLO from user impact, not from what is easy to hit.</strong> And measure it
+where the user is — a backend p99 of 50 ms means little if the edge adds 400.</p>
+<hr>
+<h2 id="6-what-to-alert-on"><a class="anchor" href="#6-what-to-alert-on">#</a>6 · What to alert on</h2><p><strong>Alert on symptoms, not causes.</strong> High CPU is not a problem; users getting
+errors is. Cause-based alerts produce noise, and noise produces ignored pages.</p>
+<div class="table-scroll"><table><thead><tr><th>Alert on</th><th>Not on</th></tr></thead><tbody><tr><td>Error rate above SLO burn rate</td><td>CPU above 80%</td></tr><tr><td>p99 latency past target</td><td>A single server unhealthy</td></tr><tr><td>Queue depth growing steadily</td><td>A single failed request</td></tr><tr><td>Consumer lag rising</td><td>Memory at 70%</td></tr><tr><td>Error budget burning fast</td><td>Disk at 60%</td></tr></tbody></table></div><p><strong>Multi-window burn-rate alerting</strong> is the mature version: page when the budget
+is being consumed fast enough to matter (14× normal over an hour), ticket when
+it is slow-burning (2× over six hours). It catches real incidents quickly
+without paging for a blip.</p>
+<blockquote>
+<p><strong>Every alert should be actionable and have a runbook.</strong> An alert nobody can
+act on gets muted, and a muted alert is worse than none because it creates the
+illusion of coverage. If your honest answer to &quot;what do I do about this page?&quot;
+is &quot;watch it&quot;, it should be a dashboard, not a page.</p>
+</blockquote>
+<hr>
+<h2 id="7-what-to-say-in-the-round"><a class="anchor" href="#7-what-to-say-in-the-round">#</a>7 · What to say in the round</h2><blockquote>
+<p><em>&quot;RED metrics on every service — rate, errors, duration as a histogram so I can
+compute real percentiles rather than averaging p99s, which does not work.
+Tracing with a trace ID minted at the edge and propagated, sampled at 1% plus
+everything that errors or runs slow, and the trace ID in every log line and
+error response so a user report is directly debuggable.</em></p>
+<p><em>For this design the leading indicators are cache hit rate, consumer lag on the
+fan-out queue, and replication lag — those degrade before anything user-visible
+does. I&#39;d set an SLO of 99.9% of timeline reads under 200 ms, alert on
+error-budget burn rate rather than raw thresholds, and page on symptoms only.&quot;</em></p>
+</blockquote>
+<p><strong>Thirty seconds, and it covers the three signals, sampling, the leading
+indicators specific to this design, and alerting philosophy.</strong></p>
+<hr>
+<h2 id="8-interview-questions"><a class="anchor" href="#8-interview-questions">#</a>8 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;What would you monitor?&quot;</td><td>RED per service — rate, errors, duration as a histogram — plus the leading indicators for this design specifically: cache hit rate, consumer lag, replication lag. Those move before users notice.</td></tr><tr><td>⭐ &quot;Why p99 rather than average?&quot;</td><td>Averages hide the tail. 990 fast requests and 10 five-second ones average to something that looks healthy. And a page making 100 backend calls hits its p99 almost every load, so the tail <em>is</em> the typical experience.</td></tr><tr><td>&quot;Can you average p99s across servers?&quot;</td><td>No — percentiles are not linear. You need the merged distribution, which is why latency is stored as histograms and the quantile is computed at query time.</td></tr><tr><td>⭐ &quot;How do you debug a slow request in a 12-service call chain?&quot;</td><td>Distributed tracing: a trace ID minted at the edge and propagated through every hop, so the waterfall shows which span owns the time. It only works if every service propagates the context — one that drops it blinds everything downstream.</td></tr><tr><td>&quot;What is an error budget?&quot;</td><td>The inverse of the SLO — at 99.9% you have about 43 minutes a month. While budget remains you ship; when it is gone you stop and fix reliability. It turns a reliability argument into an agreed measurement.</td></tr><tr><td>⭐ &quot;What do you page on?&quot;</td><td>Symptoms, not causes — user-visible error rate and latency, and error-budget burn rate rather than fixed thresholds. High CPU is not an incident. Every page needs an action and a runbook, or it gets muted, and a muted alert is worse than no alert.</td></tr><tr><td>&quot;Logs are too expensive at this volume.&quot;</td><td>Sample the successful path, keep all errors, and make logs structured so aggregation replaces retrieval. Most of what people use logs for is really a metric or a trace.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>describe the metrics → traces → logs debugging workflow,</li>
+<li>explain why p99 matters and why percentiles cannot be averaged,</li>
+<li>recite RED and USE and name saturation as the leading indicator,</li>
+<li>explain trace propagation and sampling strategy, and</li>
+<li>define an error budget and say what you page on.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="failure-and-resilience.html"><span>previous</span>Failure & resilience</a><a class="pager next" href="design-url-shortener.html"><span>next</span>Design a URL shortener</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-three-signals">1 · The three signals</a></li><li class="d2"><a href="#2-percentiles-and-the-mistake">2 · Percentiles, and the mistake</a></li><li class="d2"><a href="#3-red-and-use">3 · RED and USE</a></li><li class="d2"><a href="#4-distributed-tracing">4 · Distributed tracing</a></li><li class="d2"><a href="#5-slis-slos-and-error-budgets">5 · SLIs, SLOs and error budgets</a></li><li class="d2"><a href="#6-what-to-alert-on">6 · What to alert on</a></li><li class="d2"><a href="#7-what-to-say-in-the-round">7 · What to say in the round</a></li><li class="d2"><a href="#8-interview-questions">8 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

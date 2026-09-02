@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a file sync service · System Design Handbook</title>
+<meta name="description" content="Chunking and content-addressed storage, delta sync, the metadata service as source of truth, conflict resolution, and sharing.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html" class="active">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-file-sync-service"><a class="anchor" href="#design-a-file-sync-service">#</a>Design a file sync service</h1><blockquote>
+<p><strong>Dropbox, Google Drive, OneDrive.</strong> The distinctive parts are content-defined
+chunking, delta sync, and the fact that conflicts are unavoidable — so the
+question is how you handle them, not how you prevent them.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- upload / download files         - collaborative real-time editing
+- sync across a user&#39;s devices    - full-text search of contents
+- share with other users          - versioning UI details
+- resolve concurrent edits        - offline-first mobile specifics
+
+NON-FUNCTIONAL
+- 100M users, 10 devices each possible
+- files up to 10 GB
+- sync latency: seconds when online
+- NEVER silently lose a user&#39;s edit    &lt;- the hard requirement
+- bandwidth efficiency matters (mobile, metered)
+- storage efficiency matters (dedup)</code></pre><blockquote>
+<p><strong>&quot;Never silently lose an edit&quot; is the requirement that rules out
+last-write-wins</strong>, and stating it in scoping is what lets you reject LWW later
+with a reason rather than a preference.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>USERS    100M, say 50M active daily
+FILES    ~100 files changed per active user per day = 5B changes/day
+         = ~58,000/s ... but most are small metadata updates
+
+STORAGE  100M users x 10 GB average = 1 EB nominal
+         DEDUPLICATION is the lever:
+           - shared files stored once
+           - identical chunks across users (installers, media, docs)
+           - typical savings: 30-50%
+         -&gt; effective maybe 500-700 PB
+
+BANDWIDTH  naive: re-upload a 10 MB doc on every save
+           delta: upload only changed chunks -&gt; often &lt;100 KB
+           -&gt; a 100x reduction on the common case
+
+CONCLUSION
+  - The design is about CHUNKS, not files
+  - Metadata is small, hot, and must be strongly consistent
+  - File bytes are large, cold, immutable -&gt; object storage
+  - Separate the two completely</code></pre><p><strong>&quot;Metadata and bytes have opposite properties, so they get different systems&quot;
+is the framing move here</strong> — the same shape as browse/book in
+<a href="design-ticketing.html">ticketing</a> and the two halves of every media design.</p>
+<hr>
+<h2 id="3-chunking-and-content-addressing"><a class="anchor" href="#3-chunking-and-content-addressing">#</a>3 · Chunking and content addressing</h2><p><strong>The foundational decision.</strong> Files are split into chunks; each chunk is
+identified by the hash of its contents.</p>
+<pre class="code"><code>file &quot;report.docx&quot;  -&gt;  [c1][c2][c3][c4][c5]
+                         each ~4 MB, each keyed by SHA-256 of its bytes
+
+  metadata:  report.docx = [hash1, hash2, hash3, hash4, hash5]
+  storage:   hash -&gt; bytes   (immutable, write-once)
+
+Consequences, all of them useful:
+  - DEDUPLICATION is free: identical chunks store once, globally
+  - DELTA SYNC is free: upload only chunks whose hash changed
+  - INTEGRITY is free: the hash verifies the bytes
+  - Chunks are immutable, so they cache and replicate trivially</code></pre><h3 id="fixed-versus-content-defined-chunking"><a class="anchor" href="#fixed-versus-content-defined-chunking">#</a>Fixed versus content-defined chunking</h3><p><strong>This is the detail that separates a good answer:</strong></p>
+<pre class="code"><code>FIXED-SIZE (every 4 MB):
+  insert one byte at the START of the file
+  -&gt; every subsequent boundary shifts
+  -&gt; EVERY chunk hash changes
+  -&gt; you re-upload the entire file
+
+CONTENT-DEFINED (Rabin fingerprint / rolling hash):
+  boundaries are chosen where a rolling hash over a sliding window
+  hits a pattern -- so they depend on CONTENT, not offset
+  -&gt; an insertion changes only the chunk containing it
+  -&gt; boundaries downstream re-synchronise naturally</code></pre><blockquote>
+<p><strong>Content-defined chunking is the right answer and the reason is the
+insertion case.</strong> With fixed chunks, prepending a single byte to a 1 GB file
+costs a 1 GB re-upload. That is the scenario to describe — it makes the
+argument concrete rather than theoretical.</p>
+</blockquote>
+<p><strong>Compress and encrypt after chunking</strong>, in that order, so identical plaintext
+chunks still deduplicate. (Client-side encryption with per-user keys defeats
+cross-user dedup entirely — a genuine trade-off between privacy and storage
+cost, and worth naming as such.)</p>
+<hr>
+<h2 id="4-architecture"><a class="anchor" href="#4-architecture">#</a>4 · Architecture</h2><pre class="mermaid">flowchart TD
+    D1[&quot;Device A&lt;br/&gt;watcher + indexer&quot;] --&gt; API[&quot;Sync API&quot;]
+    D2[&quot;Device B&quot;] --&gt; API
+    API --&gt; META[(&quot;Metadata service&lt;br/&gt;files, versions, chunk lists&lt;br/&gt;STRONGLY consistent&quot;)]
+    API --&gt; CS{&quot;Chunk exists?&lt;br/&gt;(hash lookup)&quot;}
+    CS --&gt;|&quot;no&quot;| UP[&quot;Presigned upload&quot;]
+    UP --&gt; OS[(&quot;Chunk store&lt;br/&gt;object storage, immutable&quot;)]
+    CS --&gt;|&quot;yes&quot;| SKIP[&quot;Skip -- dedup hit&quot;]
+    META --&gt; NOTIF[[&quot;Change notification&lt;br/&gt;long-poll / WebSocket&quot;]]
+    NOTIF --&gt; D2
+    META --&gt; IDX[&quot;Sharing / ACL service&quot;]</pre><p><strong>The upload flow, where dedup pays off:</strong></p>
+<pre class="code"><code>1. Client chunks the file locally, computes hashes
+2. Client asks: &quot;which of these hashes do you already have?&quot;
+3. Server answers -- often MOST of them
+4. Client uploads only the missing chunks, via presigned URLs
+5. Client commits the new file version: name -&gt; ordered hash list
+6. Metadata service bumps the version, notifies other devices</code></pre><blockquote>
+<p><strong>Step 2 is what makes the &quot;upload a 4 GB file that already exists&quot; case
+instant</strong>, and it is a satisfying thing to say out loud. The client never sends
+bytes the system already has — from any user.</p>
+</blockquote>
+<p><strong>The metadata service is the source of truth and is strongly consistent.</strong>
+File-to-chunk mappings, versions and ACLs are small, hot, and must never be
+wrong. Shard by <code>user_id</code> so a user&#39;s namespace is single-shard, keeping the
+common transactions local.</p>
+<p><strong>Change notification</strong> is long-poll or WebSocket per device. On reconnect, a
+device asks &quot;what changed since version N?&quot; — a cursor, not a full resync.</p>
+<hr>
+<h2 id="5-conflicts"><a class="anchor" href="#5-conflicts">#</a>5 · Conflicts</h2><p><strong>Two devices edit the same file offline. This will happen, and the requirement
+says nothing may be silently lost.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Strategy</th><th>Behaviour</th><th>Verdict</th></tr></thead><tbody><tr><td>Last write wins</td><td>Newest timestamp overwrites</td><td>✗ <strong>Silently destroys work</strong>, and clocks are unreliable</td></tr><tr><td>Lock the file</td><td>One editor at a time</td><td>✗ Breaks offline editing entirely</td></tr><tr><td><strong>Conflicted copy</strong></td><td>Keep both, rename one</td><td>✓ <strong>What Dropbox does</strong></td></tr><tr><td>Operational transform / CRDT</td><td>Merge automatically</td><td>✓ For structured docs; not for arbitrary binaries</td></tr></tbody></table></div><p><strong>Detection uses version vectors, not timestamps:</strong></p>
+<pre class="code"><code>Each file version records the version it was DERIVED from.
+
+  Device A: v3 -&gt; v4   (parent v3)
+  Device B: v3 -&gt; v4&#39;  (parent v3)     &lt;- both claim v3 as parent
+
+Same parent, two children = concurrent edit, not a sequence.
+No clock needed -- causality is recorded structurally.</code></pre><blockquote>
+<p><strong>Timestamps cannot detect this</strong>, and that is the point worth making: device
+clocks disagree, and even correct clocks cannot distinguish &quot;edited after&quot; from
+&quot;edited concurrently without knowing&quot;. A parent pointer records causality
+directly, which is why version vectors are the mechanism rather than an
+alternative to timestamps.</p>
+</blockquote>
+<p><strong>On conflict: keep both.</strong> <code>report.docx</code> and <code>report (Device B&#39;s conflicted copy).docx</code>.
+It is not elegant, but it is honest — the system cannot know which edit the user
+wants, so it refuses to guess and surfaces the decision. <strong>Explaining <em>why</em> the
+inelegant answer is correct is a strong move.</strong></p>
+<hr>
+<h2 id="6-deep-dive-material"><a class="anchor" href="#6-deep-dive-material">#</a>6 · Deep dive material</h2><h3 id="the-client"><a class="anchor" href="#the-client">#</a>The client</h3><p>More of the engineering than people expect:</p>
+<div class="table-scroll"><table><thead><tr><th>Component</th><th>Job</th></tr></thead><tbody><tr><td>Watcher</td><td>OS filesystem events (inotify / FSEvents / ReadDirectoryChangesW)</td></tr><tr><td>Indexer</td><td>Local database of path → chunk list, mtime, size</td></tr><tr><td>Chunker</td><td>Content-defined splitting, hashing</td></tr><tr><td>Queue</td><td>Ordered, resumable, prioritised upload/download</td></tr><tr><td>Reconciler</td><td>Compare local index against server; produce a change set</td></tr></tbody></table></div><p><strong>Debounce filesystem events.</strong> An application saving a file may generate a dozen
+events in a second — write, rename, truncate, write. Syncing each one wastes
+bandwidth and creates spurious versions.</p>
+<h3 id="sharing"><a class="anchor" href="#sharing">#</a>Sharing</h3><pre class="code"><code>ACL on the file/folder, checked by the metadata service.
+Because chunks are content-addressed and immutable, sharing costs
+NOTHING in storage -- both users&#39; metadata points at the same hashes.
+
+Inherited permissions on folders; explicit grants override.</code></pre><p><strong>Access control lives entirely in metadata.</strong> The chunk store is a dumb
+key-value of immutable blobs, and knowing a hash is not authorisation — the
+metadata service is what decides who may resolve which hashes.</p>
+<h3 id="large-files-and-resumability"><a class="anchor" href="#large-files-and-resumability">#</a>Large files and resumability</h3><p>Multipart upload with per-chunk retry. Because chunks are content-addressed,
+<strong>resuming is free</strong>: the client re-asks which hashes exist and uploads the
+remainder. An interrupted 10 GB upload never restarts from zero.</p>
+<h3 id="storage-tiering"><a class="anchor" href="#storage-tiering">#</a>Storage tiering</h3><p>Most files are never read after the first week. Lifecycle-tier cold chunks to
+archive storage; keep the metadata hot so the file still <em>appears</em> instantly
+even if the bytes take longer to retrieve.</p>
+<hr>
+<h2 id="7-failure-and-wrap"><a class="anchor" href="#7-failure-and-wrap">#</a>7 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Metadata service</td><td>No sync; local edits queue</td><td>Local queue; replay on recovery</td></tr><tr><td>Chunk store partially unavailable</td><td>Some downloads fail</td><td>Replication; retry</td></tr><tr><td>Client crashes mid-upload</td><td>—</td><td>Content-addressed resume; nothing lost</td></tr><tr><td>Two devices conflict</td><td>—</td><td>Version vectors detect; conflicted copy preserves both</td></tr><tr><td>Client clock wrong</td><td>—</td><td><strong>Irrelevant</strong> — causality is structural, not temporal</td></tr><tr><td>Corrupted chunk</td><td>—</td><td>Hash verification catches it on read</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: content-defined chunking with content-addressed storage, which gives
+deduplication, delta sync, integrity and resumability from one decision.
+Metadata is small, hot and strongly consistent, sharded by user; bytes are
+large, immutable and in object storage — opposite properties, so different
+systems. Conflicts are detected with version vectors rather than timestamps,
+because clocks cannot distinguish concurrent from sequential, and resolved by
+keeping both copies since the requirement says we may never silently lose an
+edit.</em></p>
+<p><em>The thing I&#39;d validate is the dedup rate — the storage estimate assumes 30–50%,
+and if client-side encryption were required that drops to nearly zero, which
+would roughly double the storage bill. That is a genuine privacy-versus-cost
+decision rather than a technical one.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="8-follow-ups"><a class="anchor" href="#8-follow-ups">#</a>8 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;A user changes one word in a 10 MB document.&quot;</td><td>Only the affected chunk re-uploads — typically under 100 KB. That is delta sync, and it comes free from content-addressed chunking rather than being a separate mechanism.</td></tr><tr><td>⭐ &quot;Fixed or content-defined chunks?&quot;</td><td>Content-defined. With fixed boundaries, inserting one byte at the start of a file shifts every subsequent boundary and changes every hash, so you re-upload the whole file. A rolling-hash boundary depends on content, so only the affected chunk changes.</td></tr><tr><td>⭐ &quot;Two devices edit offline. What happens?&quot;</td><td>Both versions record the same parent version, so the server sees two children of one parent and knows the edits were concurrent. Timestamps cannot tell you that. Then keep both — a conflicted copy — because the requirement is never to silently lose an edit, and the system cannot know which one the user wants.</td></tr><tr><td>&quot;Why not last write wins?&quot;</td><td>It silently destroys work and the winner is decided by device clocks that disagree. For a file sync product that is a data-loss bug, not a consistency trade-off.</td></tr><tr><td>&quot;How do you make sharing cheap?&quot;</td><td>Content-addressed chunks mean shared files are stored once and both users&#39; metadata points at the same hashes. Sharing is purely a metadata and ACL operation with zero storage cost.</td></tr><tr><td>&quot;Upload a file that already exists.&quot;</td><td>Near-instant. The client sends hashes first and asks which are missing; if none are, it just commits the metadata. No bytes cross the wire.</td></tr><tr><td>&quot;What if the client&#39;s clock is wrong?&quot;</td><td>It does not matter — ordering comes from parent-version pointers, not time. That is precisely why version vectors are used instead of timestamps.</td></tr><tr><td>&quot;How do you handle a 10 GB file?&quot;</td><td>Chunked multipart with per-chunk retry, and resumption is free because the client can always re-ask which hashes exist. An interrupted transfer never restarts from zero.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>separate metadata from bytes on their opposite properties,</li>
+<li>explain content-defined chunking with the prepended-byte example,</li>
+<li>list the four things content addressing gives you at once,</li>
+<li>explain version vectors and why timestamps cannot detect concurrency,</li>
+<li>defend conflicted copies as the correct inelegant answer, and</li>
+<li>name the encryption-versus-dedup trade-off.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-video-streaming.html"><span>previous</span>Design a video platform</a><a class="pager next" href="numbers-to-know.html"><span>next</span>Numbers to know</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-chunking-and-content-addressing">3 · Chunking and content addressing</a></li><li class="d3"><a href="#fixed-versus-content-defined-chunking">Fixed versus content-defined chunking</a></li><li class="d2"><a href="#4-architecture">4 · Architecture</a></li><li class="d2"><a href="#5-conflicts">5 · Conflicts</a></li><li class="d2"><a href="#6-deep-dive-material">6 · Deep dive material</a></li><li class="d3"><a href="#the-client">The client</a></li><li class="d3"><a href="#sharing">Sharing</a></li><li class="d3"><a href="#large-files-and-resumability">Large files and resumability</a></li><li class="d3"><a href="#storage-tiering">Storage tiering</a></li><li class="d2"><a href="#7-failure-and-wrap">7 · Failure and wrap</a></li><li class="d2"><a href="#8-follow-ups">8 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

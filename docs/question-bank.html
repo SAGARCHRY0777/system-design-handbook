@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question bank · System Design Handbook</title>
+<meta name="description" content="Sixty prompts grouped by the pattern they test, with what each one is really asking and a four-week practice schedule.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html" class="active">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="question-bank"><a class="anchor" href="#question-bank">#</a>Question bank</h1><blockquote>
+<p><strong>Questions cluster into about eight shapes.</strong> Recognising the shape is most of
+the work — once you know a prompt is &quot;fan-out with a hot-key problem&quot;, the
+derivation is familiar even if the domain is new.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-eight-shapes"><a class="anchor" href="#1-the-eight-shapes">#</a>1 · The eight shapes</h2><div class="table-scroll"><table><thead><tr><th>Shape</th><th>Really tests</th><th>Canonical</th></tr></thead><tbody><tr><td><strong>Read-heavy key lookup</strong></td><td>Caching, CDN, sharding by key</td><td>URL shortener, pastebin</td></tr><tr><td><strong>Fan-out</strong></td><td>Push vs pull, hot keys, amplification</td><td>News feed, notifications</td></tr><tr><td><strong>Connection-oriented</strong></td><td>Stateful gateways, routing, presence</td><td>Chat, collaborative editing</td></tr><tr><td><strong>Strong consistency</strong></td><td>Locking, transactions, reservations</td><td>Ticketing, payments, inventory</td></tr><tr><td><strong>Large media</strong></td><td>Object storage, CDN, pipelines, cost</td><td>Video, photos, file sync</td></tr><tr><td><strong>Crawl / ingest</strong></td><td>Queues, politeness, dedup, scheduling</td><td>Web crawler, log ingestion</td></tr><tr><td><strong>Search / ranking</strong></td><td>Inverted indexes, sync, two-stage retrieval</td><td>Search, typeahead, feed ranking</td></tr><tr><td><strong>Geospatial</strong></td><td>Spatial indexing, proximity, matching</td><td>Ride-hailing, nearby, delivery</td></tr></tbody></table></div><p><strong>When you get an unfamiliar prompt, classify it first.</strong> <em>&quot;This is essentially a
+fan-out problem with a hot-key case&quot;</em> both orients you and shows the interviewer
+you are reasoning from structure.</p>
+<hr>
+<h2 id="2-the-prompts"><a class="anchor" href="#2-the-prompts">#</a>2 · The prompts</h2><h3 id="read-heavy-key-lookup"><a class="anchor" href="#read-heavy-key-lookup">#</a>Read-heavy key lookup</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>URL shortener</strong></td><td>Unique ID generation; is it enumerable?</td></tr><tr><td>Pastebin</td><td>Same, plus expiry and large text bodies</td></tr><tr><td>Key-value store</td><td>Consistent hashing, replication, quorums</td></tr><tr><td>Distributed cache</td><td>Eviction, hot keys, consistent hashing</td></tr><tr><td><strong>API rate limiter</strong></td><td>Algorithm choice, distributed counting, fail-open</td></tr><tr><td>Unique ID generator</td><td>Snowflake; clock skew; coordination-free</td></tr><tr><td>Leaderboard / top-k</td><td>Sorted sets, approximate counting, heavy hitters</td></tr><tr><td>Counting service (views)</td><td>Hot-row contention, sharded counters, sampling</td></tr></tbody></table></div><h3 id="fan-out"><a class="anchor" href="#fan-out">#</a>Fan-out</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>Twitter / news feed</strong></td><td>Push vs pull; celebrity hybrid</td></tr><tr><td>Instagram</td><td>Same, plus media pipeline</td></tr><tr><td><strong>Notification system</strong></td><td>Multi-channel, provider limits, dedupe</td></tr><tr><td>Email service</td><td>Bounces, reputation, retry classification</td></tr><tr><td>Live comments</td><td>Fan-out at very low latency</td></tr><tr><td>Activity feed</td><td>Aggregation and grouping (&quot;3 people liked…&quot;)</td></tr></tbody></table></div><h3 id="connection-oriented"><a class="anchor" href="#connection-oriented">#</a>Connection-oriented</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>Chat / WhatsApp</strong></td><td>WebSockets, routing registry, ordering, presence</td></tr><tr><td>Slack</td><td>Channels, large groups, read state</td></tr><tr><td>Collaborative editor</td><td>OT or CRDTs; conflict-free merging</td></tr><tr><td>Multiplayer game backend</td><td>State sync, tick rate, lag compensation</td></tr><tr><td>Video call signalling</td><td>WebRTC, TURN, session negotiation</td></tr></tbody></table></div><h3 id="strong-consistency"><a class="anchor" href="#strong-consistency">#</a>Strong consistency</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>Ticketmaster / seat booking</strong></td><td>Optimistic locking, holds, waiting room</td></tr><tr><td>Hotel / flight reservation</td><td>Same, plus multi-resource transactions</td></tr><tr><td><strong>Payment system</strong></td><td>Idempotency, ledgers, reconciliation</td></tr><tr><td>Inventory management</td><td>Oversell prevention vs compensation</td></tr><tr><td>Digital wallet</td><td>Double-entry ledger, atomic transfer</td></tr><tr><td>Distributed lock service</td><td>Fencing, lease expiry, why it is hard</td></tr><tr><td>Auction system</td><td>Bid ordering, closing-time contention</td></tr></tbody></table></div><h3 id="large-media"><a class="anchor" href="#large-media">#</a>Large media</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>YouTube / Netflix</strong></td><td>Transcoding DAG, ABR, egress cost</td></tr><tr><td><strong>Dropbox / Google Drive</strong></td><td>Chunking, delta sync, conflicts</td></tr><tr><td>Photo sharing</td><td>Presigned upload, variants, CDN</td></tr><tr><td>Podcast / audio</td><td>Simpler pipeline, offline download</td></tr><tr><td>Backup service</td><td>Dedup, incremental, restore time</td></tr></tbody></table></div><h3 id="crawl-ingest"><a class="anchor" href="#crawl-ingest">#</a>Crawl / ingest</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>Web crawler</strong></td><td>Politeness frontier, Bloom filter, traps</td></tr><tr><td>Log ingestion / metrics</td><td>High write volume, aggregation, retention</td></tr><tr><td>Analytics pipeline</td><td>Batch vs stream, exactly-once, late data</td></tr><tr><td>Price scraper</td><td>Politeness, scheduling, change detection</td></tr><tr><td>ETL / data warehouse</td><td>Partitioning, columnar storage, backfill</td></tr></tbody></table></div><h3 id="search-ranking"><a class="anchor" href="#search-ranking">#</a>Search / ranking</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>Search engine</strong></td><td>Inverted index, ranking, index sync</td></tr><tr><td><strong>Typeahead</strong></td><td>Trie with precomputed top-k, latency budget</td></tr><tr><td>Product search</td><td>Faceting, filtering, relevance tuning</td></tr><tr><td>Recommendation system</td><td>Candidate generation then ranking</td></tr><tr><td>Trending topics</td><td>Sliding windows, approximate counting</td></tr></tbody></table></div><h3 id="geospatial"><a class="anchor" href="#geospatial">#</a>Geospatial</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td><strong>Uber / ride-hailing</strong></td><td>Geohash or S2, matching, location updates</td></tr><tr><td>Food delivery</td><td>Same, plus multi-party state machine</td></tr><tr><td>Nearby / Yelp</td><td>Spatial index, radius query</td></tr><tr><td>Proximity alerts</td><td>Geofencing at scale</td></tr><tr><td>Maps / routing</td><td>Graph algorithms, precomputed contractions</td></tr></tbody></table></div><h3 id="infrastructure"><a class="anchor" href="#infrastructure">#</a>Infrastructure</h3><div class="table-scroll"><table><thead><tr><th>Prompt</th><th>Really asking</th></tr></thead><tbody><tr><td>Job scheduler / cron</td><td>Exactly-once execution, leader election</td></tr><tr><td>CI/CD system</td><td>Queues, isolation, artefact storage</td></tr><tr><td>Feature flag service</td><td>Low-latency reads, gradual rollout</td></tr><tr><td>Config service</td><td>Consistency, watch/notify, caching</td></tr><tr><td>Metrics &amp; alerting</td><td>Time-series storage, downsampling, rules</td></tr><tr><td>Service discovery</td><td>Registry, health, propagation delay</td></tr></tbody></table></div><hr>
+<h2 id="3-fifteen-to-actually-do"><a class="anchor" href="#3-fifteen-to-actually-do">#</a>3 · Fifteen to actually do</h2><p><strong>In this order.</strong> Each adds something the previous ones did not.</p>
+<div class="table-scroll"><table><thead><tr><th>#</th><th>Design</th><th>Adds</th></tr></thead><tbody><tr><td>1</td><td>URL shortener</td><td>Framework, ID generation, cache-first</td></tr><tr><td>2</td><td>Rate limiter</td><td>Algorithms, distributed counting</td></tr><tr><td>3</td><td><strong>News feed</strong></td><td>Fan-out, hot keys, the canonical question</td></tr><tr><td>4</td><td><strong>Chat</strong></td><td>Stateful connections, ordering</td></tr><tr><td>5</td><td><strong>Ticketing</strong></td><td>Strong consistency, locking</td></tr><tr><td>6</td><td>Photo sharing</td><td>Object storage, CDN, presigned upload</td></tr><tr><td>7</td><td>Web crawler</td><td>Queues, politeness, dedup structures</td></tr><tr><td>8</td><td>Typeahead</td><td>Latency budget, precomputation</td></tr><tr><td>9</td><td><strong>Video platform</strong></td><td>Pipelines, bandwidth economics</td></tr><tr><td>10</td><td>File sync</td><td>Chunking, conflict resolution</td></tr><tr><td>11</td><td>Notifications</td><td>Third parties, bulkheads, tiers</td></tr><tr><td>12</td><td><strong>Payment system</strong></td><td>Idempotency, ledgers, reconciliation</td></tr><tr><td>13</td><td>Uber</td><td>Geospatial indexing, matching</td></tr><tr><td>14</td><td>Metrics system</td><td>Time-series, downsampling, cardinality</td></tr><tr><td>15</td><td>Job scheduler</td><td>Leader election, exactly-once execution</td></tr></tbody></table></div><p><strong>The bolded six cover most of the shape space.</strong> If you only do six, do those.</p>
+<hr>
+<h2 id="4-a-four-week-schedule"><a class="anchor" href="#4-a-four-week-schedule">#</a>4 · A four-week schedule</h2><p><strong>Week 1 — the method</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Day</th><th>Do</th></tr></thead><tbody><tr><td>1</td><td>Read the framework. Write the six phases from memory.</td></tr><tr><td>2</td><td>Requirements &amp; scope. Practise the opening on three prompts, out loud.</td></tr><tr><td>3</td><td>Estimation. Memorise the numbers; do five estimates.</td></tr><tr><td>4</td><td>Design #1 (URL shortener) — yourself first, then read.</td></tr><tr><td>5</td><td>Design #2 (rate limiter).</td></tr><tr><td>6</td><td>Building blocks: load balancing, caching.</td></tr><tr><td>7</td><td>Rest, or redo design #1 from scratch.</td></tr></tbody></table></div><p><strong>Week 2 — blocks and the canonical designs</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Day</th><th>Do</th></tr></thead><tbody><tr><td>8</td><td>Queues &amp; streams.</td></tr><tr><td>9</td><td>Databases &amp; indexes.</td></tr><tr><td>10</td><td>Sharding + replication.</td></tr><tr><td>11</td><td><strong>Design #3 (news feed)</strong> — the big one.</td></tr><tr><td>12</td><td>Redo #3 from a blank page. Compare.</td></tr><tr><td>13</td><td><strong>Design #4 (chat).</strong></td></tr><tr><td>14</td><td>CDN &amp; object storage; design #6 (photo sharing).</td></tr></tbody></table></div><p><strong>Week 3 — the hard parts</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Day</th><th>Do</th></tr></thead><tbody><tr><td>15</td><td>CAP &amp; consistency models.</td></tr><tr><td>16</td><td>Idempotency.</td></tr><tr><td>17</td><td><strong>Design #5 (ticketing)</strong> — strong consistency.</td></tr><tr><td>18</td><td>Failure &amp; resilience.</td></tr><tr><td>19</td><td><strong>Design #12 (payments).</strong></td></tr><tr><td>20</td><td>Observability; add monitoring to two earlier designs.</td></tr><tr><td>21</td><td><strong>Mock interview.</strong> Non-negotiable.</td></tr></tbody></table></div><p><strong>Week 4 — fluency</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Day</th><th>Do</th></tr></thead><tbody><tr><td>22–25</td><td>One design per day, timed at 45 minutes, out loud, standing</td></tr><tr><td>26</td><td>Anti-patterns; review your recordings for them</td></tr><tr><td>27</td><td>Second mock</td></tr><tr><td>28</td><td>Checklist and numbers only. No new material.</td></tr></tbody></table></div><hr>
+<h2 id="5-how-to-practise-alone"><a class="anchor" href="#5-how-to-practise-alone">#</a>5 · How to practise alone</h2><p><strong>Rehearsal has to look like the round or it does not transfer.</strong></p>
+<pre class="code"><code>[ ] Set a 45-minute timer. Do not pause it.
+[ ] Stand at a whiteboard or use a blank digital canvas. Not an editor.
+[ ] Speak out loud the entire time. Record yourself.
+[ ] Do NOT look anything up mid-design.
+[ ] Afterwards, listen back and mark:
+      - did you scope before designing?
+      - did an estimate change a decision?
+      - can you trace each choice to a requirement?
+      - did you go three levels deep anywhere?
+      - did you volunteer a weakness?
+      - how much dead silence?</code></pre><p><strong>Listening back is uncomfortable and it is the highest-value thirty minutes in
+the whole schedule.</strong> You will hear filler, hedging, and unjustified choices that
+you had no idea were there.</p>
+<p><strong>Then read the write-up and mark only where you differed and why.</strong> Places you
+matched teach nothing.</p>
+<hr>
+<h2 id="6-judging-yourself"><a class="anchor" href="#6-judging-yourself">#</a>6 · Judging yourself</h2><div class="table-scroll"><table><thead><tr><th>Signal</th><th>Where you are</th></tr></thead><tbody><tr><td>Cannot start without the framework in front of you</td><td>Keep drilling the framework</td></tr><tr><td>Can produce a design but not defend the choices</td><td>Practise &quot;why not the alternative?&quot; on every decision</td></tr><tr><td>Can defend choices but run out of time</td><td>Timebox scoping harder; be drawing by minute 13</td></tr><tr><td>Reach the deep dive with time left</td><td><strong>Ready</strong> — now add depth on one component</td></tr><tr><td>Volunteer weaknesses unprompted</td><td>Interviewing above the bar</td></tr></tbody></table></div></article>
+    <div class="pager-row"><a class="pager previous" href="checklist.html"><span>previous</span>The checklist</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-eight-shapes">1 · The eight shapes</a></li><li class="d2"><a href="#2-the-prompts">2 · The prompts</a></li><li class="d3"><a href="#read-heavy-key-lookup">Read-heavy key lookup</a></li><li class="d3"><a href="#fan-out">Fan-out</a></li><li class="d3"><a href="#connection-oriented">Connection-oriented</a></li><li class="d3"><a href="#strong-consistency">Strong consistency</a></li><li class="d3"><a href="#large-media">Large media</a></li><li class="d3"><a href="#crawl-ingest">Crawl / ingest</a></li><li class="d3"><a href="#search-ranking">Search / ranking</a></li><li class="d3"><a href="#geospatial">Geospatial</a></li><li class="d3"><a href="#infrastructure">Infrastructure</a></li><li class="d2"><a href="#3-fifteen-to-actually-do">3 · Fifteen to actually do</a></li><li class="d2"><a href="#4-a-four-week-schedule">4 · A four-week schedule</a></li><li class="d2"><a href="#5-how-to-practise-alone">5 · How to practise alone</a></li><li class="d2"><a href="#6-judging-yourself">6 · Judging yourself</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a video platform · System Design Handbook</title>
+<meta name="description" content="Upload, the transcoding pipeline as a DAG, HLS/DASH and adaptive bitrate, why the CDN is the architecture, and live streaming&#39;s different constraints.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html" class="active">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-video-platform"><a class="anchor" href="#design-a-video-platform">#</a>Design a video platform</h1><blockquote>
+<p><strong>The design where bandwidth and cost dominate, not QPS.</strong> YouTube, Netflix,
+Twitch. The interesting parts are the transcoding pipeline and the fact that
+the CDN is not an optimisation — it is the product&#39;s delivery mechanism.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- upload a video                  - recommendations
+- transcode to multiple qualities - comments, social graph
+- stream with adaptive bitrate    - monetisation
+- browse / watch                  - DRM internals (mention it)
+
+NON-FUNCTIONAL
+- 100M DAU, 5M uploads/day, 1B views/day
+- playback start &lt; 2s; NO rebuffering  &lt;- the quality bar users judge
+- upload may take minutes to process (async is fine)
+- watch is read-heavy and globally distributed
+- cost matters enormously          &lt;- state this explicitly</code></pre><blockquote>
+<p><strong>Say &quot;cost is a first-class requirement&quot; during scoping.</strong> In most designs it
+is implicit; here egress can be the largest line item in the company, and
+naming it early justifies decisions you will make later.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>UPLOADS  5M/day = ~60/s.  Trivially small.
+
+STORAGE  5M/day x 10 min avg x 50 MB/min  = 2.5 PB/day of SOURCE
+         transcoding to ~6 renditions adds roughly 1.5x
+         -&gt; ~6 PB/day ingested+derived, ~2 EB/year
+         -&gt; tiering and lifecycle policies are mandatory
+
+TRANSCODE COMPUTE
+  ~1x realtime per rendition per core (roughly)
+  5M videos x 10 min x 6 renditions = 300M minutes/day of encoding
+  / 1,440 min/day = ~208,000 cores running flat out
+  -&gt; massive, bursty, interruptible -&gt; SPOT/preemptible instances
+
+BANDWIDTH   &lt;- the number that decides the architecture
+  1B views/day x 5 min avg watched x 3 Mbps
+  = 1e9 x 300s x 3 Mbit = 9e11 Mbit/day = ~112 PB/day
+  average egress ~= 10 Tbps, peak far higher
+
+CONCLUSION
+  - 60 uploads/s is nothing; the write path is easy
+  - Transcoding is the compute cost -&gt; parallelise by CHUNK, use spot
+  - 10 Tbps of egress cannot come from origin. The CDN IS the architecture.
+  - Storage is measured in exabytes -&gt; lifecycle tiering is not optional</code></pre><p><strong>The 10 Tbps figure is the one to land on.</strong> No origin serves that; therefore
+everything about delivery is CDN-shaped, and saying so converts a component into
+a conclusion.</p>
+<hr>
+<h2 id="3-the-upload-and-transcode-pipeline"><a class="anchor" href="#3-the-upload-and-transcode-pipeline">#</a>3 · The upload and transcode pipeline</h2><pre class="mermaid">flowchart TD
+    C[&quot;Client&quot;] --&gt;|&quot;presigned multipart PUT&quot;| S3[(&quot;Raw store&quot;)]
+    C --&gt; API[&quot;Upload API&lt;br/&gt;metadata&quot;]
+    API --&gt; DB[(&quot;Video metadata&quot;)]
+    S3 --&gt; EV[&quot;Object-created event&quot;]
+    EV --&gt; ORCH[&quot;Transcode orchestrator&quot;]
+
+    ORCH --&gt; SPLIT[&quot;Split into&lt;br/&gt;~10s chunks&quot;]
+    SPLIT --&gt; W1[&quot;Worker: 240p&quot;]
+    SPLIT --&gt; W2[&quot;Worker: 480p&quot;]
+    SPLIT --&gt; W3[&quot;Worker: 720p&quot;]
+    SPLIT --&gt; W4[&quot;Worker: 1080p&quot;]
+    W1 --&gt; ASM[&quot;Assemble +&lt;br/&gt;package HLS/DASH&quot;]
+    W2 --&gt; ASM
+    W3 --&gt; ASM
+    W4 --&gt; ASM
+
+    ORCH --&gt; TH[&quot;Thumbnails&quot;]
+    ORCH --&gt; MOD[&quot;Content moderation&lt;br/&gt;+ copyright match&quot;]
+
+    ASM --&gt; CDNS[(&quot;Processed store&quot;)]
+    CDNS --&gt; CDN[&quot;CDN&quot;]
+    ASM --&gt; PUB[&quot;Mark playable&quot;]
+    PUB --&gt; DB</pre><p><strong>The chunk-level parallelism is the key insight and worth deriving:</strong></p>
+<pre class="code"><code>A 60-minute video transcoded serially = ~60 minutes per rendition.
+Split into 10-second chunks -&gt; 360 independent units.
+360 chunks x 6 renditions = 2,160 tasks, all parallel.
+
+Wall-clock drops from an hour to minutes, bounded only by fleet size.
+
+This works because video codecs use closed GOPs -- split on keyframe
+boundaries and each chunk is independently decodable. Splitting
+anywhere else produces corrupt output.</code></pre><blockquote>
+<p><strong>&quot;Split on keyframe boundaries&quot; is the detail that makes this a real answer
+rather than a hand-wave.</strong> It is why the chunking is possible at all, and very
+few candidates say it.</p>
+</blockquote>
+<p><strong>Two more properties worth naming:</strong> transcoding is <strong>idempotent</strong> (rerunning a
+chunk produces the same output, so retries are free), and it is <strong>interruptible</strong>
+(a lost spot instance costs one chunk). Together they are why this workload can
+run at 70–90% discount on preemptible capacity — a genuine cost argument.</p>
+<p><strong>Publish progressively.</strong> Make 480p available as soon as it finishes rather than
+waiting for 4K. Users can watch while the rest encodes.</p>
+<hr>
+<h2 id="4-playback-and-adaptive-bitrate"><a class="anchor" href="#4-playback-and-adaptive-bitrate">#</a>4 · Playback and adaptive bitrate</h2><p><strong>HLS or DASH: the video is a manifest plus segments.</strong></p>
+<pre class="code"><code>master.m3u8
+  ├─ 240p/index.m3u8  -&gt; seg0.ts, seg1.ts, ...   (400 kbps)
+  ├─ 480p/index.m3u8  -&gt; ...                     (1 Mbps)
+  ├─ 720p/index.m3u8  -&gt; ...                     (3 Mbps)
+  └─ 1080p/index.m3u8 -&gt; ...                     (6 Mbps)
+
+The CLIENT measures its own throughput and buffer level and chooses
+which rendition to request for the NEXT segment. Quality adapts
+mid-playback with no server involvement.</code></pre><p><strong>Why this design wins, and it is worth stating:</strong> every segment is a plain,
+immutable HTTP GET. That means ordinary CDN caching works, no special streaming
+protocol or stateful server is needed, and it traverses firewalls like any web
+request. The intelligence sits in the client, where the network information
+actually is.</p>
+<div class="table-scroll"><table><thead><tr><th>Decision</th><th>Choice</th><th>Why</th></tr></thead><tbody><tr><td>Segment length</td><td>2–10 s</td><td>Shorter = faster adaptation and lower live latency; more requests and overhead</td></tr><tr><td>Start rendition</td><td>Low, then ramp</td><td><strong>Start time is what users judge</strong>; ramp up once buffered</td></tr><tr><td>Buffer target</td><td>30 s VOD</td><td>Absorbs network variation</td></tr><tr><td>Codec</td><td>H.264 baseline + AV1/HEVC</td><td>Compatibility plus 30–50% bandwidth saving on capable devices</td></tr></tbody></table></div><blockquote>
+<p><strong>Optimise for start time over initial quality.</strong> A 2-second start at 480p that
+ramps to 1080p beats a 6-second start at 1080p on every engagement metric.
+Saying that shows you understand the product measure, not just the technique.</p>
+</blockquote>
+<hr>
+<h2 id="5-the-cdn"><a class="anchor" href="#5-the-cdn">#</a>5 · The CDN</h2><p><strong>At 10 Tbps, this is the whole delivery design.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Aspect</th><th>Approach</th></tr></thead><tbody><tr><td>Strategy</td><td>Pull for the long tail; <strong>push for predictable launches</strong></td></tr><tr><td>Popularity</td><td>~1% of videos are ~90% of views — cache the head aggressively</td></tr><tr><td>Long tail</td><td>Regional mid-tier cache in front of origin; a cold view is acceptable</td></tr><tr><td>Cache key</td><td>Segment URL — immutable, so cache forever</td></tr><tr><td>Multi-CDN</td><td>Two providers for redundancy and negotiating leverage</td></tr><tr><td>ISP caches</td><td>Netflix&#39;s Open Connect model: appliances inside ISP networks</td></tr></tbody></table></div><p><strong>Push versus pull matters here more than anywhere else</strong>: a new episode of a
+popular series is watched by millions within minutes of release. Pull means every
+edge misses simultaneously and stampedes the origin. Pre-positioning it is the
+one case where push is clearly correct.</p>
+<p><strong>Private content</strong> uses signed segment URLs verified at the edge, with short
+expiries — the same mechanism as
+<a href="cdn-and-storage.html">CDN &amp; object storage</a>, and short per-segment expiries
+limit the value of a leaked link to seconds.</p>
+<hr>
+<h2 id="6-live-streaming-the-different-constraints"><a class="anchor" href="#6-live-streaming-the-different-constraints">#</a>6 · Live streaming — the different constraints</h2><p>Worth being able to contrast, because it is a common follow-up.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>VOD</th><th>Live</th></tr></thead><tbody><tr><td>Source</td><td>Uploaded file</td><td>Continuous ingest (RTMP/SRT)</td></tr><tr><td>Transcode</td><td>Batch, parallel by chunk</td><td><strong>Real-time — cannot fall behind</strong></td></tr><tr><td>Latency</td><td>Irrelevant</td><td>2–30 s typical; sub-second is hard</td></tr><tr><td>Buffer</td><td>30 s</td><td>2–6 s (small buffer = more rebuffering risk)</td></tr><tr><td>Failure</td><td>Retry the chunk</td><td><strong>The moment is gone</strong></td></tr><tr><td>CDN</td><td>Immutable segments</td><td>Short TTLs; the manifest changes constantly</td></tr></tbody></table></div><p><strong>The trade-off to state:</strong> low latency and playback stability are directly
+opposed. A small buffer means a network hiccup becomes a visible stall. Sports
+and auctions pay that cost; a concert stream should not.</p>
+<hr>
+<h2 id="7-failure-and-wrap"><a class="anchor" href="#7-failure-and-wrap">#</a>7 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Transcode worker</td><td>One chunk lost</td><td>Idempotent retry; spot loss is expected, not exceptional</td></tr><tr><td>Orchestrator</td><td>Jobs stall</td><td>Durable job state; resume from completed chunks</td></tr><tr><td>CDN edge</td><td>Regional degradation</td><td>Multi-CDN failover</td></tr><tr><td>Origin overloaded</td><td>Cold views fail</td><td>Mid-tier shield cache absorbs the fan-in</td></tr><tr><td>Storage region lost</td><td>Videos unavailable</td><td>Cross-region replication for popular content only — replicating exabytes uniformly is not affordable</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: uploads go straight to object storage via presigned multipart, then
+an event kicks off a transcode DAG that splits the video on keyframe boundaries
+into ten-second chunks and encodes them in parallel — which turns an hour of
+serial work into minutes and, because chunks are idempotent and interruptible,
+lets the whole fleet run on spot capacity. Playback is HLS with client-side
+adaptive bitrate, so every segment is an immutable HTTP GET that any CDN can
+cache with no streaming-specific infrastructure.</em></p>
+<p><em>The dominant constraint is not QPS, it is roughly 10 Tbps of egress, which is
+why the CDN is the architecture rather than an add-on, and why I&#39;d push
+pre-position popular releases rather than let every edge miss at once. The
+thing I&#39;d validate first is start-time latency — users judge the product on
+that more than on peak quality.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="8-follow-ups"><a class="anchor" href="#8-follow-ups">#</a>8 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;Why transcode into multiple qualities?&quot;</td><td>Devices and networks differ by orders of magnitude, and the client picks per segment based on measured throughput. Serving one high bitrate means either rebuffering on weak connections or wasting bandwidth on strong ones.</td></tr><tr><td>⭐ &quot;How do you transcode a 4-hour video quickly?&quot;</td><td>Split it on keyframe boundaries into ~10-second chunks and encode them in parallel — a 60-minute serial job becomes minutes, bounded by fleet size. Splitting elsewhere corrupts output because codecs need closed GOPs. Chunks are idempotent and interruptible, so this runs cheaply on preemptible instances.</td></tr><tr><td>⭐ &quot;How does adaptive bitrate work?&quot;</td><td>The manifest lists renditions; the client measures throughput and buffer occupancy and requests the next segment at an appropriate quality. The server does nothing special — every segment is an immutable HTTP GET, which is exactly why ordinary CDN caching works.</td></tr><tr><td>&quot;What dominates cost?&quot;</td><td>Egress, by a wide margin, then transcode compute, then storage. That ordering is why the CDN, codec choice, and serving the right rendition matter more than anything on the origin side.</td></tr><tr><td>&quot;How would you cut bandwidth?&quot;</td><td>Better codecs — AV1 or HEVC save 30–50% on capable devices — plus per-title encoding, which tunes the bitrate ladder to the content rather than using one fixed ladder. Animation needs far less bitrate than a sports broadcast.</td></tr><tr><td>⭐ &quot;How is live different?&quot;</td><td>Transcoding must keep real time, the buffer shrinks to a few seconds so a hiccup becomes a visible stall, and a failed segment cannot be retried because the moment has passed. Low latency and stability are directly opposed, so the target depends on the content.</td></tr><tr><td>&quot;What about the long tail?&quot;</td><td>Most videos are watched almost never, so they should not occupy edge cache. Pull-through with a regional shield cache in front of origin, and accept a slower first play for cold content.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>identify egress rather than QPS as the binding constraint,</li>
+<li>derive chunk-parallel transcoding <em>and</em> say why keyframe boundaries matter,</li>
+<li>connect idempotent + interruptible to spot instances as a cost argument,</li>
+<li>explain adaptive bitrate and why it needs no special server,</li>
+<li>justify push CDN for a predictable launch, and</li>
+<li>contrast live&#39;s constraints with VOD&#39;s.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-notifications.html"><span>previous</span>Design a notification system</a><a class="pager next" href="design-file-sync.html"><span>next</span>Design a file sync service</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-the-upload-and-transcode-pipeline">3 · The upload and transcode pipeline</a></li><li class="d2"><a href="#4-playback-and-adaptive-bitrate">4 · Playback and adaptive bitrate</a></li><li class="d2"><a href="#5-the-cdn">5 · The CDN</a></li><li class="d2"><a href="#6-live-streaming-the-different-constraints">6 · Live streaming — the different constraints</a></li><li class="d2"><a href="#7-failure-and-wrap">7 · Failure and wrap</a></li><li class="d2"><a href="#8-follow-ups">8 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

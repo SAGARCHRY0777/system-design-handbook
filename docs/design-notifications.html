@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a notification system · System Design Handbook</title>
+<meta name="description" content="Multi-channel delivery, template rendering, per-provider failure isolation, deduplication, user preferences, and why rate limiting users matters more than throughput.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html" class="active">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-notification-system"><a class="anchor" href="#design-a-notification-system">#</a>Design a notification system</h1><blockquote>
+<p><strong>The design that is mostly about other people&#39;s systems.</strong> Push, SMS and
+email all go through third parties with their own rate limits, failure modes
+and latencies. The interesting engineering is isolation, retries, and not
+annoying users.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- push (iOS/Android), SMS,        - in-app notification feed UI
+  email, in-app                   - marketing campaign management
+- templates + localisation        - analytics dashboards
+- user preferences / opt-out
+- scheduling + rate limiting
+- delivery tracking
+
+NON-FUNCTIONAL
+- 100M users, ~10M notifications/day, spikes to 50M
+- transactional (OTP, password reset): p99 &lt; 5s, MUST arrive
+- promotional: minutes are fine, best effort
+- NEVER send a duplicate the user can perceive
+- respect opt-out ABSOLUTELY (legal: GDPR, TCPA, CAN-SPAM)</code></pre><blockquote>
+<p><strong>The two-tier split — transactional versus promotional — is the framing move
+here</strong>, the same shape as the browse/book split in
+<a href="design-ticketing.html">ticketing</a>. They have different latency targets,
+different retry policies, and different consequences for failure. Designing one
+pipeline for both means either over-engineering the promotional path or
+under-serving the OTP.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>VOLUME  10M/day = ~120/s average.  Spike 50M in an hour = ~14,000/s
+
+  That is low. Throughput is NOT the problem.
+
+FAN-OUT SPIKE  one broadcast to 100M users
+  at 14,000/s that is ~2 hours to drain
+  -&gt; a broadcast must be a BATCH JOB feeding the queue, not a request
+
+PROVIDER LIMITS   &lt;- the real constraint
+  APNs / FCM:  high, but per-connection and per-topic limited
+  SMS:         often 100-1,000/s per short code -- ORDERS lower
+  Email:       reputation-dependent; sudden volume = spam folder
+
+CONCLUSION
+  - The bottleneck is PROVIDER rate limits, not our compute
+  - Each channel needs its own queue, workers and rate limiter
+  - Broadcasts must be decoupled from the delivery pipeline</code></pre><p><strong>&quot;Our throughput is fine; the providers are the constraint&quot; is the observation
+that shapes the design</strong>, and it is why per-channel isolation rather than one
+worker pool is the right structure.</p>
+<hr>
+<h2 id="3-architecture"><a class="anchor" href="#3-architecture">#</a>3 · Architecture</h2><pre class="mermaid">flowchart TD
+    S1[&quot;Services&quot;] --&gt; API[&quot;Notification API&lt;br/&gt;validate + dedupe&quot;]
+    S2[&quot;Batch / campaigns&quot;] --&gt; API
+    S3[&quot;Scheduler&quot;] --&gt; API
+
+    API --&gt; PREF{&quot;Preferences&lt;br/&gt;+ opt-out check&quot;}
+    PREF --&gt;|&quot;suppressed&quot;| DROP[&quot;Drop + record why&quot;]
+    PREF --&gt;|&quot;allowed&quot;| RL{&quot;Per-user&lt;br/&gt;rate limit&quot;}
+    RL --&gt;|&quot;over&quot;| DEFER[&quot;Defer / digest&quot;]
+    RL --&gt;|&quot;ok&quot;| T[&quot;Template render&lt;br/&gt;+ localise&quot;]
+
+    T --&gt; QP[[&quot;push queue&quot;]]
+    T --&gt; QS[[&quot;SMS queue&quot;]]
+    T --&gt; QE[[&quot;email queue&quot;]]
+    T --&gt; QI[[&quot;in-app queue&quot;]]
+
+    QP --&gt; WP[&quot;Push workers&quot;] --&gt; APNS[&quot;APNs / FCM&quot;]
+    QS --&gt; WS[&quot;SMS workers&quot;] --&gt; TW[&quot;Twilio&quot;]
+    QE --&gt; WE[&quot;Email workers&quot;] --&gt; SES[&quot;SES / SendGrid&quot;]
+
+    APNS --&gt; CB[&quot;Callbacks:&lt;br/&gt;delivered / bounced /&lt;br/&gt;invalid token&quot;]
+    CB --&gt; ST[(&quot;Delivery status&quot;)]
+    ST --&gt; CLEAN[&quot;Prune dead tokens,&lt;br/&gt;suppress bounces&quot;]</pre><p><strong>A separate queue and worker pool per channel is the central decision</strong>, and
+the reason is bulkheading: SMS provider degradation must not delay push
+notifications. One shared pool means the slowest provider sets everyone&#39;s
+latency — the exact failure mode from
+<a href="failure-and-resilience.html">failure &amp; resilience</a>.</p>
+<hr>
+<h2 id="4-the-pieces-that-matter"><a class="anchor" href="#4-the-pieces-that-matter">#</a>4 · The pieces that matter</h2><h3 id="preferences-and-opt-out"><a class="anchor" href="#preferences-and-opt-out">#</a>Preferences and opt-out</h3><p><strong>Check before doing any work</strong>, and treat suppression as absolute.</p>
+<pre class="code"><code>Evaluate in order, most specific wins:
+  1. Global opt-out          -&gt; stop. Legal obligation.
+  2. Channel opt-out         (&quot;no SMS&quot;)
+  3. Category opt-out        (&quot;no marketing&quot;, but keep security alerts)
+  4. Quiet hours             (user&#39;s timezone -&gt; defer, don&#39;t drop)
+  5. Frequency cap           (e.g. max 5 promotional/day)</code></pre><blockquote>
+<p><strong>Transactional notifications must bypass most of this</strong>, and saying so shows
+product judgement: a password-reset code or a fraud alert goes out regardless
+of marketing preferences and quiet hours. Conflating the two either spams
+people or blocks their security codes — both are real failures.</p>
+</blockquote>
+<p><strong>A suppression list is append-mostly and must be authoritative.</strong> Cache it, but
+fail closed: if you cannot verify a user is opted in, do not send. This is the
+one place in the handbook where fail-closed is correct — the cost of a wrongly
+sent message is legal, and the cost of a missed promotional message is nothing.</p>
+<h3 id="deduplication"><a class="anchor" href="#deduplication">#</a>Deduplication</h3><p>Users perceive duplicates immediately, and the causes are mundane:</p>
+<div class="table-scroll"><table><thead><tr><th>Cause</th><th>Fix</th></tr></thead><tbody><tr><td>At-least-once queue delivery</td><td>Idempotency key per notification</td></tr><tr><td>Producer retries</td><td>Client-supplied <code>dedupe_key</code></td></tr><tr><td>Multiple triggers for one event</td><td>Dedupe window on <code>(user, category, entity)</code></td></tr><tr><td>Multiple devices</td><td>Intentional — but coordinate so tapping one clears the rest</td></tr></tbody></table></div><pre class="code"><code>dedupe_key = hash(user_id, template_id, entity_id, time_bucket)
+SETNX dedupe:{key} with a TTL of the dedupe window</code></pre><p><strong>Same mechanism as <a href="idempotency.html">idempotency</a></strong> — the atomic claim is what
+makes it correct.</p>
+<h3 id="templates"><a class="anchor" href="#templates">#</a>Templates</h3><p>Store templates versioned, render at send time with a strict, sandboxed engine.</p>
+<p>Two details worth mentioning: <strong>localisation</strong> falls back through
+<code>fr-CA → fr → en</code>; and <strong>the render must be validated before enqueuing</strong> — a
+template error discovered in the worker becomes millions of dead-lettered
+messages instead of one failed request.</p>
+<h3 id="retries-per-channel"><a class="anchor" href="#retries-per-channel">#</a>Retries per channel</h3><p><strong>The retry policy differs by channel, and saying that is a good detail:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Channel</th><th>Retry</th><th>Why</th></tr></thead><tbody><tr><td>Push</td><td>3× with backoff</td><td>Cheap; invalid token is permanent — do not retry, prune it</td></tr><tr><td>SMS</td><td>2×, then give up</td><td>Costs money per attempt</td></tr><tr><td>Email</td><td>Retry over hours</td><td>Soft bounces are transient; <strong>hard bounces never retry</strong> — retrying them destroys sender reputation</td></tr><tr><td>In-app</td><td>None needed</td><td>It is a database row</td></tr></tbody></table></div><p><strong>Classify failures before retrying.</strong> A <code>400 invalid token</code> and a <code>503 provider overloaded</code> need opposite responses; retrying the first forever is how you end
+up with a permanently full dead-letter queue.</p>
+<hr>
+<h2 id="5-deep-dive-material"><a class="anchor" href="#5-deep-dive-material">#</a>5 · Deep dive material</h2><h3 id="handling-a-broadcast"><a class="anchor" href="#handling-a-broadcast">#</a>Handling a broadcast</h3><pre class="code"><code>&quot;Send to all 100M users&quot; must NOT be one request.
+
+1. Campaign created -&gt; stored, validated, template pre-rendered
+2. Batch job pages the audience (by user_id range) in chunks
+3. Each chunk -&gt; preference filter -&gt; per-channel queues
+4. Workers drain at provider-safe rates
+5. Progress and failures tracked per campaign; PAUSABLE
+
+Feeding 100M messages into a queue at once starves every transactional
+notification behind them -- which is why the queues are also PRIORITISED.</code></pre><blockquote>
+<p><strong>Priority queues per channel are the fix</strong>, and it is the concrete
+consequence of the two-tier split: an OTP must never queue behind a marketing
+blast. Either separate high/low queues per channel, or a priority field with
+weighted draining.</p>
+</blockquote>
+<h3 id="device-token-management"><a class="anchor" href="#device-token-management">#</a>Device token management</h3><p>Push tokens expire and rotate constantly. <strong>Providers tell you</strong> — APNs and FCM
+return invalid-token errors and feedback. Prune immediately; sending to dead
+tokens wastes quota and degrades your standing with the provider.</p>
+<h3 id="delivery-tracking"><a class="anchor" href="#delivery-tracking">#</a>Delivery tracking</h3><pre class="code"><code>queued -&gt; sent -&gt; delivered -&gt; opened
+                \-&gt; bounced / failed</code></pre><p>Only some channels report the later states, and honestly: push gives you &quot;sent
+to APNs&quot;, not &quot;the user saw it&quot;. <strong>Do not claim guarantees the channel cannot
+provide</strong> — say what each one actually reports.</p>
+<hr>
+<h2 id="6-failure-and-wrap"><a class="anchor" href="#6-failure-and-wrap">#</a>6 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>One provider down</td><td>That channel stalls</td><td>Circuit-break; <strong>separate queues mean other channels are unaffected</strong>; secondary provider for critical SMS/email</td></tr><tr><td>Provider rate-limits us</td><td>429s</td><td>Per-channel rate limiter tuned below their cap; backoff</td></tr><tr><td>Template bug</td><td>Bad content at scale</td><td>Validate at enqueue; canary a small percentage first</td></tr><tr><td>Preference service down</td><td>Risk of sending to opted-out users</td><td><strong>Fail closed</strong> — do not send</td></tr><tr><td>Queue backs up</td><td>Delayed notifications</td><td>Priority queues protect transactional; alert on lag per channel</td></tr><tr><td>Duplicate send</td><td>User annoyance, possible legal</td><td>Idempotency key with a dedupe window</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: one API, preference and dedupe checks up front, then per-channel
+queues and worker pools so a degraded SMS provider cannot delay push. Priority
+queues within each channel so an OTP never sits behind a marketing broadcast,
+which is the failure people actually experience. Retry policy is per channel
+and per failure class — hard email bounces are never retried because that
+damages sender reputation, and invalid push tokens are pruned rather than
+retried.</em></p>
+<p><em>The constraint here is not our throughput, it is provider rate limits, so our
+own limiters sit below their caps. And preferences fail closed: not sending a
+promotional message costs nothing, and sending to someone who opted out is a
+legal problem — that is the one place in this system where I&#39;d rather drop the
+message than risk it.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="7-follow-ups"><a class="anchor" href="#7-follow-ups">#</a>7 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;Push, SMS and email in one pipeline?&quot;</td><td>One API and preference layer, then separate queues and worker pools per channel. Sharing a pool means a degraded SMS provider adds latency to push — the classic missing-bulkhead failure.</td></tr><tr><td>⭐ &quot;How do you avoid duplicates?&quot;</td><td>A dedupe key over user, template, entity and a time bucket, claimed atomically with SETNX and a TTL. Queues are at-least-once, so duplicates are guaranteed to occur without it — and users notice immediately.</td></tr><tr><td>⭐ &quot;One OTP versus a 100M broadcast.&quot;</td><td>Different tiers. Broadcasts are batch jobs paging the audience into the queues; transactional messages go into a high-priority queue drained first. Without that separation, a campaign delays every password reset behind it.</td></tr><tr><td>&quot;A provider goes down.&quot;</td><td>Circuit-break it so we fail fast instead of holding workers, keep the queue so nothing is lost, and for critical channels fail over to a secondary provider. The other channels are unaffected because they have their own pools.</td></tr><tr><td>&quot;How do you handle retries?&quot;</td><td>By channel and by failure class. Transient 5xx backs off and retries; a permanent error like an invalid token or a hard email bounce is never retried — it is recorded and suppressed. Retrying hard bounces damages sender reputation.</td></tr><tr><td>&quot;How do you respect opt-outs?&quot;</td><td>Check before doing any work, most-specific rule first, and fail closed if the preference service is unavailable. Transactional messages bypass marketing preferences and quiet hours — a security code is not marketing.</td></tr><tr><td>&quot;How do you know it was delivered?&quot;</td><td>Only as far as the channel reports. Push tells you it reached APNs, not that the user saw it. Email gives bounces and opens; SMS gives carrier receipts. I&#39;d track a state machine per notification and be honest about where the guarantee ends.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>open with the transactional/promotional split,</li>
+<li>identify provider limits rather than throughput as the constraint,</li>
+<li>justify per-channel queues as bulkheads,</li>
+<li>give the preference evaluation order and the fail-closed argument,</li>
+<li>differentiate retry policy by channel and failure class, and</li>
+<li>explain why broadcasts must be batch jobs feeding prioritised queues.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-ticketing.html"><span>previous</span>Design a ticket booking system</a><a class="pager next" href="design-video-streaming.html"><span>next</span>Design a video platform</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-architecture">3 · Architecture</a></li><li class="d2"><a href="#4-the-pieces-that-matter">4 · The pieces that matter</a></li><li class="d3"><a href="#preferences-and-opt-out">Preferences and opt-out</a></li><li class="d3"><a href="#deduplication">Deduplication</a></li><li class="d3"><a href="#templates">Templates</a></li><li class="d3"><a href="#retries-per-channel">Retries per channel</a></li><li class="d2"><a href="#5-deep-dive-material">5 · Deep dive material</a></li><li class="d3"><a href="#handling-a-broadcast">Handling a broadcast</a></li><li class="d3"><a href="#device-token-management">Device token management</a></li><li class="d3"><a href="#delivery-tracking">Delivery tracking</a></li><li class="d2"><a href="#6-failure-and-wrap">6 · Failure and wrap</a></li><li class="d2"><a href="#7-follow-ups">7 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

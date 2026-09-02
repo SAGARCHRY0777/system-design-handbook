@@ -29,6 +29,44 @@ able to say before moving on.
 
 ---
 
+## Contents — 29 pages
+
+**Driving the round** — [the 45-minute framework](content/the-framework.md) ·
+[requirements & scope](content/requirements-and-scope.md) ·
+[estimation](content/estimation.md)
+
+**Building blocks** — [load balancing](content/load-balancing.md) ·
+[caching](content/caching.md) ·
+[queues & streams](content/queues-and-streams.md) ·
+[CDN & object storage](content/cdn-and-storage.md) ·
+[rate limiting](content/rate-limiting.md) ·
+[search & typeahead](content/search.md)
+
+**Data & storage** — [databases & indexes](content/databases.md) ·
+[sharding](content/sharding.md) ·
+[replication & consistency](content/replication-and-consistency.md)
+
+**Distributed systems** — [CAP & consistency models](content/cap-and-consistency.md) ·
+[idempotency & exactly-once](content/idempotency.md) ·
+[failure & resilience](content/failure-and-resilience.md) ·
+[observability](content/observability.md)
+
+**Worked designs** — [URL shortener](content/design-url-shortener.md) ·
+[news feed](content/design-news-feed.md) ·
+[chat](content/design-chat.md) ·
+[web crawler](content/design-web-crawler.md) ·
+[ticket booking](content/design-ticketing.md) ·
+[notifications](content/design-notifications.md) ·
+[video platform](content/design-video-streaming.md) ·
+[file sync](content/design-file-sync.md)
+
+**Reference** — [numbers to know](content/numbers-to-know.md) ·
+[anti-patterns](content/anti-patterns.md) ·
+[the checklist](content/checklist.md) ·
+[question bank](content/question-bank.md)
+
+---
+
 ## The one rule
 
 Design it yourself before reading the answer. Twenty minutes on a blank page,

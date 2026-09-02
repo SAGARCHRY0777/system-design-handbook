@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anti-patterns · System Design Handbook</title>
+<meta name="description" content="The twenty things that lose points, why each one loses them, and what to do instead.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html" class="active">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="anti-patterns"><a class="anchor" href="#anti-patterns">#</a>Anti-patterns</h1><blockquote>
+<p><strong>Most candidates do not fail on knowledge. They fail on behaviour</strong> — jumping
+to a solution, naming technologies without reasons, defending a choice instead
+of examining it. This page is the list.</p>
+</blockquote>
+<hr>
+<h2 id="1-process-anti-patterns"><a class="anchor" href="#1-process-anti-patterns">#</a>1 · Process anti-patterns</h2><h3 id="designing-before-scoping"><a class="anchor" href="#designing-before-scoping">#</a>Designing before scoping</h3><p><strong>The most common failure and the most expensive.</strong> Drawing boxes at minute two
+means you are solving a problem nobody agreed to.</p>
+<blockquote>
+<p><strong>Instead:</strong> five minutes of questions, in-scope and out-of-scope written on
+the board, and an explicit &quot;does that sound right?&quot;</p>
+</blockquote>
+<h3 id="waiting-to-be-led"><a class="anchor" href="#waiting-to-be-led">#</a>Waiting to be led</h3><p>If the interviewer has to ask &quot;what next?&quot; at every step, you failed the
+structure line whatever the design looked like.</p>
+<blockquote>
+<p><strong>Instead:</strong> state the plan at minute one, then narrate each transition — <em>&quot;OK,
+requirements are settled; let me do some quick estimates.&quot;</em></p>
+</blockquote>
+<h3 id="silent-thinking"><a class="anchor" href="#silent-thinking">#</a>Silent thinking</h3><p>Thirty seconds of silence reads as being stuck. The interviewer cannot score
+what they cannot hear.</p>
+<blockquote>
+<p><strong>Instead:</strong> narrate. <em>&quot;I&#39;m weighing whether to precompute or assemble on read
+— let me think about the read/write ratio.&quot;</em> Even the uncertainty is signal.</p>
+</blockquote>
+<h3 id="running-out-of-time-in-the-deep-dive"><a class="anchor" href="#running-out-of-time-in-the-deep-dive">#</a>Running out of time in the deep dive</h3><p>Everything before minute 25 is setup. Spending 20 minutes on requirements means
+you never reach the part being scored.</p>
+<blockquote>
+<p><strong>Instead:</strong> watch the clock. If you are at minute 25 with no diagram, say so
+and move.</p>
+</blockquote>
+<h3 id="never-reaching-failure"><a class="anchor" href="#never-reaching-failure">#</a>Never reaching failure</h3><p>Phase 6 is a rubric line most candidates never get to, and it is easy marks.</p>
+<blockquote>
+<p><strong>Instead:</strong> at minute 40, stop adding and start killing boxes.</p>
+</blockquote>
+<hr>
+<h2 id="2-technical-anti-patterns"><a class="anchor" href="#2-technical-anti-patterns">#</a>2 · Technical anti-patterns</h2><h3 id="over-engineering"><a class="anchor" href="#over-engineering">#</a>Over-engineering</h3><p>Multi-region, sharded, event-sourced — for 10,000 users.</p>
+<p><strong>Interviewers actively score this as a negative</strong>, because in real work it is
+expensive and slow. It signals someone who applies patterns rather than
+judgement.</p>
+<blockquote>
+<p><strong>Instead:</strong> <em>&quot;At this scale one Postgres primary handles it. I&#39;d shard when
+writes approach 5,000 a second, and the key would be X.&quot;</em> Naming the trigger
+is stronger than either building it or ignoring it.</p>
+</blockquote>
+<h3 id="name-dropping-without-reasons"><a class="anchor" href="#name-dropping-without-reasons">#</a>Name-dropping without reasons</h3><p>&quot;We&#39;ll use Kafka, Cassandra, Kubernetes, Elasticsearch&quot; with no justification is
+worse than saying nothing — it invites a follow-up you cannot answer.</p>
+<blockquote>
+<p><strong>Instead:</strong> name the <em>property</em>, then an example. <em>&quot;An append-only log with
+replay and consumer groups — Kafka, or Redis Streams if we already run Redis.&quot;</em></p>
+</blockquote>
+<h3 id="the-magic-box"><a class="anchor" href="#the-magic-box">#</a>The magic box</h3><p>A box labelled &quot;recommendation engine&quot; with no contents.</p>
+<blockquote>
+<p><strong>Instead:</strong> either go one level in, or scope it out explicitly. <em>&quot;I&#39;ll treat
+ranking as a black box scoring candidates — happy to go deeper if that is the
+interesting part.&quot;</em></p>
+</blockquote>
+<h3 id="ignoring-your-own-requirements"><a class="anchor" href="#ignoring-your-own-requirements">#</a>Ignoring your own requirements</h3><p>Establishing 1000:1 reads and then designing a write-optimised system means the
+interviewer watched you ask a question and discard the answer.</p>
+<blockquote>
+<p><strong>Instead:</strong> cite requirements when deciding. <em>&quot;Because we said staleness is
+acceptable, I can serve from an async replica.&quot;</em></p>
+</blockquote>
+<h3 id="blobs-in-the-database"><a class="anchor" href="#blobs-in-the-database">#</a>Blobs in the database</h3><p>Storing images or video in a relational database. It is a reliable negative
+signal.</p>
+<blockquote>
+<p><strong>Instead:</strong> object storage for bytes, database for metadata, CDN for serving.</p>
+</blockquote>
+<h3 id="a-cache-with-no-invalidation-story"><a class="anchor" href="#a-cache-with-no-invalidation-story">#</a>A cache with no invalidation story</h3><p>&quot;We&#39;ll add a cache&quot; and nothing about staleness, invalidation, or what happens
+on a miss.</p>
+<blockquote>
+<p><strong>Instead:</strong> pattern, TTL, invalidation, hit rate assumption, and what the
+database sees when the cache is cold.</p>
+</blockquote>
+<h3 id="unbounded-anything"><a class="anchor" href="#unbounded-anything">#</a>Unbounded anything</h3><p>Unbounded queues, unbounded retries, unbounded lists, unbounded cache growth.
+Each is an outage with a delay attached.</p>
+<blockquote>
+<p><strong>Instead:</strong> cap the timeline list, cap retries, size the queue and say what
+happens when it fills.</p>
+</blockquote>
+<h3 id="retries-without-backoff"><a class="anchor" href="#retries-without-backoff">#</a>Retries without backoff</h3><p>The single most common way a real degradation becomes a real outage.</p>
+<blockquote>
+<p><strong>Instead:</strong> exponential backoff, jitter, a cap, and a client-wide retry budget.</p>
+</blockquote>
+<h3 id="distributed-locks-as-a-correctness-mechanism"><a class="anchor" href="#distributed-locks-as-a-correctness-mechanism">#</a>Distributed locks as a correctness mechanism</h3><p>Redis locks are not safe under GC pauses and clock skew. Using one to prevent
+double-booking is wrong.</p>
+<blockquote>
+<p><strong>Instead:</strong> the database constraint is the source of truth; the lock is only
+an optimisation.</p>
+</blockquote>
+<h3 id="ignoring-the-celebrity-hot-key-case"><a class="anchor" href="#ignoring-the-celebrity-hot-key-case">#</a>Ignoring the celebrity / hot-key case</h3><p>Every fan-out design has one. Assuming uniform distribution is the flaw the
+interviewer is waiting to probe.</p>
+<blockquote>
+<p><strong>Instead:</strong> raise it yourself. Threshold, hybrid, and the reason the
+distribution forces it.</p>
+</blockquote>
+<h3 id="two-phase-commit-across-services"><a class="anchor" href="#two-phase-commit-across-services">#</a>Two-phase commit across services</h3><p>It blocks, and it makes availability the product of every participant&#39;s.</p>
+<blockquote>
+<p><strong>Instead:</strong> sagas with compensating actions, and say honestly that it is not
+atomic.</p>
+</blockquote>
+<h3 id="designing-only-the-happy-path"><a class="anchor" href="#designing-only-the-happy-path">#</a>Designing only the happy path</h3><p>No timeouts, no failure discussion, everything works.</p>
+<blockquote>
+<p><strong>Instead:</strong> every network call has a timeout; walk the diagram and kill each
+box at minute 40.</p>
+</blockquote>
+<hr>
+<h2 id="3-communication-anti-patterns"><a class="anchor" href="#3-communication-anti-patterns">#</a>3 · Communication anti-patterns</h2><h3 id="defending-instead-of-examining"><a class="anchor" href="#defending-instead-of-examining">#</a>Defending instead of examining</h3><p>Pushback is usually a probe, not a correction. Both instant capitulation and
+stubbornness score badly.</p>
+<blockquote>
+<p><strong>Instead:</strong> <em>&quot;My reasoning was X — what am I missing?&quot;</em> Then update if they
+are right, and say what changed your mind.</p>
+</blockquote>
+<h3 id="bluffing"><a class="anchor" href="#bluffing">#</a>Bluffing</h3><p>Claiming familiarity with something you have not used. Interviewers find out in
+one follow-up, and the credibility loss is worse than the gap.</p>
+<blockquote>
+<p><strong>Instead:</strong> <em>&quot;I haven&#39;t used it. I&#39;d reach for X here — how does it differ?&quot;</em></p>
+</blockquote>
+<h3 id="an-unreadable-board"><a class="anchor" href="#an-unreadable-board">#</a>An unreadable board</h3><p>By minute 30 nobody can follow the diagram, including you.</p>
+<blockquote>
+<p><strong>Instead:</strong> leave space, label every arrow, keep scope in one corner, and
+redraw rather than overwrite.</p>
+</blockquote>
+<h3 id="presenting-instead-of-designing"><a class="anchor" href="#presenting-instead-of-designing">#</a>Presenting instead of designing</h3><p>A polished final architecture delivered as a monologue, skipping the reasoning.</p>
+<blockquote>
+<p><strong>Instead:</strong> start simple, evolve under pressure you name out loud. The
+derivation is the artefact.</p>
+</blockquote>
+<h3 id="never-mentioning-trade-offs"><a class="anchor" href="#never-mentioning-trade-offs">#</a>Never mentioning trade-offs</h3><p>Every choice presented as obviously right.</p>
+<blockquote>
+<p><strong>Instead:</strong> volunteer the cost of your own decision — <em>before</em> being asked.
+This is the single strongest behaviour in the round.</p>
+</blockquote>
+<hr>
+<h2 id="4-the-five-that-cost-the-most"><a class="anchor" href="#4-the-five-that-cost-the-most">#</a>4 · The five that cost the most</h2><p>If you fix nothing else:</p>
+<div class="table-scroll"><table><thead><tr><th>#</th><th>Anti-pattern</th><th>Replace with</th></tr></thead><tbody><tr><td>1</td><td>Designing before scoping</td><td>Five minutes of questions, written down</td></tr><tr><td>2</td><td>Choices with no <em>because</em></td><td>Every decision traced to a requirement</td></tr><tr><td>3</td><td>Presenting one right answer</td><td>Volunteering your own design&#39;s weakness</td></tr><tr><td>4</td><td>Over-engineering for scale nobody asked for</td><td>The simplest thing, plus the trigger to change</td></tr><tr><td>5</td><td>Never reaching failure analysis</td><td>Kill each box at minute 40</td></tr></tbody></table></div><hr>
+<h2 id="5-the-self-check"><a class="anchor" href="#5-the-self-check">#</a>5 · The self-check</h2><p>Ask yourself at minute 40:</p>
+<pre class="code"><code>[ ] Did I write down in-scope and out-of-scope?
+[ ] Did one estimate change a decision?
+[ ] Can I trace every major choice to a requirement?
+[ ] Did I go three levels deep on at least one component?
+[ ] Did I name a weakness in my own design unprompted?
+[ ] Does every network call have a timeout?
+[ ] Did I say what happens when the cache / queue / leader fails?
+[ ] Is the board still readable?</code></pre><p><strong>Six or more is a strong round.</strong> Fewer than four, and the design&#39;s quality
+probably will not save it.</p>
+</article>
+    <div class="pager-row"><a class="pager previous" href="numbers-to-know.html"><span>previous</span>Numbers to know</a><a class="pager next" href="checklist.html"><span>next</span>The checklist</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-process-anti-patterns">1 · Process anti-patterns</a></li><li class="d3"><a href="#designing-before-scoping">Designing before scoping</a></li><li class="d3"><a href="#waiting-to-be-led">Waiting to be led</a></li><li class="d3"><a href="#silent-thinking">Silent thinking</a></li><li class="d3"><a href="#running-out-of-time-in-the-deep-dive">Running out of time in the deep dive</a></li><li class="d3"><a href="#never-reaching-failure">Never reaching failure</a></li><li class="d2"><a href="#2-technical-anti-patterns">2 · Technical anti-patterns</a></li><li class="d3"><a href="#over-engineering">Over-engineering</a></li><li class="d3"><a href="#name-dropping-without-reasons">Name-dropping without reasons</a></li><li class="d3"><a href="#the-magic-box">The magic box</a></li><li class="d3"><a href="#ignoring-your-own-requirements">Ignoring your own requirements</a></li><li class="d3"><a href="#blobs-in-the-database">Blobs in the database</a></li><li class="d3"><a href="#a-cache-with-no-invalidation-story">A cache with no invalidation story</a></li><li class="d3"><a href="#unbounded-anything">Unbounded anything</a></li><li class="d3"><a href="#retries-without-backoff">Retries without backoff</a></li><li class="d3"><a href="#distributed-locks-as-a-correctness-mechanism">Distributed locks as a correctness mechanism</a></li><li class="d3"><a href="#ignoring-the-celebrity-hot-key-case">Ignoring the celebrity / hot-key case</a></li><li class="d3"><a href="#two-phase-commit-across-services">Two-phase commit across services</a></li><li class="d3"><a href="#designing-only-the-happy-path">Designing only the happy path</a></li><li class="d2"><a href="#3-communication-anti-patterns">3 · Communication anti-patterns</a></li><li class="d3"><a href="#defending-instead-of-examining">Defending instead of examining</a></li><li class="d3"><a href="#bluffing">Bluffing</a></li><li class="d3"><a href="#an-unreadable-board">An unreadable board</a></li><li class="d3"><a href="#presenting-instead-of-designing">Presenting instead of designing</a></li><li class="d3"><a href="#never-mentioning-trade-offs">Never mentioning trade-offs</a></li><li class="d2"><a href="#4-the-five-that-cost-the-most">4 · The five that cost the most</a></li><li class="d2"><a href="#5-the-self-check">5 · The self-check</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

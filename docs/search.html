@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search &amp; typeahead · System Design Handbook</title>
+<meta name="description" content="Inverted indexes, why the database is the wrong tool, keeping the index in sync, ranking, and the trie behind autocomplete.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html" class="active">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="search-and-typeahead"><a class="anchor" href="#search-and-typeahead">#</a>Search and typeahead</h1><blockquote>
+<p><strong>&quot;Add search&quot; is a component in half the designs and a standalone question in
+its own right.</strong> The two things to be able to say: why a relational <code>LIKE</code>
+query cannot do this, and how the index stays in sync with the source of truth.</p>
+</blockquote>
+<hr>
+<h2 id="1-why-not-the-database"><a class="anchor" href="#1-why-not-the-database">#</a>1 · Why not the database</h2><pre class="code"><code class="language-sql">SELECT * FROM posts WHERE body LIKE &#39;%distributed systems%&#39;;</code></pre><div class="table-scroll"><table><thead><tr><th>Problem</th><th>Detail</th></tr></thead><tbody><tr><td><strong>No index can serve it</strong></td><td>A leading wildcard defeats a B-tree; this is a full table scan</td></tr><tr><td>No relevance</td><td>Results are unordered — no notion of a better match</td></tr><tr><td>No linguistics</td><td>&quot;running&quot; will not match &quot;run&quot;; no stemming, no synonyms</td></tr><tr><td>No typo tolerance</td><td>One transposed letter returns nothing</td></tr><tr><td>No phrase or proximity</td><td>Cannot express &quot;these words, near each other&quot;</td></tr></tbody></table></div><p><strong>Postgres full-text search (<code>tsvector</code> + GIN) is a genuine middle option</strong> and
+worth naming — it handles stemming, ranking and phrase queries without adding a
+system. Reach for it when search is a feature rather than the product; reach for
+Elasticsearch when relevance tuning, faceting, or scale demand it.</p>
+<blockquote>
+<p><strong>&quot;I&#39;d start with Postgres full-text search and move to Elasticsearch when we
+need relevance tuning or the volume justifies a separate system&quot; is a better
+answer than either alone</strong>, for the same anti-over-engineering reason as
+everywhere else.</p>
+</blockquote>
+<hr>
+<h2 id="2-the-inverted-index"><a class="anchor" href="#2-the-inverted-index">#</a>2 · The inverted index</h2><p><strong>The one data structure to be able to explain.</strong></p>
+<pre class="code"><code>Documents:
+  d1: &quot;the quick brown fox&quot;
+  d2: &quot;the lazy brown dog&quot;
+  d3: &quot;quick brown foxes jump&quot;
+
+Forward index (what you have):   doc -&gt; terms
+Inverted index (what you need):  term -&gt; docs
+
+  brown -&gt; [d1, d2, d3]
+  quick -&gt; [d1, d3]
+  fox   -&gt; [d1, d3]        &lt;- &quot;foxes&quot; stemmed to &quot;fox&quot;
+  lazy  -&gt; [d2]
+  dog   -&gt; [d2]
+
+Query &quot;quick brown&quot; = INTERSECT postings([quick], [brown]) = [d1, d3]</code></pre><p><strong>The analysis pipeline is what makes it work</strong>, and naming the steps shows you
+understand where the behaviour comes from:</p>
+<pre class="code"><code>raw text -&gt; tokenise -&gt; lowercase -&gt; remove stopwords
+         -&gt; stem/lemmatise -&gt; synonyms -&gt; index terms</code></pre><p><strong>The same pipeline must run on the query.</strong> If you stem at index time but not
+at query time, &quot;running&quot; will not find &quot;run&quot; — a classic bug, and a good detail
+to mention.</p>
+<p><strong>Postings lists carry positions too</strong> (<code>fox → d1:[3], d3:[3]</code>), which is what
+enables phrase and proximity queries. Without positions you can only ask &quot;both
+words appear somewhere&quot;.</p>
+<hr>
+<h2 id="3-ranking"><a class="anchor" href="#3-ranking">#</a>3 · Ranking</h2><p><strong>BM25 is the default and you should be able to describe its intuition</strong>, not
+its formula:</p>
+<div class="table-scroll"><table><thead><tr><th>Factor</th><th>Effect</th></tr></thead><tbody><tr><td><strong>Term frequency</strong></td><td>More occurrences = more relevant, <strong>with diminishing returns</strong></td></tr><tr><td><strong>Inverse document frequency</strong></td><td>Rare terms discriminate; &quot;the&quot; tells you nothing</td></tr><tr><td><strong>Field length normalisation</strong></td><td>A match in a 5-word title beats one in a 5,000-word body</td></tr></tbody></table></div><blockquote>
+<p><strong>The saturation point is what makes BM25 better than raw TF-IDF:</strong> a document
+containing a term 100 times is not 100× more relevant than one containing it
+once. BM25 saturates that curve, which is why keyword stuffing does not work
+against it.</p>
+</blockquote>
+<p><strong>Beyond text relevance</strong>, real ranking blends signals — recency, popularity,
+personalisation, quality — usually as a second-pass reranker over the top few
+hundred BM25 candidates. <strong>Two-stage retrieval (cheap recall, expensive rerank)
+is the standard shape</strong> and mirrors the pattern in any retrieval system.</p>
+<hr>
+<h2 id="4-keeping-the-index-in-sync"><a class="anchor" href="#4-keeping-the-index-in-sync">#</a>4 · Keeping the index in sync</h2><p><strong>The part candidates forget, and the part that breaks in production.</strong>
+Elasticsearch is a <em>derived</em> store, never the source of truth.</p>
+<div class="table-scroll"><table><thead><tr><th>Approach</th><th>How</th><th>Trade-off</th></tr></thead><tbody><tr><td><strong>Dual write</strong></td><td>App writes to DB and index</td><td>✗ <strong>Not atomic</strong> — one can fail, and they silently diverge</td></tr><tr><td><strong>Transactional outbox</strong></td><td>Write the DB row and an outbox event in one transaction; a relay indexes</td><td>✓ Reliable; a little latency</td></tr><tr><td><strong>CDC</strong></td><td>Tail the database&#39;s replication log</td><td>✓ <strong>No application change</strong>; captures everything</td></tr><tr><td><strong>Periodic rebuild</strong></td><td>Batch reindex</td><td>✓ Simple; stale between runs</td></tr></tbody></table></div><blockquote>
+<p><strong>Dual write is the wrong answer and knowing why is the point</strong>: there is no
+transaction spanning your database and your search cluster, so a crash between
+the two writes leaves them inconsistent forever, with nothing to detect it.
+Change data capture or a transactional outbox makes the index a <em>consequence</em>
+of the committed write rather than a second thing you hope also happened.</p>
+</blockquote>
+<p><strong>Always have a full rebuild path.</strong> Indexes get corrupted, mappings change, and
+bugs cause drift. &quot;We can rebuild from the source of truth in N hours&quot; is the
+answer to a whole class of follow-ups.</p>
+<p><strong>Indexing is near-real-time, not real-time.</strong> Elasticsearch refreshes on an
+interval (default 1s) — a document is not searchable the instant it is written.
+Say that rather than implying otherwise.</p>
+<hr>
+<h2 id="5-typeahead-autocomplete"><a class="anchor" href="#5-typeahead-autocomplete">#</a>5 · Typeahead / autocomplete</h2><p><strong>Different problem, different structure.</strong> Extreme latency requirements
+(sub-50 ms, on every keystroke) and a small candidate space.</p>
+<pre class="code"><code>TRIE with top-k cached at each node:
+
+           (root)
+             |
+             s
+             |
+             y  -&gt; top-k at this node: [&quot;system design&quot;, &quot;syntax&quot;, &quot;sync&quot;]
+             |
+             s  -&gt; [&quot;system design&quot;, &quot;system architecture&quot;, ...]
+
+Precompute the top k completions AT EACH NODE.
+A lookup is then a walk down the trie plus a read -- no ranking at
+query time, no scan of candidates.</code></pre><div class="table-scroll"><table><thead><tr><th>Decision</th><th>Choice</th><th>Why</th></tr></thead><tbody><tr><td>Structure</td><td>Trie with cached top-k per node</td><td>Query becomes a prefix walk plus a read</td></tr><tr><td>Where it lives</td><td>In memory, replicated</td><td>Latency budget is tens of milliseconds</td></tr><tr><td>Updates</td><td><strong>Rebuilt offline, periodically</strong></td><td>Real-time updates would invalidate cached top-k constantly</td></tr><tr><td>Sharding</td><td>By prefix</td><td>Each shard owns a slice of the keyspace</td></tr><tr><td>Client</td><td>Debounce ~50–100 ms; cache locally</td><td>Avoid a request per keystroke</td></tr></tbody></table></div><blockquote>
+<p><strong>&quot;Precompute the top-k at each node&quot; is the insight</strong>, and the corollary is
+the one to volunteer: it means the structure is <em>rebuilt</em>, not updated in
+place. Trending queries appear after the next build, which is a deliberate
+latency-versus-freshness trade rather than a limitation.</p>
+</blockquote>
+<p><strong>Typo tolerance</strong> at query time uses edit distance (fuzzy matching, usually
+limited to distance 1–2 because the candidate space explodes). For search proper,
+n-gram indexes and phonetic matching also apply.</p>
+<hr>
+<h2 id="6-what-to-say-in-the-round"><a class="anchor" href="#6-what-to-say-in-the-round">#</a>6 · What to say in the round</h2><blockquote>
+<p><em>&quot;Search goes to a dedicated inverted index — a <code>LIKE</code> query with a leading
+wildcard cannot use an index at all, and there is no relevance ordering.
+Elasticsearch, kept in sync by change data capture off the database&#39;s
+replication log rather than dual writes, because there is no transaction across
+both and dual writes diverge silently. The database stays the source of truth
+and I keep a full rebuild path.</em></p>
+<p><em>Ranking is BM25 first for recall, then a reranking pass over the top few
+hundred using recency and engagement. For typeahead it is a separate system
+entirely — a trie with precomputed top-k per node, held in memory and rebuilt
+offline, because the latency budget is tens of milliseconds per keystroke.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="7-interview-questions"><a class="anchor" href="#7-interview-questions">#</a>7 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Why not <code>LIKE &#39;%term%&#39;</code>?&quot;</td><td>A leading wildcard cannot use a B-tree index, so it is a full scan — and even then there is no relevance ordering, no stemming, and no typo tolerance. For small data Postgres full-text search covers a lot; beyond that a dedicated index.</td></tr><tr><td>⭐ &quot;Explain an inverted index.&quot;</td><td>A map from term to the list of documents containing it, built by an analysis pipeline — tokenise, lowercase, remove stopwords, stem. A multi-word query intersects postings lists. Positions in the postings enable phrase and proximity queries. The same pipeline must run on the query, or stemming silently fails.</td></tr><tr><td>⭐ &quot;How does the index stay in sync?&quot;</td><td>Change data capture off the replication log, or a transactional outbox. Not dual writes — no transaction spans the database and the search cluster, so a failure between them diverges permanently with nothing to detect it. And always keep a full rebuild path.</td></tr><tr><td>&quot;How do you rank?&quot;</td><td>BM25 for the first pass: term frequency with saturation, inverse document frequency, and length normalisation. Then rerank the top few hundred with recency, popularity and personalisation. Cheap recall, expensive rerank.</td></tr><tr><td>⭐ &quot;Design autocomplete.&quot;</td><td>A trie with the top-k completions precomputed at each node, in memory, sharded by prefix — so a query is a prefix walk and a read, with no ranking at request time. It is rebuilt offline rather than updated live, because live updates would constantly invalidate the cached top-k; trending terms appear after the next build.</td></tr><tr><td>&quot;Is a document searchable immediately after writing?&quot;</td><td>Not quite — indexes refresh on an interval, typically about a second. It is near-real-time, and I would not promise read-your-writes on search.</td></tr><tr><td>&quot;How do you handle typos?&quot;</td><td>Fuzzy matching by edit distance, capped at one or two because the candidate space grows quickly, plus n-gram indexing and phonetic matching for names.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>explain why a leading-wildcard <code>LIKE</code> cannot be indexed,</li>
+<li>describe an inverted index and the analysis pipeline on both sides,</li>
+<li>give BM25&#39;s three factors and the saturation intuition,</li>
+<li>reject dual writes and name CDC or the outbox, and</li>
+<li>describe the trie with precomputed top-k and why it is rebuilt rather than updated.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="rate-limiting.html"><span>previous</span>Rate limiting</a><a class="pager next" href="databases.html"><span>next</span>Databases & indexes</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-why-not-the-database">1 · Why not the database</a></li><li class="d2"><a href="#2-the-inverted-index">2 · The inverted index</a></li><li class="d2"><a href="#3-ranking">3 · Ranking</a></li><li class="d2"><a href="#4-keeping-the-index-in-sync">4 · Keeping the index in sync</a></li><li class="d2"><a href="#5-typeahead-autocomplete">5 · Typeahead / autocomplete</a></li><li class="d2"><a href="#6-what-to-say-in-the-round">6 · What to say in the round</a></li><li class="d2"><a href="#7-interview-questions">7 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

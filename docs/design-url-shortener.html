@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a URL shortener · System Design Handbook</title>
+<meta name="description" content="The full derivation: why not hashing, counter versus Snowflake versus pre-generation, base62, and the read path that makes it a caching problem.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html" class="active">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-url-shortener"><a class="anchor" href="#design-a-url-shortener">#</a>Design a URL shortener</h1><blockquote>
+<p><strong>The classic warm-up.</strong> It looks trivial and has one genuinely interesting
+sub-problem — unique short-code generation — plus a read path that is a pure
+caching exercise. Do this one first.</p>
+</blockquote>
+<p><strong>Attempt it yourself for twenty minutes before reading on.</strong></p>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><blockquote>
+<p><em>Public service like bit.ly. 100M new URLs a month, reads about 100× writes.
+Custom aliases yes, optional TTL. Analytics out of scope.</em></p>
+</blockquote>
+<pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- shorten(long_url) -&gt; short      - click analytics
+- redirect(short) -&gt; long         - user accounts
+- custom alias                    - link preview / safety scanning
+- optional expiry
+
+NON-FUNCTIONAL
+- ~40 writes/s, ~4,000 reads/s (peak ~12,000)
+- redirect p99 &lt; 100ms
+- availability &gt; consistency: a redirect must work
+- codes must never collide
+- links are effectively immutable once created</code></pre><p><strong>Two observations that shape everything</strong>, and stating them here rather than at
+minute 30 is the difference:</p>
+<ol>
+<li><strong>This is a read-heavy key-value lookup.</strong> 100:1 means the redirect path is
+the design; the write path is almost incidental.</li>
+<li><strong>The data is immutable.</strong> A short code never changes its target. That makes
+caching trivial — no invalidation problem at all — and it is worth saying out
+loud because it removes the hardest part of caching.</li>
+</ol>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>WRITES   1e8/month / 30 / 86,400  ~= 40/s      (round: 40)
+READS    40 x 100                  = 4,000/s   peak ~12,000/s
+
+STORAGE  per row: short_code 7B + long_url ~100B + metadata ~50B ~= 500B
+         with index overhead, call it 1 KB
+         1e8/month x 1 KB = 100 GB/month = 1.2 TB/year
+         x 3 replication = ~3.6 TB/year
+
+KEYSPACE base62, 7 characters = 62^7 = 3.5 trillion
+         at 100M/month that is ~2,900 years. 7 is enough.
+
+CACHE    Zipfian access: the top 20% of links serve ~80% of redirects.
+         hot set ~ 20M links x 150B = 3 GB.  Fits in RAM on one node,
+         so cache EVERYTHING hot and the DB barely sees reads.
+
+CONCLUSION
+  - 40 writes/s is nothing. ONE Postgres primary is fine. Do not shard.
+  - 12,000 reads/s must not hit the DB -&gt; Redis in front, ~95%+ hit rate
+    because the data is immutable and access is skewed.
+  - 3.6 TB/year is fine for years on a single well-provisioned node.</code></pre><blockquote>
+<p><strong>&quot;40 writes a second is nothing — I am not going to shard this&quot; is a
+deliberate anti-over-engineering move</strong>, and interviewers score it. Reaching
+for Cassandra here is a finding.</p>
+</blockquote>
+<hr>
+<h2 id="3-api-813"><a class="anchor" href="#3-api-813">#</a>3 · API (8–13)</h2><pre class="code"><code>POST /v1/urls
+  { &quot;long_url&quot;: &quot;https://...&quot;, &quot;custom_alias&quot;: &quot;promo&quot;, &quot;ttl_days&quot;: 30 }
+  -&gt; 201 { &quot;short_url&quot;: &quot;https://sho.rt/abc1234&quot;, &quot;expires_at&quot;: &quot;...&quot; }
+  -&gt; 409 if the custom alias is taken
+
+GET /{short_code}
+  -&gt; 301 or 302, Location: &lt;long_url&gt;
+  -&gt; 404 if unknown or expired</code></pre><p><strong>301 versus 302 is a real question and a favourite follow-up:</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th>301 Permanent</th><th>302 Found</th></tr></thead><tbody><tr><td>Browser caches it</td><td><strong>Yes, aggressively</strong></td><td>No</td></tr><tr><td>Subsequent clicks hit your server</td><td>No</td><td>Yes</td></tr><tr><td>Server load</td><td>Much lower</td><td>Higher</td></tr><tr><td>You can change the target later</td><td><strong>No — clients cached it</strong></td><td>Yes</td></tr><tr><td>You can count clicks</td><td><strong>No</strong></td><td>Yes</td></tr></tbody></table></div><blockquote>
+<p><strong>302 is the right default for a link shortener</strong>, and the reason is
+commercial rather than technical: a 301 is cached by the browser, so you never
+see the click again — which destroys analytics and removes your ability to
+disable a link that turns out to be malicious. You are trading server load for
+control, and control is what the product is for.</p>
+</blockquote>
+<p><strong>Schema:</strong></p>
+<pre class="code"><code class="language-sql">CREATE TABLE urls (
+    short_code   VARCHAR(10) PRIMARY KEY,   -- the ONLY lookup key
+    long_url     TEXT        NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ,
+    creator_id   BIGINT
+);
+CREATE INDEX ON urls (expires_at) WHERE expires_at IS NOT NULL;</code></pre><p>Every read is a primary-key lookup — which is why this scales so well.</p>
+<hr>
+<h2 id="4-code-generation-the-actual-problem"><a class="anchor" href="#4-code-generation-the-actual-problem">#</a>4 · Code generation — the actual problem</h2><p>Four approaches. <strong>Walking through why the first two fail is the substance of
+this question.</strong></p>
+<h3 id="a-hash-the-url-and-truncate"><a class="anchor" href="#a-hash-the-url-and-truncate">#</a>A. Hash the URL and truncate — ✗</h3><pre class="code"><code>short = base62(md5(long_url))[:7]</code></pre><p><strong>Collisions.</strong> By the birthday bound, with a 62⁷ keyspace you expect the first
+collision after roughly √(3.5 × 10¹²) ≈ 1.9 million URLs — not billions. You
+would need collision detection on every write (a read before every insert), and
+a resolution strategy (append a salt and rehash, loop). That is a read plus a
+retry loop on the write path, forever.</p>
+<p>It also makes the same URL always produce the same code, which sounds like a
+feature until you realise two users cannot have separate expiry or analytics on
+the same link.</p>
+<h3 id="b-random-and-check"><a class="anchor" href="#b-random-and-check">#</a>B. Random and check — ✗</h3><p>Generate 7 random characters, check if taken, retry. Fine while the keyspace is
+sparse; the check is a database round trip on every write, and it degrades as
+the space fills.</p>
+<h3 id="c-counter-base62-with-a-caveat"><a class="anchor" href="#c-counter-base62-with-a-caveat">#</a>C. Counter + base62 — ✓ with a caveat</h3><pre class="code"><code>id = next value from a counter
+short_code = base62(id)
+
+  1        -&gt; &quot;1&quot;
+  125      -&gt; &quot;25&quot;
+  1e9      -&gt; &quot;15FTGg&quot;</code></pre><p><strong>No collisions, ever, by construction.</strong> No check needed.</p>
+<p>The caveat, and this is the interesting bit: <strong>codes are sequential and
+therefore enumerable.</strong> Anyone can walk <code>abc1</code>, <code>abc2</code>, … and scrape every link
+in the system — a real privacy problem, since shortened URLs often contain
+otherwise-unguessable document links.</p>
+<p>Two fixes worth naming:</p>
+<ul>
+<li><strong>Multiply by a large odd number mod 62⁷</strong> — a bijection, so still collision-free,
+but the sequence appears scrambled. (Not cryptographic; it obscures rather than
+secures.)</li>
+<li><strong>Feistel network / format-preserving encryption</strong> on the counter — a keyed
+bijection, genuinely unguessable without the key. This is the correct answer.</li>
+</ul>
+<p><strong>Where does the counter live?</strong> A single database sequence is a write-path
+dependency and a bottleneck. Better: <strong>each application server claims a range</strong>
+(say 10,000 IDs) from a coordination service and hands them out locally.
+Coordination happens once per 10,000 writes rather than once per write, and a
+server crash just wastes a block.</p>
+<h3 id="d-pre-generate-and-hand-out-and-often-best"><a class="anchor" href="#d-pre-generate-and-hand-out-and-often-best">#</a>D. Pre-generate and hand out — ✓ and often best</h3><p>A background job generates unused random codes into a <code>available_codes</code> table.
+The write path pops one.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td><strong>Good</strong></td><td>Non-sequential, non-enumerable, no collision check on the hot path, no counter service</td></tr><tr><td><strong>Bad</strong></td><td>A table to maintain and monitor; must not run dry</td></tr></tbody></table></div><blockquote>
+<p><strong>Say the trade-off rather than picking dogmatically:</strong> <em>&quot;Counter with a Feistel
+permutation if I want zero extra infrastructure; pre-generation if I want the
+simplest possible write path and don&#39;t mind a background job. Both give
+collision-free, non-enumerable codes — I&#39;d pick pre-generation here because the
+write path becomes a single pop and there is no shared counter to be a
+bottleneck.&quot;</em></p>
+</blockquote>
+<p><strong>Custom aliases go through a different path</strong>: insert into the same table with
+a unique constraint, and let the constraint violation produce the 409. Do not
+<code>SELECT</code> to check first — that races.</p>
+<hr>
+<h2 id="5-high-level-design-1325"><a class="anchor" href="#5-high-level-design-1325">#</a>5 · High-level design (13–25)</h2><pre class="mermaid">flowchart LR
+    C[&quot;Client&quot;] --&gt; CDN[&quot;CDN / edge&quot;]
+    CDN --&gt; LB[&quot;Load balancer&quot;]
+    LB --&gt; W[&quot;Write service&quot;]
+    LB --&gt; R[&quot;Redirect service&quot;]
+    W --&gt; KG[[&quot;Code source&lt;br/&gt;pre-generated pool&quot;]]
+    W --&gt; DB[(&quot;Postgres&lt;br/&gt;short_code PK&quot;)]
+    R --&gt; Cache[(&quot;Redis&lt;br/&gt;code -&gt; long_url&quot;)]
+    R -.-&gt;|&quot;miss ~5%&quot;| DB
+    R -.-&gt;|&quot;populate&quot;| Cache
+    DB --&gt; EXP[&quot;Expiry sweeper&lt;br/&gt;(batch)&quot;]</pre><p><strong>Read path, which is 99% of the traffic:</strong></p>
+<pre class="code"><code>GET /abc1234
+  1. Redis GET url:abc1234
+     hit  (~95%) -&gt; 302, ~1ms
+  2. miss -&gt; SELECT FROM urls WHERE short_code = &#39;abc1234&#39;
+     found -&gt; SETEX into Redis, 302
+     absent -&gt; cache a NEGATIVE marker (60s TTL), 404</code></pre><p><strong>Caching the negative is important here</strong> and worth calling out: 404s are a
+large share of traffic on a public shortener — expired links, typos, and
+scanners walking the keyspace. Without negative caching every one of those is a
+database query, which is exactly the cache-penetration failure mode.</p>
+<hr>
+<h2 id="6-deep-dive-material"><a class="anchor" href="#6-deep-dive-material">#</a>6 · Deep dive material</h2><h3 id="why-this-barely-needs-to-scale"><a class="anchor" href="#why-this-barely-needs-to-scale">#</a>Why this barely needs to scale</h3><p>At 40 writes/s and a 95% cache hit rate, the database sees ~600 reads/s and 40
+writes/s. <strong>One Postgres primary with two read replicas handles this for years.</strong>
+Being able to say &quot;this does not need to be distributed, and here is the
+arithmetic&quot; is a better answer than a distributed design.</p>
+<p><strong>If asked to scale it 100×</strong> (4,000 writes/s, 1.2M reads/s):</p>
+<div class="table-scroll"><table><thead><tr><th>Then</th><th>Because</th></tr></thead><tbody><tr><td>Shard by <code>short_code</code> hash</td><td>Every access is by primary key, so sharding is trivial — there are no joins and no range scans</td></tr><tr><td>Redis Cluster, consistent hashing</td><td>The hot set outgrows one node</td></tr><tr><td>Serve redirects from the CDN edge</td><td>302s are tiny and highly cacheable; put the hot map at the edge</td></tr><tr><td>Multi-region read replicas</td><td>Redirect latency is dominated by geography</td></tr></tbody></table></div><blockquote>
+<p><strong>This is the design where sharding is genuinely easy</strong>, and saying why —
+pure key-value access, no joins, no cross-key transactions, immutable rows —
+shows you understand what usually makes sharding hard.</p>
+</blockquote>
+<h3 id="expiry"><a class="anchor" href="#expiry">#</a>Expiry</h3><p>Do not scan for expired rows on the read path. <strong>Check <code>expires_at</code> on read and
+treat expired as 404, plus a nightly batch job to delete.</strong> Redis TTLs handle the
+cache side automatically.</p>
+<h3 id="analytics-if-it-comes-back-into-scope"><a class="anchor" href="#analytics-if-it-comes-back-into-scope">#</a>Analytics (if it comes back into scope)</h3><p>Do not increment a counter in the request path — that is a hot-row write on
+popular links. <strong>Fire an event to Kafka and aggregate asynchronously.</strong> If exact
+counts are not required, sample.</p>
+<h3 id="abuse"><a class="anchor" href="#abuse">#</a>Abuse</h3><p>Shorteners are used to disguise malicious URLs. Worth one sentence: check
+submissions against a reputation service asynchronously, and make disabling a
+link possible — <strong>which is another reason for 302 over 301</strong>, tying back to the
+earlier decision.</p>
+<hr>
+<h2 id="7-failure-and-wrap-4045"><a class="anchor" href="#7-failure-and-wrap-4045">#</a>7 · Failure and wrap (40–45)</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Redis node</td><td>~1/N of hot keys cold</td><td>Consistent hashing; DB sized for the miss burst</td></tr><tr><td>Whole cache tier</td><td>DB sees ~12,000 reads/s</td><td>Read replicas + circuit breaker; degraded but alive</td></tr><tr><td>DB primary</td><td>Writes stop; <strong>reads still work from cache</strong></td><td>Acceptable — redirects are the product</td></tr><tr><td>Code pool empty</td><td>Writes fail</td><td>Alert on pool depth; generator runs well ahead</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;To summarise: pre-generated non-sequential codes so the write path is a
+single pop with no collision check, Postgres with the short code as primary
+key, and a Redis cache that carries essentially all read traffic because the
+data is immutable — there is no invalidation problem at all. 302 rather than
+301 so we keep control of the link and can disable it.</em></p>
+<p><em>The assumption the design leans on hardest is the cache hit rate. It should be
+very high given immutable data and Zipfian access, but if it were 70% the
+database would see four times what I sized for — so I&#39;d validate that early,
+and negative-cache 404s, because scanners walking the keyspace would otherwise
+all become database queries.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="8-follow-ups-you-should-expect"><a class="anchor" href="#8-follow-ups-you-should-expect">#</a>8 · Follow-ups you should expect</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;Why not hash the URL?&quot;</td><td>Collisions. The birthday bound puts the first one at roughly 1.9M URLs in a 62⁷ space, so every write needs a read to check plus a retry loop — and identical URLs would be forced to share a code, so they cannot have separate expiry.</td></tr><tr><td>⭐ &quot;Your codes are sequential — is that a problem?&quot;</td><td>Yes, they are enumerable and shortened links often point at otherwise-unguessable documents. Fix with a keyed bijection over the counter — a Feistel permutation — or pre-generate random codes. Both keep collision-freedom.</td></tr><tr><td>&quot;301 or 302?&quot;</td><td>302. A 301 is cached by browsers, so you never see the click again — no analytics, and no ability to disable a link that turns out to be malicious. You pay server load for control.</td></tr><tr><td>&quot;How do custom aliases avoid races?&quot;</td><td>A unique constraint on the primary key and let the insert fail into a 409. Checking with a SELECT first is a race.</td></tr><tr><td>⭐ &quot;How would you scale reads 100×?&quot;</td><td>Edge-cache the redirect — a 302 is tiny and highly cacheable — then Redis Cluster, then shard the database by code hash. Sharding is unusually easy here: pure key lookups, no joins, no cross-key transactions, immutable rows.</td></tr><tr><td>&quot;How do you handle 404 traffic?&quot;</td><td>Negative-cache with a short TTL. On a public shortener, expired links, typos and keyspace scanners are a big share of requests, and without it every one is a database query — textbook cache penetration.</td></tr><tr><td>&quot;Does this need to be distributed?&quot;</td><td>At the stated scale, no — 40 writes a second and a 95% hit rate leaves the database nearly idle. I&#39;d run one primary with replicas and shard only when the numbers say to.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>derive the estimates and conclude &quot;one primary is enough&quot;,</li>
+<li>reject hashing with the birthday-bound argument,</li>
+<li>explain the enumerability problem and both fixes,</li>
+<li>justify 302 over 301 on product grounds,</li>
+<li>explain negative caching for the 404 path, and</li>
+<li>say why sharding would be easy here if it were ever needed.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="observability.html"><span>previous</span>Observability</a><a class="pager next" href="design-news-feed.html"><span>next</span>Design a news feed</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-api-813">3 · API (8–13)</a></li><li class="d2"><a href="#4-code-generation-the-actual-problem">4 · Code generation — the actual problem</a></li><li class="d3"><a href="#a-hash-the-url-and-truncate">A. Hash the URL and truncate — ✗</a></li><li class="d3"><a href="#b-random-and-check">B. Random and check — ✗</a></li><li class="d3"><a href="#c-counter-base62-with-a-caveat">C. Counter + base62 — ✓ with a caveat</a></li><li class="d3"><a href="#d-pre-generate-and-hand-out-and-often-best">D. Pre-generate and hand out — ✓ and often best</a></li><li class="d2"><a href="#5-high-level-design-1325">5 · High-level design (13–25)</a></li><li class="d2"><a href="#6-deep-dive-material">6 · Deep dive material</a></li><li class="d3"><a href="#why-this-barely-needs-to-scale">Why this barely needs to scale</a></li><li class="d3"><a href="#expiry">Expiry</a></li><li class="d3"><a href="#analytics-if-it-comes-back-into-scope">Analytics (if it comes back into scope)</a></li><li class="d3"><a href="#abuse">Abuse</a></li><li class="d2"><a href="#7-failure-and-wrap-4045">7 · Failure and wrap (40–45)</a></li><li class="d2"><a href="#8-follow-ups-you-should-expect">8 · Follow-ups you should expect</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

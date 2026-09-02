@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a ticket booking system · System Design Handbook</title>
+<meta name="description" content="The one design where strong consistency is non-negotiable: seat locking, the reservation model, idempotent payment, and surviving a 100× on-sale spike.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html" class="active">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-ticket-booking-system"><a class="anchor" href="#design-a-ticket-booking-system">#</a>Design a ticket booking system</h1><blockquote>
+<p><strong>Every other design in this handbook trades consistency for availability.
+This one does the opposite</strong>, and that inversion is the point of the question.
+Ticketmaster, airline seats, event booking — the same problem.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- browse events, view seat map    - dynamic pricing
+- hold a seat while paying        - resale / transfer
+- purchase (payment)              - recommendations
+- prevent double-booking
+
+NON-FUNCTIONAL
+- 10M users; a hot on-sale is 1M users for 50k seats
+- browsing: eventual consistency fine, must stay UP
+- booking: STRONG consistency, non-negotiable
+- a seat must NEVER be sold twice   &lt;- the one hard invariant
+- payment must never double-charge
+- queue/waiting-room acceptable during a spike</code></pre><blockquote>
+<p><strong>The framing sentence:</strong> <em>&quot;This system has two halves with opposite
+requirements. Browsing is read-heavy and can be stale and highly available.
+Booking is a small fraction of traffic that requires strong consistency. I&#39;ll
+design them separately, because forcing one model on both is how you get
+something that is both slow and wrong.&quot;</em></p>
+<p><strong>Saying that at minute five sets up the entire round</strong>, and it is the
+observation the question exists to elicit.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>NORMAL       10M users, ~1M browse sessions/day  -&gt; ~30 QPS. Trivial.
+
+ON-SALE SPIKE  &lt;- the real problem
+  1M users arrive within 60 seconds for 50,000 seats
+  = ~17,000 requests/s of browsing and seat-map polling
+  and 20:1 more demand than supply
+
+CONCLUSION
+  - Steady state needs almost nothing
+  - The design is entirely about the SPIKE and about CORRECTNESS
+  - 95% of arrivals cannot get a seat: fail them FAST and FAIRLY
+    rather than letting them all contend on the database</code></pre><p><strong>The 20:1 ratio is the number to act on.</strong> Most requests must be rejected or
+queued cheaply, far from the database. That is what makes a virtual waiting room
+an architectural component rather than a nicety.</p>
+<hr>
+<h2 id="3-the-core-problem-no-double-booking"><a class="anchor" href="#3-the-core-problem-no-double-booking">#</a>3 · The core problem — no double booking</h2><p><strong>Three approaches. Walk all three; the comparison is the answer.</strong></p>
+<h3 id="a-pessimistic-locking-correct-limited"><a class="anchor" href="#a-pessimistic-locking-correct-limited">#</a>A. Pessimistic locking — ✓ correct, limited</h3><pre class="code"><code class="language-sql">BEGIN;
+SELECT * FROM seats
+ WHERE event_id = ? AND seat_id = ? AND status = &#39;available&#39;
+ FOR UPDATE;                    -- row lock held until commit
+
+UPDATE seats SET status = &#39;held&#39;, held_by = ?, hold_expires = now() + interval &#39;10 min&#39;
+ WHERE seat_id = ?;
+COMMIT;</code></pre><p>Correct and simple. <strong>The cost is that locks are held for the duration</strong>, and if
+the transaction spans a payment call it holds a database lock for seconds — which
+is how you exhaust the connection pool during an on-sale.</p>
+<h3 id="b-optimistic-concurrency-the-right-default"><a class="anchor" href="#b-optimistic-concurrency-the-right-default">#</a>B. Optimistic concurrency — ✓ the right default</h3><pre class="code"><code class="language-sql">UPDATE seats
+   SET status = &#39;held&#39;, held_by = ?, version = version + 1
+ WHERE seat_id = ? AND status = &#39;available&#39; AND version = ?;
+
+-- affected rows = 1 -&gt; you got it
+-- affected rows = 0 -&gt; someone else did. Return &quot;seat taken.&quot;</code></pre><p><strong>No lock is held. The conditional update is atomic by itself</strong>, and the
+database&#39;s row-level guarantee does the work. Under contention you get failures
+rather than waits, which for seat selection is exactly right — the user should
+be told immediately to pick another seat.</p>
+<blockquote>
+<p><strong>Optimistic is the better answer here and the reason is worth stating:</strong> with
+20 people contending for one seat, pessimistic locking makes 19 of them <em>wait</em>
+and then fail. Optimistic makes 19 of them fail <em>instantly</em>, which is both
+cheaper and a better experience.</p>
+</blockquote>
+<h3 id="c-distributed-lock-redis-as-the-primary-mechanism"><a class="anchor" href="#c-distributed-lock-redis-as-the-primary-mechanism">#</a>C. Distributed lock (Redis) — ✗ as the primary mechanism</h3><p><code>SET seat:123 &lt;token&gt; NX PX 600000</code> is fast, but <strong>a distributed lock is not a
+correctness mechanism</strong> — this is the trap in the question. Redlock&#39;s safety
+depends on assumptions about clocks and pauses that do not hold; a GC pause
+longer than the TTL means two clients believe they hold the same lock.</p>
+<p><strong>Use it as an optimisation in front, never as the guarantee.</strong> The database
+constraint is the source of truth. If you want the lock to be safe, you need
+fencing tokens — which brings you back to the database checking a version, i.e.
+option B.</p>
+<hr>
+<h2 id="4-the-reservation-model"><a class="anchor" href="#4-the-reservation-model">#</a>4 · The reservation model</h2><p><strong>Booking is not one step. Modelling it as a state machine is what makes payment
+failures and abandonment tractable.</strong></p>
+<pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Available
+    Available --&gt; Held: user selects (10 min TTL)
+    Held --&gt; Available: timeout / user cancels
+    Held --&gt; Reserved: payment initiated
+    Reserved --&gt; Sold: payment confirmed
+    Reserved --&gt; Available: payment failed / timeout
+    Sold --&gt; Available: refund (admin)</pre><p><strong>The hold TTL is the crucial mechanism</strong>, and it needs saying explicitly: users
+abandon checkout constantly. Without an expiry, a hold is a permanent leak and
+the event silently sells out to nobody.</p>
+<p><strong>Do not rely on a sweeper job alone.</strong> Two layers:</p>
+<ol>
+<li><strong>Lazy expiry on read</strong> — a hold whose <code>hold_expires &lt; now()</code> is treated as
+available by the conditional update itself:<pre class="code"><code class="language-sql">UPDATE seats SET status=&#39;held&#39;, held_by=?, hold_expires=now()+interval &#39;10 min&#39;
+ WHERE seat_id=? AND (status=&#39;available&#39;
+                      OR (status=&#39;held&#39; AND hold_expires &lt; now()));</code></pre></li>
+<li><strong>A background sweeper</strong> to normalise rows for correct inventory counts.</li>
+</ol>
+<p>The lazy check means correctness never depends on the sweeper running.</p>
+<hr>
+<h2 id="5-high-level-design"><a class="anchor" href="#5-high-level-design">#</a>5 · High-level design</h2><pre class="mermaid">flowchart TD
+    U[&quot;Users&quot;] --&gt; WR[&quot;Virtual waiting room&lt;br/&gt;(token + position)&quot;]
+    WR --&gt; CDN[&quot;CDN: static seat maps&quot;]
+    WR --&gt; LB[&quot;Load balancer&quot;]
+    LB --&gt; BR[&quot;Browse service&lt;br/&gt;read replicas, cached&quot;]
+    LB --&gt; BK[&quot;Booking service&quot;]
+    BK --&gt; DB[(&quot;Inventory DB&lt;br/&gt;strong consistency&lt;br/&gt;sharded by event_id&quot;)]
+    BK --&gt; PAY[&quot;Payment service&lt;br/&gt;idempotency key&quot;]
+    PAY --&gt; EXT[&quot;External PSP&quot;]
+    BK --&gt; Q[[&quot;Events: ticket issued,&lt;br/&gt;email, analytics&quot;]]
+    SW[&quot;Hold sweeper&quot;] --&gt; DB</pre><p><strong>Two paths, two consistency models:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Path</th><th>Store</th><th>Consistency</th><th>Scale</th></tr></thead><tbody><tr><td>Browse / seat map</td><td>Read replicas + cache + CDN</td><td>Eventual — &quot;12 seats left&quot; may be stale</td><td>Horizontal</td></tr><tr><td>Book</td><td>Primary, single leader per event</td><td>Strong — conditional update</td><td><strong>Shard by <code>event_id</code></strong></td></tr></tbody></table></div><blockquote>
+<p><strong>Sharding by <code>event_id</code> is the key structural decision</strong>, and it deserves a
+sentence: all contention for a given event lands on one shard, so a hot event
+cannot slow down unrelated events, and every booking transaction stays
+single-shard. No distributed transaction is needed anywhere — which is why the
+strong-consistency requirement is affordable at all.</p>
+</blockquote>
+<hr>
+<h2 id="6-the-on-sale-spike"><a class="anchor" href="#6-the-on-sale-spike">#</a>6 · The on-sale spike</h2><p><strong>A virtual waiting room is the architecture, not a nicety.</strong></p>
+<pre class="code"><code>1. All traffic hits the waiting room first (edge / CDN-level).
+2. Each user gets a signed token with a queue position.
+3. Admit at a controlled rate -- say 1,000 users/minute -- into the
+   real application.
+4. Everyone else sees a position and an estimated wait, served from
+   the CDN. The backend never sees them.</code></pre><div class="table-scroll"><table><thead><tr><th>Buys you</th><th>How</th></tr></thead><tbody><tr><td><strong>Protects the backend</strong></td><td>It only ever sees the load it can handle</td></tr><tr><td><strong>Fairness</strong></td><td>First-come ordering rather than fastest-network-wins</td></tr><tr><td><strong>Bot resistance</strong></td><td>Token issuance is a natural place to challenge</td></tr><tr><td><strong>A better failure</strong></td><td>&quot;You are number 40,000&quot; beats a timeout</td></tr></tbody></table></div><p><strong>Supporting measures:</strong> serve seat maps from the CDN (they are static per
+event), rate limit per user <em>and</em> per IP, and shed anonymous traffic first.</p>
+<blockquote>
+<p><strong>This is the design where &quot;reject early and cheaply&quot; is the whole strategy.</strong>
+With 20 people per seat, the goal is to keep 95% of requests as far from the
+database as possible.</p>
+</blockquote>
+<hr>
+<h2 id="7-payment"><a class="anchor" href="#7-payment">#</a>7 · Payment</h2><p><strong>Reuses <a href="idempotency.html">idempotency</a> directly</strong> — and connecting the two is
+good.</p>
+<pre class="code"><code>1. Seat -&gt; Reserved (conditional update; still not Sold)
+2. Charge the PSP with a client-supplied idempotency key
+3. On success -&gt; Sold, issue ticket
+4. On failure -&gt; back to Available
+5. On TIMEOUT/unknown -&gt; do NOT guess.
+   Leave Reserved, and reconcile against the PSP.</code></pre><p><strong>Step 5 is the interesting one</strong>, and it is where candidates usually hand-wave:
+if the payment call times out, you do not know whether the charge happened. You
+cannot safely release the seat (you may have taken their money) or confirm it
+(you may not have). <strong>So you hold the reservation and reconcile</strong> — query the PSP
+by idempotency key, or match against their settlement file.</p>
+<p><strong>Never hold a database lock across a payment call.</strong> External calls take
+seconds and can hang; a transaction that spans one will exhaust the pool exactly
+when load is highest.</p>
+<hr>
+<h2 id="8-failure-and-wrap"><a class="anchor" href="#8-failure-and-wrap">#</a>8 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Payment provider down</td><td>Cannot complete purchases</td><td>Circuit-break; hold reservations; queue and retry; tell users honestly</td></tr><tr><td>Booking DB primary fails</td><td>Bookings stop; <strong>browsing continues</strong></td><td>Correct behaviour — refuse rather than risk double-selling</td></tr><tr><td>Sweeper fails</td><td>Holds linger</td><td>Lazy expiry means correctness is unaffected; only counts drift</td></tr><tr><td>Waiting room bypassed</td><td>Backend overwhelmed</td><td>Signed tokens; reject unauthenticated entry at the edge</td></tr><tr><td>Two users, same seat</td><td>—</td><td>One conditional update wins; the loser is told instantly</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: two halves. Browsing is cached, replica-served, eventually
+consistent and scales horizontally. Booking is strongly consistent, sharded by
+event ID so all contention for one event is single-shard and no distributed
+transaction is ever needed. Seat acquisition is an optimistic conditional
+update, not a distributed lock — a Redis lock is not a correctness mechanism
+under GC pauses and clock skew, and here correctness is the requirement.
+Holds expire lazily on read so we never depend on a sweeper.</em></p>
+<p><em>For the on-sale, a virtual waiting room admits at a controlled rate, because
+with twenty people per seat the job is to reject most requests cheaply and
+fairly rather than let them contend. And on payment: if the provider call times
+out I hold the reservation and reconcile rather than guessing — guessing either
+way is either double-charging or giving away a seat we were paid for.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="9-follow-ups"><a class="anchor" href="#9-follow-ups">#</a>9 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;How do you stop a seat being sold twice?&quot;</td><td>A conditional update — set to held <em>where</em> status is still available and the version matches — and check the affected row count. It is atomic in the database, holds no lock, and under contention the losers fail instantly instead of waiting.</td></tr><tr><td>⭐ &quot;Why not a Redis distributed lock?&quot;</td><td>Because it is not a correctness mechanism. A GC pause or clock skew longer than the TTL means two holders. It is fine as an optimisation to reduce contention, but the database constraint has to be the source of truth.</td></tr><tr><td>⭐ &quot;Optimistic or pessimistic?&quot;</td><td>Optimistic here. With twenty users per seat, pessimistic makes nineteen of them wait and then fail; optimistic fails them immediately so they can pick another seat. Pessimistic is right when contention is low and retries are expensive — the reverse of this.</td></tr><tr><td>&quot;The user abandons checkout.&quot;</td><td>The hold has a TTL and expires. I check expiry inside the conditional update itself so correctness never depends on the sweeper job running, and the sweeper only normalises rows for accurate counts.</td></tr><tr><td>⭐ &quot;1M users hit at 10am for 50k seats.&quot;</td><td>Virtual waiting room at the edge: signed token, queue position, admit at a controlled rate, serve everyone else from the CDN. Twenty to one demand means the design goal is rejecting most traffic cheaply and fairly — the backend should never see it.</td></tr><tr><td>&quot;Payment times out — did it succeed?&quot;</td><td>Unknown, so do not guess. Keep the seat reserved and reconcile with the provider by idempotency key. Releasing risks giving away a paid seat; confirming risks issuing an unpaid ticket.</td></tr><tr><td>&quot;Why shard by event?&quot;</td><td>It puts all contention for one event on one shard, keeps every booking transaction single-shard so no distributed transaction is needed, and isolates a hot event from every other event.</td></tr><tr><td>&quot;Can browsing show stale availability?&quot;</td><td>Yes, and that is fine — &quot;12 left&quot; being briefly wrong costs nothing. The truth is established at the conditional update, so a user may be told a seat went while they were choosing. That is a UI problem, not a correctness one.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>open by splitting browse and book into opposite consistency models,</li>
+<li>compare all three concurrency approaches and pick optimistic with a reason,</li>
+<li>explain why a distributed lock is not a correctness mechanism,</li>
+<li>give the reservation state machine and lazy hold expiry,</li>
+<li>justify sharding by event ID, and</li>
+<li>say what you do when the payment call times out.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-web-crawler.html"><span>previous</span>Design a web crawler</a><a class="pager next" href="design-notifications.html"><span>next</span>Design a notification system</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-the-core-problem-no-double-booking">3 · The core problem — no double booking</a></li><li class="d3"><a href="#a-pessimistic-locking-correct-limited">A. Pessimistic locking — ✓ correct, limited</a></li><li class="d3"><a href="#b-optimistic-concurrency-the-right-default">B. Optimistic concurrency — ✓ the right default</a></li><li class="d3"><a href="#c-distributed-lock-redis-as-the-primary-mechanism">C. Distributed lock (Redis) — ✗ as the primary mechanism</a></li><li class="d2"><a href="#4-the-reservation-model">4 · The reservation model</a></li><li class="d2"><a href="#5-high-level-design">5 · High-level design</a></li><li class="d2"><a href="#6-the-on-sale-spike">6 · The on-sale spike</a></li><li class="d2"><a href="#7-payment">7 · Payment</a></li><li class="d2"><a href="#8-failure-and-wrap">8 · Failure and wrap</a></li><li class="d2"><a href="#9-follow-ups">9 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

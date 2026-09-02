@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Numbers to know · System Design Handbook</title>
+<meta name="description" content="Every number worth memorising, on one page — latency, capacity, cost, availability, and the conversions that make estimation instant.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html" class="active">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="numbers-to-know"><a class="anchor" href="#numbers-to-know">#</a>Numbers to know</h1><blockquote>
+<p><strong>The card to review the morning of the interview.</strong> Nothing here is
+derivable under pressure; all of it makes the estimation phase fast.</p>
+</blockquote>
+<hr>
+<h2 id="1-latency"><a class="anchor" href="#1-latency">#</a>1 · Latency</h2><div class="table-scroll"><table><thead><tr><th>Operation</th><th>Time</th><th>Ratio to the one above</th></tr></thead><tbody><tr><td>L1 cache reference</td><td>1 ns</td><td>—</td></tr><tr><td>Branch mispredict</td><td>3 ns</td><td>3×</td></tr><tr><td>L2 cache reference</td><td>4 ns</td><td>—</td></tr><tr><td>Mutex lock/unlock</td><td>17 ns</td><td>—</td></tr><tr><td><strong>Main memory reference</strong></td><td><strong>100 ns</strong></td><td>100× L1</td></tr><tr><td>Compress 1 KB (Snappy)</td><td>2 µs</td><td>—</td></tr><tr><td>Send 1 KB over 1 Gbps</td><td>10 µs</td><td>—</td></tr><tr><td><strong>SSD random read</strong></td><td><strong>100 µs</strong></td><td>1,000× memory</td></tr><tr><td>Read 1 MB sequentially from memory</td><td>250 µs</td><td>—</td></tr><tr><td><strong>Datacentre round trip</strong></td><td><strong>500 µs</strong></td><td>—</td></tr><tr><td>Read 1 MB sequentially from SSD</td><td>1 ms</td><td>—</td></tr><tr><td><strong>Disk seek (spinning)</strong></td><td><strong>10 ms</strong></td><td>100× SSD</td></tr><tr><td>Read 1 MB from disk</td><td>20 ms</td><td>—</td></tr><tr><td><strong>US ↔ Europe round trip</strong></td><td><strong>150 ms</strong></td><td>Physics</td></tr></tbody></table></div><p><strong>The three ratios that actually matter:</strong></p>
+<pre class="code"><code>memory : SSD        = 1 : 1,000       -&gt; why you cache
+SSD    : disk seek  = 1 : 100         -&gt; why SSDs changed database design
+DC hop : intercontinental = 1 : 300   -&gt; why you use a CDN, and why
+                                         multi-region writes are hard</code></pre><hr>
+<h2 id="2-capacity-per-commodity-machine"><a class="anchor" href="#2-capacity-per-commodity-machine">#</a>2 · Capacity per commodity machine</h2><div class="table-scroll"><table><thead><tr><th>Component</th><th>Capacity</th></tr></thead><tbody><tr><td>Web/app server</td><td>10k–50k QPS (simple requests)</td></tr><tr><td><strong>SQL database writes</strong></td><td><strong>5k–10k/s per primary</strong></td></tr><tr><td>SQL database reads</td><td>10k–50k/s (more with replicas)</td></tr><tr><td>Redis / Memcached</td><td>~100k QPS per node</td></tr><tr><td>Kafka broker</td><td>~100k messages/s</td></tr><tr><td>Nginx / Envoy</td><td>~50k–100k connections</td></tr><tr><td>WebSocket connections</td><td>10k–50k per server</td></tr><tr><td>Server RAM</td><td>64–256 GB</td></tr><tr><td>Server SSD</td><td>1–10 TB</td></tr><tr><td>NIC</td><td>10–25 Gbps</td></tr></tbody></table></div><blockquote>
+<p><strong>The 5k–10k writes per primary figure earns its keep more than any other.</strong>
+It is the number that decides &quot;one database&quot; versus &quot;shard&quot;, and being able to
+apply it instantly turns a guess into a justified decision.</p>
+</blockquote>
+<hr>
+<h2 id="3-sizes"><a class="anchor" href="#3-sizes">#</a>3 · Sizes</h2><div class="table-scroll"><table><thead><tr><th>Item</th><th>Size</th></tr></thead><tbody><tr><td>ASCII character</td><td>1 byte</td></tr><tr><td>Unicode character (UTF-8)</td><td>1–4 bytes</td></tr><tr><td>Integer / timestamp</td><td>4–8 bytes</td></tr><tr><td>UUID</td><td>16 bytes</td></tr><tr><td>Typical database row</td><td>~1 KB</td></tr><tr><td>Tweet with metadata</td><td>~1 KB</td></tr><tr><td>Compressed web page</td><td>~100 KB</td></tr><tr><td>Photo (compressed)</td><td>~1 MB</td></tr><tr><td>Photo (thumbnail)</td><td>~10–200 KB</td></tr><tr><td>Minute of 1080p video</td><td>~50 MB</td></tr><tr><td>Minute of 4K video</td><td>~200 MB</td></tr></tbody></table></div><p><strong>Powers of two:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Power</th><th>≈</th><th>Unit</th></tr></thead><tbody><tr><td>2¹⁰</td><td>1 thousand</td><td>KB</td></tr><tr><td>2²⁰</td><td>1 million</td><td>MB</td></tr><tr><td>2³⁰</td><td>1 billion</td><td>GB</td></tr><tr><td>2⁴⁰</td><td>1 trillion</td><td>TB</td></tr><tr><td><strong>2³²</strong></td><td><strong>4.3 billion</strong></td><td>Why 32-bit IDs run out</td></tr><tr><td><strong>2⁶⁴</strong></td><td><strong>1.8 × 10¹⁹</strong></td><td>Why 64-bit ones do not</td></tr></tbody></table></div><hr>
+<h2 id="4-time-conversions"><a class="anchor" href="#4-time-conversions">#</a>4 · Time conversions</h2><p><strong>Use 100,000 seconds per day.</strong> (Real: 86,400. Error: 16%. Worth it.)</p>
+<div class="table-scroll"><table><thead><tr><th>Per day</th><th>≈ QPS</th></tr></thead><tbody><tr><td>1 million</td><td>10</td></tr><tr><td>10 million</td><td>100</td></tr><tr><td><strong>100 million</strong></td><td><strong>1,000</strong> ← anchor</td></tr><tr><td>1 billion</td><td>10,000</td></tr><tr><td>10 billion</td><td>100,000</td></tr></tbody></table></div><div class="table-scroll"><table><thead><tr><th>Interval</th><th>Seconds</th></tr></thead><tbody><tr><td>Minute</td><td>60</td></tr><tr><td>Hour</td><td>3,600</td></tr><tr><td>Day</td><td>86,400 (~100k)</td></tr><tr><td>Month</td><td>2.6M</td></tr><tr><td>Year</td><td>31.5M (~30M)</td></tr></tbody></table></div><p><strong>Peak = 2–3× average.</strong> Global services 2×; single-timezone 3×.</p>
+<hr>
+<h2 id="5-availability"><a class="anchor" href="#5-availability">#</a>5 · Availability</h2><div class="table-scroll"><table><thead><tr><th>SLA</th><th>Downtime/year</th><th>/month</th><th>/week</th></tr></thead><tbody><tr><td>99%</td><td>3.65 days</td><td>7.2 h</td><td>1.7 h</td></tr><tr><td>99.9% (&quot;three nines&quot;)</td><td>8.8 h</td><td>43 min</td><td>10 min</td></tr><tr><td>99.95%</td><td>4.4 h</td><td>22 min</td><td>5 min</td></tr><tr><td>99.99% (&quot;four nines&quot;)</td><td>53 min</td><td>4.3 min</td><td>1 min</td></tr><tr><td>99.999% (&quot;five nines&quot;)</td><td>5.3 min</td><td>26 s</td><td>6 s</td></tr></tbody></table></div><pre class="code"><code>SERIES (dependencies):    0.999^3 = 99.7%     -- each one costs you
+PARALLEL (redundancy):    1 - 0.01^2 = 99.99% -- IF independent</code></pre><p><strong>Correlated failure is why the parallel number is optimistic</strong> — shared racks,
+shared control planes, shared deploy pipelines.</p>
+<hr>
+<h2 id="6-cost-order-of-magnitude"><a class="anchor" href="#6-cost-order-of-magnitude">#</a>6 · Cost, order of magnitude</h2><div class="table-scroll"><table><thead><tr><th>Resource</th><th>Rough monthly cost</th></tr></thead><tbody><tr><td>Object storage</td><td>$20–25 / TB</td></tr><tr><td>Block storage (SSD)</td><td>$80–100 / TB</td></tr><tr><td>Database storage (managed)</td><td>$100–200 / TB</td></tr><tr><td><strong>Cloud egress</strong></td><td><strong>$50–90 / TB</strong> ← usually dominates</td></tr><tr><td>CDN egress</td><td>$10–40 / TB</td></tr><tr><td>App server (4 vCPU, 16 GB)</td><td>$100–150</td></tr><tr><td>Cache node (32 GB)</td><td>$200–400</td></tr></tbody></table></div><blockquote>
+<p><strong>Egress is the line item that surprises people.</strong> For any media-serving
+system, bandwidth cost typically exceeds compute and storage combined — which
+is why the CDN and serving correctly-sized variants are architectural
+decisions, not optimisations.</p>
+</blockquote>
+<hr>
+<h2 id="7-ratios-and-rules-of-thumb"><a class="anchor" href="#7-ratios-and-rules-of-thumb">#</a>7 · Ratios and rules of thumb</h2><div class="table-scroll"><table><thead><tr><th>Rule</th><th>Value</th></tr></thead><tbody><tr><td>Read:write, social/content</td><td>100:1 to 1000:1</td></tr><tr><td>Cache hit rate, well-designed</td><td>90–99%</td></tr><tr><td>Hot data (the 80/20 rule)</td><td>20% of data = 80% of traffic</td></tr><tr><td>Compression ratio, text</td><td>3–5×</td></tr><tr><td>Compression ratio, JSON</td><td>5–10×</td></tr><tr><td>Index storage overhead</td><td>10–30% of table size</td></tr><tr><td>Replication factor</td><td>3 (2 for cheap, 5 for critical)</td></tr><tr><td>Peak:average traffic</td><td>2–3×</td></tr><tr><td>Bloom filter</td><td>~10 bits/element for ~1% false positives</td></tr></tbody></table></div><hr>
+<h2 id="8-the-60-second-estimation-script"><a class="anchor" href="#8-the-60-second-estimation-script">#</a>8 · The 60-second estimation script</h2><pre class="code"><code>1. DAU x actions/day        = actions/day
+2. / 100,000                = average QPS
+3. x 2-3                    = peak QPS
+4. writes/day x bytes x 365 x 3   = storage/year
+5. peak QPS / 10,000        = app servers (then round UP for headroom)
+6. hot data x entry size    = cache RAM
+
+7. CONCLUDE. &quot;So this needs / does not need X.&quot;</code></pre><p><strong>Step 7 is the only one being scored.</strong> An estimate that changes no decision was
+wasted time.</p>
+<hr>
+<h2 id="9-sanity-checks"><a class="anchor" href="#9-sanity-checks">#</a>9 · Sanity checks</h2><p>If your answer looks like one of these, recheck:</p>
+<div class="table-scroll"><table><thead><tr><th>Result</th><th>Likely error</th></tr></thead><tbody><tr><td>&gt; 1 PB/day of text</td><td>Dropped a factor of 1,000</td></tr><tr><td>&gt; 1M QPS for a normal app</td><td>Confused per-day with per-second</td></tr><tr><td>A single server at 500k QPS</td><td>Off by 10×</td></tr><tr><td>Storage without replication</td><td>Forgot the ×3</td></tr><tr><td>Provisioning for average load</td><td>Forgot peak</td></tr><tr><td>More cache RAM than total data</td><td>Caching everything, including cold</td></tr></tbody></table></div><p><strong>Catching your own error out loud is a positive signal</strong>, not a negative one.
+<em>&quot;That gives 200 TB a day, which is more than YouTube — let me recheck&quot;</em> reads
+as someone with calibrated intuition.</p>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-file-sync.html"><span>previous</span>Design a file sync service</a><a class="pager next" href="anti-patterns.html"><span>next</span>Anti-patterns</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-latency">1 · Latency</a></li><li class="d2"><a href="#2-capacity-per-commodity-machine">2 · Capacity per commodity machine</a></li><li class="d2"><a href="#3-sizes">3 · Sizes</a></li><li class="d2"><a href="#4-time-conversions">4 · Time conversions</a></li><li class="d2"><a href="#5-availability">5 · Availability</a></li><li class="d2"><a href="#6-cost-order-of-magnitude">6 · Cost, order of magnitude</a></li><li class="d2"><a href="#7-ratios-and-rules-of-thumb">7 · Ratios and rules of thumb</a></li><li class="d2"><a href="#8-the-60-second-estimation-script">8 · The 60-second estimation script</a></li><li class="d2"><a href="#9-sanity-checks">9 · Sanity checks</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
