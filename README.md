@@ -104,9 +104,15 @@ Mermaid blocks render client-side and re-render on theme change.
 
 ---
 
-## Companion handbooks
+## Companion repos
 
 | Repo | Round it prepares |
 |---|---|
 | [dsa-handbook](https://github.com/SAGARCHRY0777/dsa-handbook) | Coding — patterns, ladders, worked solutions in Python and Java |
 | [llm-handbook](https://github.com/SAGARCHRY0777/llm-handbook) | ML/LLM systems — RAG, evaluation, serving, agents |
+| [system-design-lab](https://github.com/SAGARCHRY0777/system-design-lab) | The depth reference behind the round — 123 pages, 21 sections, 325 diagrams, runnable implementations |
+
+---
+
+**Sagar Chaudhary** — AI Engineer, industrial & manufacturing AI · Bengaluru  
+[Portfolio](https://sagarchry0777.github.io) · [GitHub](https://github.com/SAGARCHRY0777) · [LinkedIn](https://www.linkedin.com/in/sagar-chaudhary777/)
