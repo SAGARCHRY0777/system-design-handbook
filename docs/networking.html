@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Networking fundamentals · System Design Handbook</title>
+<meta name="description" content="DNS, TCP versus UDP, the HTTP versions and what each fixed, forward versus reverse proxies, and where TLS costs you.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html" class="active">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="networking-fundamentals"><a class="anchor" href="#networking-fundamentals">#</a>Networking fundamentals</h1><blockquote>
+<p><strong>This is the layer every other page assumes.</strong> It rarely gets a whole
+question, but it produces the follow-ups — <em>&quot;what happens when you type a URL
+and press enter?&quot;</em> is still the most-asked warm-up in the industry.</p>
+</blockquote>
+<hr>
+<h2 id="1-what-happens-when-you-press-enter"><a class="anchor" href="#1-what-happens-when-you-press-enter">#</a>1 · What happens when you press enter</h2><p>The canonical question, in the order it happens:</p>
+<pre class="code"><code>1. BROWSER CACHE      already have it, and still fresh? done.
+2. DNS                example.com -&gt; 93.184.216.34
+                      browser -&gt; OS -&gt; resolver -&gt; root -&gt; TLD -&gt; authoritative
+                      (each layer caches, so most lookups stop early)
+3. TCP HANDSHAKE      SYN, SYN-ACK, ACK   -- one round trip
+4. TLS HANDSHAKE      certificate, key exchange
+                      TLS 1.2: two round trips.  TLS 1.3: one.
+5. HTTP REQUEST       GET / HTTP/2, headers, cookies
+6. SERVER             LB -&gt; app -&gt; cache/DB -&gt; response
+7. RESPONSE           status, headers, body
+8. RENDER             parse HTML, fetch subresources, paint</code></pre><blockquote>
+<p><strong>The point of the question is the round trips.</strong> Before a single byte of your
+page moves, you have spent one RTT on TCP and one or two on TLS. Across an
+ocean at 150 ms per round trip, that is 300–450 ms of pure latency — which is
+why connection reuse, HTTP/2 and CDNs matter more than shaving server time.</p>
+</blockquote>
+<hr>
+<h2 id="2-dns"><a class="anchor" href="#2-dns">#</a>2 · DNS</h2><p>Hierarchical name resolution, cached at every layer.</p>
+<div class="table-scroll"><table><thead><tr><th>Record</th><th>Maps</th></tr></thead><tbody><tr><td><strong>A / AAAA</strong></td><td>Name → IPv4 / IPv6 address</td></tr><tr><td><strong>CNAME</strong></td><td>Name → another name</td></tr><tr><td><strong>MX</strong></td><td>Mail servers</td></tr><tr><td><strong>TXT</strong></td><td>Arbitrary text — domain verification, SPF</td></tr><tr><td><strong>NS</strong></td><td>Which servers are authoritative</td></tr></tbody></table></div><p><strong>Routing policies</strong> — how DNS becomes a traffic tool:</p>
+<div class="table-scroll"><table><thead><tr><th>Policy</th><th>Behaviour</th></tr></thead><tbody><tr><td>Simple</td><td>One answer</td></tr><tr><td><strong>Weighted</strong></td><td>Split by percentage — canary releases</td></tr><tr><td><strong>Latency / geo</strong></td><td>Nearest or fastest region</td></tr><tr><td>Failover</td><td>Secondary when the health check fails</td></tr><tr><td>Round robin</td><td>Rotate answers — crude balancing</td></tr></tbody></table></div><blockquote>
+<p><strong>DNS is a poor failover mechanism, and knowing why is the useful part.</strong>
+Records are cached by resolvers, operating systems and browsers, and <strong>many
+ignore your TTL</strong>. Setting TTL to 60 seconds does not mean traffic moves in 60
+seconds — a meaningful tail keeps hitting the dead address for much longer.
+For real failover use anycast or a health-checked load balancer, and treat DNS
+as coarse routing.</p>
+</blockquote>
+<p><strong>Anycast</strong> — the same IP announced from many locations, with BGP routing each
+client to the nearest. It is how CDNs and public resolvers work, and it fails
+over in seconds rather than TTL-minutes.</p>
+<hr>
+<h2 id="3-tcp-versus-udp"><a class="anchor" href="#3-tcp-versus-udp">#</a>3 · TCP versus UDP</h2><div class="table-scroll"><table><thead><tr><th></th><th>TCP</th><th>UDP</th></tr></thead><tbody><tr><td>Connection</td><td>Handshake first</td><td>None — just send</td></tr><tr><td>Delivery</td><td>Guaranteed, retransmits</td><td>Best effort</td></tr><tr><td>Ordering</td><td>Guaranteed</td><td>None</td></tr><tr><td>Congestion control</td><td>Yes</td><td>You build it</td></tr><tr><td>Overhead</td><td>20-byte header + handshake</td><td>8-byte header</td></tr><tr><td>Head-of-line blocking</td><td><strong>Yes</strong></td><td>No</td></tr><tr><td>Used by</td><td>HTTP, databases, most things</td><td>DNS, video calls, gaming, QUIC</td></tr></tbody></table></div><p><strong>Choose UDP when late data is worthless.</strong> In a video call, a packet from 200 ms
+ago has no value — retransmitting it delays everything behind it and makes the
+call worse. Dropping it is correct.</p>
+<blockquote>
+<p><strong>Head-of-line blocking is the concept to be able to explain.</strong> TCP guarantees
+ordering, so one lost segment stalls <em>everything</em> behind it until it is
+retransmitted — even data that arrived fine and belongs to an unrelated
+request. That single property drove the design of HTTP/2 and then HTTP/3.</p>
+</blockquote>
+<hr>
+<h2 id="4-the-http-versions"><a class="anchor" href="#4-the-http-versions">#</a>4 · The HTTP versions</h2><p><strong>Each version fixed the previous one&#39;s bottleneck.</strong> Being able to say what
+each fixed is the whole answer.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Fixed</th><th>Remaining problem</th></tr></thead><tbody><tr><td><strong>HTTP/1.0</strong></td><td>—</td><td>New TCP connection per request</td></tr><tr><td><strong>HTTP/1.1</strong></td><td>Keep-alive, so connections are reused</td><td><strong>One request at a time per connection</strong> — browsers opened ~6 connections and sharded domains to work around it</td></tr><tr><td><strong>HTTP/2</strong></td><td><strong>Multiplexing</strong> — many streams over one connection; header compression; server push</td><td>Still TCP, so <strong>one lost packet stalls every stream</strong></td></tr><tr><td><strong>HTTP/3</strong></td><td>Runs on <strong>QUIC over UDP</strong> — loss in one stream does not block others; 0-RTT resumption</td><td>Newer; some middleboxes interfere with UDP</td></tr></tbody></table></div><blockquote>
+<p><strong>HTTP/2 moved head-of-line blocking down a layer rather than removing it.</strong>
+It removed it at the HTTP layer — six requests share one connection — but TCP
+still guarantees byte ordering underneath, so a single dropped packet stalls
+all six streams. HTTP/3 solves it properly by abandoning TCP. <strong>That
+progression is the cleanest way to show you understand the stack.</strong></p>
+</blockquote>
+<p><strong>A consequence worth knowing:</strong> domain sharding and sprite sheets were HTTP/1.1
+workarounds and are actively <em>harmful</em> under HTTP/2 — more domains means more
+connections and less multiplexing.</p>
+<hr>
+<h2 id="5-proxies"><a class="anchor" href="#5-proxies">#</a>5 · Proxies</h2><p><strong>The distinction is who it acts for.</strong></p>
+<pre class="code"><code>FORWARD PROXY  -- acts for the CLIENT; the server does not know the real client
+   client -&gt; [proxy] -&gt; internet
+   corporate egress filtering, VPNs, caching for a network
+
+REVERSE PROXY  -- acts for the SERVER; the client does not know the real server
+   client -&gt; [proxy] -&gt; your servers
+   load balancing, TLS termination, caching, WAF, rate limiting</code></pre><div class="table-scroll"><table><thead><tr><th></th><th>Forward</th><th>Reverse</th></tr></thead><tbody><tr><td>Hides</td><td>The client</td><td>The servers</td></tr><tr><td>Configured by</td><td>The client or its network</td><td>The service owner</td></tr><tr><td>Examples</td><td>Squid, VPN, Tor</td><td>Nginx, Envoy, CloudFront, ALB</td></tr></tbody></table></div><p><strong>Almost everything in a system design diagram is a reverse proxy</strong> — load
+balancers, API gateways and CDN edges are all reverse proxies with different
+emphases.</p>
+<hr>
+<h2 id="6-tls-and-what-it-costs"><a class="anchor" href="#6-tls-and-what-it-costs">#</a>6 · TLS, and what it costs</h2><p><strong>TLS 1.3 is one round trip; TLS 1.2 was two.</strong> With session resumption, 1.3
+can achieve 0-RTT for repeat visits — at the cost that 0-RTT data is replayable,
+so it must only carry idempotent requests.</p>
+<p><strong>Where to terminate it:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Terminate at</th><th>Consequence</th></tr></thead><tbody><tr><td><strong>Load balancer</strong></td><td>Backends speak plain HTTP — simpler, faster, but the internal network is trusted</td></tr><tr><td><strong>Each service</strong></td><td>Encrypted end to end; certificate management on every service</td></tr><tr><td><strong>Both (mTLS internally)</strong></td><td>Zero-trust; a service mesh usually manages the certificates</td></tr></tbody></table></div><blockquote>
+<p><strong>Terminating at the edge is the common answer, and the honest follow-up is
+that it assumes a trusted internal network.</strong> If that assumption is wrong —
+multi-tenant infrastructure, compliance requirements — you need mTLS between
+services, which is precisely what a service mesh exists to automate.</p>
+</blockquote>
+<hr>
+<h2 id="7-keeping-a-connection-open"><a class="anchor" href="#7-keeping-a-connection-open">#</a>7 · Keeping a connection open</h2><div class="table-scroll"><table><thead><tr><th>Mechanism</th><th>Direction</th><th>Use for</th></tr></thead><tbody><tr><td><strong>Polling</strong></td><td>Client asks repeatedly</td><td>Infrequent updates; simple and wasteful</td></tr><tr><td><strong>Long polling</strong></td><td>Client asks, server holds the request open</td><td>A fallback where WebSockets are blocked</td></tr><tr><td><strong>SSE</strong></td><td>Server → client, one way, over plain HTTP</td><td>Feeds, notifications, progress</td></tr><tr><td><strong>WebSocket</strong></td><td>Full duplex</td><td><a href="design-chat.html">Chat</a>, collaborative editing, games</td></tr></tbody></table></div><p><strong>Server-sent events are underrated in interviews.</strong> If updates only flow one
+way, SSE is plain HTTP — it reconnects automatically, passes through proxies,
+and needs no protocol upgrade. Reaching for WebSockets when SSE would do adds
+stateful connections for nothing.</p>
+<hr>
+<h2 id="8-interview-questions"><a class="anchor" href="#8-interview-questions">#</a>8 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;What happens when you type a URL?&quot;</td><td>Cache, DNS resolution through the hierarchy, TCP handshake, TLS handshake, HTTP request, server work, response, render. The interesting part is the round trips: one for TCP and one or two for TLS before any data moves, which is why connection reuse and CDNs matter more than server time.</td></tr><tr><td>⭐ &quot;TCP or UDP?&quot;</td><td>TCP unless late data is worthless. In a video call a 200 ms-old packet has no value and retransmitting it delays everything behind it, so UDP is correct. TCP&#39;s ordering guarantee is also its weakness — one lost segment blocks everything behind it.</td></tr><tr><td>⭐ &quot;What did HTTP/2 fix, and what did it not?&quot;</td><td>It fixed HTTP-level head-of-line blocking with multiplexing, so many streams share one connection. It did not fix TCP-level blocking — one dropped packet still stalls every stream, because TCP guarantees byte order. HTTP/3 fixes that by moving to QUIC over UDP.</td></tr><tr><td>&quot;Why is DNS bad for failover?&quot;</td><td>Resolvers, operating systems and browsers cache records and many ignore the TTL, so a dead address keeps receiving traffic well past your TTL. Use anycast or a health-checked balancer, and treat DNS as coarse routing.</td></tr><tr><td>⭐ &quot;Forward or reverse proxy?&quot;</td><td>A forward proxy acts for the client and hides it from the server. A reverse proxy acts for the server and hides the backends from the client. Nearly every box in a design diagram — load balancer, gateway, CDN edge — is a reverse proxy.</td></tr><tr><td>&quot;Where do you terminate TLS?&quot;</td><td>At the edge, usually, for simplicity and offload — which assumes the internal network is trusted. Where it is not, mTLS between services, typically managed by a service mesh so certificate rotation is not a per-team problem.</td></tr><tr><td>&quot;WebSocket or SSE?&quot;</td><td>SSE if updates only flow server-to-client — it is plain HTTP, reconnects on its own, and traverses proxies. WebSockets when you genuinely need full duplex, accepting stateful servers.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>walk the URL question and identify the round trips as the point,</li>
+<li>explain head-of-line blocking at both the HTTP and TCP layers,</li>
+<li>say what each HTTP version fixed and what it left,</li>
+<li>explain why DNS TTL does not control failover time,</li>
+<li>distinguish forward from reverse proxies by who they act for, and</li>
+<li>choose SSE over WebSockets when the traffic is one-way.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="search.html"><span>previous</span>Search & typeahead</a><a class="pager next" href="databases.html"><span>next</span>Databases & indexes</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-what-happens-when-you-press-enter">1 · What happens when you press enter</a></li><li class="d2"><a href="#2-dns">2 · DNS</a></li><li class="d2"><a href="#3-tcp-versus-udp">3 · TCP versus UDP</a></li><li class="d2"><a href="#4-the-http-versions">4 · The HTTP versions</a></li><li class="d2"><a href="#5-proxies">5 · Proxies</a></li><li class="d2"><a href="#6-tls-and-what-it-costs">6 · TLS, and what it costs</a></li><li class="d2"><a href="#7-keeping-a-connection-open">7 · Keeping a connection open</a></li><li class="d2"><a href="#8-interview-questions">8 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The trade-off catalogue · System Design Handbook</title>
+<meta name="description" content="Fifteen recurring trade-offs with the decision rule for each — because &quot;it depends&quot; only scores when you say what it depends on.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html" class="active">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="the-trade-off-catalogue"><a class="anchor" href="#the-trade-off-catalogue">#</a>The trade-off catalogue</h1><blockquote>
+<p><strong>Naming a trade-off is not the skill. Resolving it is.</strong> <em>&quot;There&#39;s a
+trade-off between consistency and availability&quot;</em> scores nothing. <em>&quot;I&#39;ll take
+availability here because a stale follower count costs nothing and downtime
+costs sign-ups&quot;</em> scores.</p>
+</blockquote>
+<p>Every entry below has a <strong>decision rule</strong> — the thing that tips it.</p>
+<hr>
+<h2 id="1-vertical-vs-horizontal-scaling"><a class="anchor" href="#1-vertical-vs-horizontal-scaling">#</a>1 · Vertical vs horizontal scaling</h2><div class="table-scroll"><table><thead><tr><th></th><th>Vertical (bigger machine)</th><th>Horizontal (more machines)</th></tr></thead><tbody><tr><td>Complexity</td><td>None — it is the same system</td><td>Distribution, coordination, partial failure</td></tr><tr><td>Ceiling</td><td>Hard, and you will hit it</td><td>Effectively none</td></tr><tr><td>Cost curve</td><td>Superlinear at the top end</td><td>Roughly linear</td></tr><tr><td>Failure</td><td><strong>Single point</strong></td><td>Survives node loss</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: scale vertically until it stops being cheap, then horizontally.</strong> A
+modern machine handles far more than people assume, and distributing early
+buys you every distributed-systems problem for load you do not have. In an
+interview, <em>&quot;I&#39;d scale up to about here, then shard on X&quot;</em> beats either
+extreme.</p>
+</blockquote>
+<hr>
+<h2 id="2-consistency-vs-availability"><a class="anchor" href="#2-consistency-vs-availability">#</a>2 · Consistency vs availability</h2><p><strong>Only a live question during a partition</strong> — see <a href="cap-and-consistency.html">CAP</a>.</p>
+<blockquote>
+<p><strong>Rule: decide per operation, not per system.</strong> A feed can be stale;
+a payment cannot. Designing everything to the strictest requirement is how you
+get something slow <em>and</em> fragile.</p>
+</blockquote>
+<hr>
+<h2 id="3-latency-vs-throughput"><a class="anchor" href="#3-latency-vs-throughput">#</a>3 · Latency vs throughput</h2><div class="table-scroll"><table><thead><tr><th>Optimising latency</th><th>Optimising throughput</th></tr></thead><tbody><tr><td>Process each item immediately</td><td>Batch items together</td></tr><tr><td>Smaller batches, more overhead</td><td>Larger batches, better amortisation</td></tr><tr><td>Idle capacity is fine</td><td>Keep the pipeline full</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: batch when the consumer is a machine, stream when it is a person
+waiting.</strong> Analytics ingestion batches; a search box does not. And note they
+trade against each other — a system at 100% utilisation has maximal throughput
+and terrible latency, because queues are full.</p>
+</blockquote>
+<hr>
+<h2 id="4-read-vs-write-optimisation"><a class="anchor" href="#4-read-vs-write-optimisation">#</a>4 · Read vs write optimisation</h2><p>You cannot optimise both; <strong>you choose which path pays</strong>.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Fan-out on write</th><th>Fan-out on read</th></tr></thead><tbody><tr><td>Cost at write</td><td>High</td><td>Low</td></tr><tr><td>Cost at read</td><td><strong>O(1) lookup</strong></td><td>Assemble from N sources</td></tr><tr><td>Staleness</td><td>Possible</td><td>None</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: put the work where the traffic is not.</strong> At 100:1 reads, precompute.
+At 1:1, do not. See <a href="design-news-feed.html">news feed</a> for the hybrid that
+handles both.</p>
+</blockquote>
+<hr>
+<h2 id="5-normalisation-vs-denormalisation"><a class="anchor" href="#5-normalisation-vs-denormalisation">#</a>5 · Normalisation vs denormalisation</h2><div class="table-scroll"><table><thead><tr><th>Normalised</th><th>Denormalised</th></tr></thead><tbody><tr><td>One copy of each fact</td><td>Duplicated, pre-joined</td></tr><tr><td>Writes are simple and safe</td><td><strong>Writes must update every copy</strong></td></tr><tr><td>Reads need joins</td><td>Reads are one lookup</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: normalise until a join becomes the bottleneck, then denormalise that
+specific read path</strong> — and accept that you now own keeping the copies in sync.
+Denormalising everything up front is how you get inconsistent data nobody can
+reconcile.</p>
+</blockquote>
+<hr>
+<h2 id="6-sql-vs-nosql"><a class="anchor" href="#6-sql-vs-nosql">#</a>6 · SQL vs NoSQL</h2><blockquote>
+<p><strong>Rule: the real question is whether you know your queries in advance.</strong> If
+yes and they vary, relational. If access is by one known key at volume,
+wide-column. Postgres is the right default far longer than people expect — see
+<a href="databases.html">databases</a>.</p>
+</blockquote>
+<hr>
+<h2 id="7-strong-vs-eventual-consistency"><a class="anchor" href="#7-strong-vs-eventual-consistency">#</a>7 · Strong vs eventual consistency</h2><div class="table-scroll"><table><thead><tr><th>Strong</th><th>Eventual</th></tr></thead><tbody><tr><td>Coordination on every write</td><td>None</td></tr><tr><td>Lower availability, higher latency</td><td>Fast, always writable</td></tr><tr><td>Simple to reason about</td><td>Anomalies you must design around</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: ask what a stale read actually costs.</strong> Nothing → eventual. Money,
+inventory, or a uniqueness guarantee → strong. Then confine the strong path so
+it does not slow everything else.</p>
+</blockquote>
+<hr>
+<h2 id="8-synchronous-vs-asynchronous"><a class="anchor" href="#8-synchronous-vs-asynchronous">#</a>8 · Synchronous vs asynchronous</h2><div class="table-scroll"><table><thead><tr><th>Sync</th><th>Async</th></tr></thead><tbody><tr><td>Caller knows the outcome</td><td>Caller knows it was accepted</td></tr><tr><td>Failure surfaces immediately</td><td>Failure surfaces later, somewhere else</td></tr><tr><td>Latency = the whole chain</td><td>Latency = enqueue</td></tr><tr><td>Simple</td><td>Queues, retries, DLQs, idempotency</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: synchronous for what the user is waiting on; asynchronous for
+everything downstream of that.</strong> Post the tweet synchronously; fan it out
+asynchronously. The user-visible cost is that effects appear later, which is
+why the author&#39;s own view is written inline.</p>
+</blockquote>
+<hr>
+<h2 id="9-batch-vs-stream-processing"><a class="anchor" href="#9-batch-vs-stream-processing">#</a>9 · Batch vs stream processing</h2><div class="table-scroll"><table><thead><tr><th>Batch</th><th>Stream</th></tr></thead><tbody><tr><td>Bounded data, run on a schedule</td><td>Unbounded, continuous</td></tr><tr><td>Easy to reason about and reprocess</td><td>Windowing, late events, watermarks</td></tr><tr><td>Latency: minutes to hours</td><td>Latency: seconds</td></tr><tr><td>Cheaper per record</td><td>More infrastructure</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: stream only when the freshness is worth the complexity.</strong> Fraud
+detection needs seconds. A daily revenue report does not — and running it as a
+stream buys nothing while costing a great deal.</p>
+</blockquote>
+<hr>
+<h2 id="10-push-vs-pull"><a class="anchor" href="#10-push-vs-pull">#</a>10 · Push vs pull</h2><div class="table-scroll"><table><thead><tr><th>Push</th><th>Pull</th></tr></thead><tbody><tr><td>Server sends on change</td><td>Client asks</td></tr><tr><td>Low latency</td><td>Latency = the poll interval</td></tr><tr><td>Server tracks subscribers</td><td>Stateless server</td></tr><tr><td>Can overwhelm slow consumers</td><td>Consumer sets its own pace</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: push when events are rare and latency matters; pull when they are
+frequent or consumers vary in speed.</strong> Note that Kafka is <em>pull</em>-based on
+purpose — consumers fetch at their own rate, which is what makes backpressure
+work without the broker tracking every consumer&#39;s capacity.</p>
+</blockquote>
+<hr>
+<h2 id="11-stateless-vs-stateful-services"><a class="anchor" href="#11-stateless-vs-stateful-services">#</a>11 · Stateless vs stateful services</h2><blockquote>
+<p><strong>Rule: default to stateless and push state to a shared store.</strong> Statelessness
+is what makes load balancing, autoscaling, deploys and failure recovery
+trivial. Accept stateful only where the connection <em>is</em> the product —
+WebSocket gateways, game servers — and then plan for reconnect storms.</p>
+</blockquote>
+<hr>
+<h2 id="12-monolith-vs-microservices"><a class="anchor" href="#12-monolith-vs-microservices">#</a>12 · Monolith vs microservices</h2><blockquote>
+<p><strong>Rule: split for organisational reasons, not technical ones.</strong> See
+<a href="architecture-patterns.html">architectural patterns</a>. Availability multiplies
+downward; five services at 99.9% is 99.5%.</p>
+</blockquote>
+<hr>
+<h2 id="13-caching-freshness-vs-load"><a class="anchor" href="#13-caching-freshness-vs-load">#</a>13 · Caching: freshness vs load</h2><div class="table-scroll"><table><thead><tr><th>Long TTL</th><th>Short TTL</th></tr></thead><tbody><tr><td>High hit rate, low origin load</td><td>Fresher, more origin traffic</td></tr><tr><td>Staler data</td><td>Better consistency</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: set the TTL from what a stale read costs, then jitter it.</strong> And decide
+what happens at 0% hit rate — if the database cannot survive a cold cache, the
+cache is not an optimisation, it is a dependency. See
+<a href="caching.html">caching</a>.</p>
+</blockquote>
+<hr>
+<h2 id="14-security-vs-usability"><a class="anchor" href="#14-security-vs-usability">#</a>14 · Security vs usability</h2><div class="table-scroll"><table><thead><tr><th>More secure</th><th>More usable</th></tr></thead><tbody><tr><td>Short sessions, frequent re-auth</td><td>Long sessions</td></tr><tr><td>Strict rate limits</td><td>Generous limits</td></tr><tr><td>Fail closed</td><td>Fail open</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: fail closed where the cost of wrongful access exceeds the cost of
+wrongful denial — and fail open where it does not.</strong> A rate limiter whose
+backing store is down should usually fail <em>open</em>: an outage caused by your own
+protection is worse than the abuse it prevents. A permissions check should fail
+<em>closed</em>. Saying which and why is the answer.</p>
+</blockquote>
+<hr>
+<h2 id="15-build-vs-buy"><a class="anchor" href="#15-build-vs-buy">#</a>15 · Build vs buy</h2><div class="table-scroll"><table><thead><tr><th>Build</th><th>Buy</th></tr></thead><tbody><tr><td>Fits exactly</td><td>Fits approximately</td></tr><tr><td>You own the operations</td><td>Someone else is paged</td></tr><tr><td>No vendor risk</td><td>Lock-in, pricing changes</td></tr><tr><td>Months of engineering</td><td>Available this afternoon</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: build only what is your differentiator.</strong> Nobody chooses your product
+because of your queue implementation. Buy the undifferentiated parts and spend
+the engineering on the thing customers actually pay for.</p>
+</blockquote>
+<hr>
+<h2 id="16-cost-vs-performance"><a class="anchor" href="#16-cost-vs-performance">#</a>16 · Cost vs performance</h2><p><strong>The trade-off candidates most often forget exists.</strong></p>
+<blockquote>
+<p><strong>Rule: name the dominant cost line and optimise that, not the impressive
+one.</strong> For a media system it is egress, not compute — so serving a correctly
+sized variant beats any amount of server tuning. Saying <em>&quot;the interesting
+number here is bandwidth, not QPS&quot;</em> reframes the whole design and is unusual
+enough to be memorable.</p>
+</blockquote>
+<hr>
+<h2 id="17-accuracy-vs-cost"><a class="anchor" href="#17-accuracy-vs-cost">#</a>17 · Accuracy vs cost</h2><div class="table-scroll"><table><thead><tr><th>Exact</th><th>Approximate</th></tr></thead><tbody><tr><td>Every event counted</td><td>Sampled or probabilistic</td></tr><tr><td>Expensive at scale</td><td>Orders of magnitude cheaper</td></tr></tbody></table></div><div class="table-scroll"><table><thead><tr><th>Structure</th><th>Gives</th><th>Costs</th></tr></thead><tbody><tr><td><strong>Bloom filter</strong></td><td>Set membership</td><td>False positives, never false negatives</td></tr><tr><td><strong>HyperLogLog</strong></td><td>Distinct count</td><td>~2% error, kilobytes for billions</td></tr><tr><td><strong>Count-min sketch</strong></td><td>Frequency</td><td>Overestimates</td></tr><tr><td>Sampling</td><td>Trends</td><td>No exact totals</td></tr></tbody></table></div><blockquote>
+<p><strong>Rule: ask whether anyone acts differently on an exact number.</strong> Twitter
+shows approximate follower counts because nobody behaves differently at
+1,240,001 than at 1.24M. A bank balance is the opposite. <strong>Volunteering an
+approximate structure where exactness is not needed is a strong signal.</strong></p>
+</blockquote>
+<hr>
+<h2 id="18-how-to-say-a-trade-off-out-loud"><a class="anchor" href="#18-how-to-say-a-trade-off-out-loud">#</a>18 · How to say a trade-off out loud</h2><p><strong>The four-part form:</strong></p>
+<pre class="code"><code>1. NAME it            &quot;there&#39;s a trade-off between X and Y here&quot;
+2. RESOLVE it         &quot;I&#39;m choosing X&quot;
+3. JUSTIFY from a     &quot;because we said reads are 100x writes&quot;
+   REQUIREMENT
+4. STATE THE COST     &quot;which costs me staleness of a few seconds&quot;</code></pre><blockquote>
+<p><em>&quot;There&#39;s a trade-off between write cost and read cost here. I&#39;m precomputing
+on write, because we established reads are a hundred times writes — which
+costs me a few seconds of staleness and a much more expensive write path for
+users with very large followings. I&#39;ll come back to that second problem.&quot;</em></p>
+</blockquote>
+<p><strong>Step 4 is what separates candidates.</strong> Anyone can choose; volunteering what
+the choice costs you, before being asked, is the single highest-value behaviour
+in the round.</p>
+<hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can use this page when you can:</p>
+<ol>
+<li>give the decision rule — not just the two sides — for ten of these,</li>
+<li>resolve consistency per operation rather than per system,</li>
+<li>argue fail-open for a rate limiter and fail-closed for permissions,</li>
+<li>name egress as the dominant cost in a media design, and</li>
+<li>state any trade-off in the four-part form, ending with its cost.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="question-bank.html"><span>previous</span>Question bank</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-vertical-vs-horizontal-scaling">1 · Vertical vs horizontal scaling</a></li><li class="d2"><a href="#2-consistency-vs-availability">2 · Consistency vs availability</a></li><li class="d2"><a href="#3-latency-vs-throughput">3 · Latency vs throughput</a></li><li class="d2"><a href="#4-read-vs-write-optimisation">4 · Read vs write optimisation</a></li><li class="d2"><a href="#5-normalisation-vs-denormalisation">5 · Normalisation vs denormalisation</a></li><li class="d2"><a href="#6-sql-vs-nosql">6 · SQL vs NoSQL</a></li><li class="d2"><a href="#7-strong-vs-eventual-consistency">7 · Strong vs eventual consistency</a></li><li class="d2"><a href="#8-synchronous-vs-asynchronous">8 · Synchronous vs asynchronous</a></li><li class="d2"><a href="#9-batch-vs-stream-processing">9 · Batch vs stream processing</a></li><li class="d2"><a href="#10-push-vs-pull">10 · Push vs pull</a></li><li class="d2"><a href="#11-stateless-vs-stateful-services">11 · Stateless vs stateful services</a></li><li class="d2"><a href="#12-monolith-vs-microservices">12 · Monolith vs microservices</a></li><li class="d2"><a href="#13-caching-freshness-vs-load">13 · Caching: freshness vs load</a></li><li class="d2"><a href="#14-security-vs-usability">14 · Security vs usability</a></li><li class="d2"><a href="#15-build-vs-buy">15 · Build vs buy</a></li><li class="d2"><a href="#16-cost-vs-performance">16 · Cost vs performance</a></li><li class="d2"><a href="#17-accuracy-vs-cost">17 · Accuracy vs cost</a></li><li class="d2"><a href="#18-how-to-say-a-trade-off-out-loud">18 · How to say a trade-off out loud</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
