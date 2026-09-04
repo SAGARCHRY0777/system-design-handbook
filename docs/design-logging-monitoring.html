@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a logging &amp; monitoring system · System Design Handbook</title>
+<meta name="description" content="Ingest at millions of events per second, store three signals with different shapes, survive cardinality explosion, and alert without waking anyone for nothing.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li><li><a href="design-ecommerce.html">Design an e-commerce platform</a></li><li><a href="design-key-value-store.html">Design a key-value store</a></li><li><a href="design-logging-monitoring.html" class="active">Design a logging & monitoring system</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-logging-and-monitoring-system"><a class="anchor" href="#design-a-logging-and-monitoring-system">#</a>Design a logging and monitoring system</h1><blockquote>
+<p><strong>The most write-heavy design in the set</strong>, and the only one where the system
+must stay up precisely when everything else is failing. Datadog, Splunk,
+Prometheus, CloudWatch.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- ingest logs, metrics, traces    - APM auto-instrumentation
+- store with retention tiers      - log parsing DSL
+- query and dashboard             - incident management workflow
+- alerting rules                  - billing
+
+NON-FUNCTIONAL
+- 10,000 hosts, 5M events/s peak
+- ingest must NEVER block the applications sending data
+- query: dashboards &lt; 2s, ad-hoc search &lt; 30s
+- retention: metrics 13 months, logs 30 days, traces 7 days
+- the system must survive the outage it is reporting on   &lt;- the hard one
+- some loss is acceptable for logs; NOT for alerting metrics</code></pre><blockquote>
+<p><strong>The requirement that makes this design different:</strong> <em>&quot;it must survive the
+outage it is reporting on.&quot;</em> A monitoring system that fails with the
+infrastructure it monitors is worse than useless — it fails silently at the
+exact moment you need it. <strong>That drives isolation, independent failure
+domains, and a bias toward dropping data rather than blocking.</strong></p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>METRICS   10,000 hosts x 500 series each = 5M active series
+          scraped every 10s -&gt; 500,000 points/s
+          a point is ~16 bytes compressed (timestamp delta + value)
+          -&gt; 500k x 16 B x 86,400 = ~700 GB/day raw
+          with delta-of-delta + XOR compression: ~1-2 bytes/point
+          -&gt; ~50 GB/day        &lt;- compression is the whole story
+
+LOGS      10,000 hosts x 100 lines/s = 1M lines/s
+          x 500 bytes = 500 MB/s = ~43 TB/day
+          compressed ~10:1 -&gt; ~4 TB/day
+          x 30 days = ~120 TB                &lt;- the dominant cost
+
+TRACES    5M requests/s, sampled at 1% = 50,000 spans/s
+          -&gt; manageable, and sampling is why
+
+CONCLUSION
+  - metrics are small but numerous -&gt; a purpose-built time-series store
+  - logs are enormous -&gt; object storage + an index, tiered aggressively
+  - the ingest path is the bottleneck, not the query path
+  - COMPRESSION and SAMPLING are not optimisations here, they are the design</code></pre><p><strong>&quot;Logs are 100× the volume of metrics for a fraction of the query value&quot; is the
+observation that justifies treating them completely differently.</strong></p>
+<hr>
+<h2 id="3-three-signals-three-shapes"><a class="anchor" href="#3-three-signals-three-shapes">#</a>3 · Three signals, three shapes</h2><p><strong>The central design decision: do not build one pipeline.</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Metrics</th><th>Logs</th><th>Traces</th></tr></thead><tbody><tr><td>Shape</td><td>Numeric time series</td><td>Unstructured text events</td><td>Request-scoped spans</td></tr><tr><td>Volume</td><td>500k/s</td><td><strong>1M/s, 100× the bytes</strong></td><td>50k/s after sampling</td></tr><tr><td>Cardinality</td><td><strong>The killer constraint</strong></td><td>Irrelevant</td><td>Irrelevant</td></tr><tr><td>Retention</td><td>13 months</td><td>30 days</td><td>7 days</td></tr><tr><td>Query</td><td>Aggregate over time</td><td>Search, filter</td><td>One request&#39;s waterfall</td></tr><tr><td>Store</td><td>Time-series DB</td><td>Inverted index + object storage</td><td>Trace store</td></tr><tr><td>Loss tolerance</td><td><strong>Low — alerts depend on it</strong></td><td>Moderate</td><td>High — already sampled</td></tr></tbody></table></div><blockquote>
+<p><strong>Metrics answer &quot;is something wrong?&quot;, traces answer &quot;where?&quot;, logs answer
+&quot;why?&quot;</strong> That workflow is why they need different stores: you query metrics
+constantly and cheaply, traces occasionally, and logs rarely but deeply.</p>
+</blockquote>
+<hr>
+<h2 id="4-architecture"><a class="anchor" href="#4-architecture">#</a>4 · Architecture</h2><pre class="mermaid">flowchart TD
+    APP[&quot;Applications&lt;br/&gt;10,000 hosts&quot;] --&gt; AG[&quot;Agent (per host)&lt;br/&gt;buffer · batch · compress&quot;]
+    AG --&gt;|&quot;push, backpressure-aware&quot;| GW[&quot;Ingest gateway&lt;br/&gt;auth, rate limit, validate&quot;]
+    GW --&gt; K[[&quot;Kafka&lt;br/&gt;partitioned by source&quot;]]
+
+    K --&gt; MP[&quot;Metrics consumer&quot;]
+    K --&gt; LP[&quot;Logs consumer&quot;]
+    K --&gt; TP[&quot;Traces consumer&quot;]
+
+    MP --&gt; TSDB[(&quot;Time-series DB&lt;br/&gt;13 months, downsampled&quot;)]
+    LP --&gt; IDX[(&quot;Search index&lt;br/&gt;hot: 7 days&quot;)]
+    LP --&gt; OBJ[(&quot;Object storage&lt;br/&gt;cold: 30 days&quot;)]
+    TP --&gt; TS[(&quot;Trace store&quot;)]
+
+    TSDB --&gt; AL[&quot;Alerting engine&lt;br/&gt;rule evaluation&quot;]
+    AL --&gt; NOT[&quot;Notification&lt;br/&gt;paging, chat&quot;]
+
+    TSDB --&gt; Q[&quot;Query / dashboards&quot;]
+    IDX --&gt; Q
+    TS --&gt; Q
+
+    classDef crit fill:#fbeee0,stroke:#b15a08,stroke-width:2px
+    class AL,NOT crit</pre><p><strong>Kafka in the middle is the load-bearing decision</strong>, for four reasons worth
+stating:</p>
+<div class="table-scroll"><table><thead><tr><th>Buys</th><th>Why it matters here</th></tr></thead><tbody><tr><td><strong>Decoupling</strong></td><td>A slow storage backend never blocks producing applications</td></tr><tr><td><strong>Absorbs bursts</strong></td><td>An incident produces a log storm — exactly when you must not drop</td></tr><tr><td><strong>Replay</strong></td><td>Fix a parsing bug and reprocess a week</td></tr><tr><td><strong>Fan-out</strong></td><td>One stream, three independent consumers</td></tr></tbody></table></div><hr>
+<h2 id="5-the-agent-where-correctness-starts"><a class="anchor" href="#5-the-agent-where-correctness-starts">#</a>5 · The agent — where correctness starts</h2><p><strong>The most important component, because it is inside your customers&#39; processes.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Why</th></tr></thead><tbody><tr><td><strong>Never block the application</strong></td><td>A logging call that blocks turns your monitoring into an outage. Bounded in-memory buffer, non-blocking enqueue</td></tr><tr><td><strong>Drop, do not block, when full</strong></td><td>Explicitly: <strong>shed the oldest low-priority data</strong> and count what you dropped</td></tr><tr><td><strong>Batch and compress</strong></td><td>One request per log line at 1M lines/s is absurd</td></tr><tr><td><strong>Local disk buffer</strong></td><td>Survives a gateway outage or a network blip without losing everything</td></tr><tr><td><strong>Backpressure-aware</strong></td><td>Honour 429s from the gateway; back off with jitter</td></tr><tr><td><strong>Cap its own resources</strong></td><td>An agent that OOMs the host has caused an incident, not reported one</td></tr></tbody></table></div><blockquote>
+<p><strong>&quot;Drop rather than block&quot; is the answer, and it should be stated as a
+deliberate trade-off:</strong> losing some log lines is acceptable; adding latency to
+every customer request is not. <strong>Emit a metric counting dropped events</strong> — a
+silent drop is the failure mode that destroys trust in the whole system.</p>
+</blockquote>
+<hr>
+<h2 id="6-metrics-storage-and-the-cardinality-problem"><a class="anchor" href="#6-metrics-storage-and-the-cardinality-problem">#</a>6 · Metrics storage and the cardinality problem</h2><p><strong>The single most important concept on this page.</strong></p>
+<pre class="code"><code>A time series is identified by its name PLUS its full label set.
+
+    http_requests{service=&quot;api&quot;, region=&quot;us-east&quot;, status=&quot;200&quot;}
+
+Every distinct combination is a SEPARATE series to store and index.
+
+    service (50) x region (10) x status (20)     = 10,000 series.  Fine.
+
+Now someone adds user_id as a label:
+
+    x user_id (10,000,000)                        = 10^11 series.
+
+The database falls over. This is CARDINALITY EXPLOSION, and it is the
+most common way a metrics system is destroyed -- by a one-line code change.</code></pre><div class="table-scroll"><table><thead><tr><th>Rule</th><th>Detail</th></tr></thead><tbody><tr><td><strong>Never label with unbounded values</strong></td><td>user ID, request ID, email, URL with parameters, timestamps</td></tr><tr><td><strong>Enforce a limit at ingest</strong></td><td>Reject or drop series beyond a per-tenant cap, and alert on it</td></tr><tr><td><strong>High-cardinality data belongs in logs or traces</strong></td><td>That is precisely what they are for</td></tr><tr><td><strong>Pre-aggregate at the agent</strong></td><td>Send percentiles per host, not every raw observation</td></tr></tbody></table></div><blockquote>
+<p><strong>The right answer to &quot;how do you handle high cardinality?&quot; is not &quot;scale the
+database&quot;.</strong> It is: <strong>that data does not belong in metrics.</strong> Metrics are for
+aggregates over bounded dimensions; per-user or per-request detail belongs in
+traces, joined by an ID. Saying that shows you understand the model rather than
+just the plumbing.</p>
+</blockquote>
+<p><strong>Storage layout:</strong></p>
+<pre class="code"><code>Time-partitioned blocks (e.g. 2-hour chunks), each holding:
+  - a compressed column of timestamps  (delta-of-delta encoding)
+  - a compressed column of values      (XOR encoding — Gorilla-style)
+  - an inverted index from label -&gt; series IDs
+
+Compression gets ~16 bytes/point down to 1-2 bytes, because
+consecutive timestamps are evenly spaced and consecutive values
+usually differ only in the low bits.
+
+DOWNSAMPLING by age:
+  0-7 days      raw, 10s resolution
+  7-30 days     1-minute rollups
+  30 days-13mo  1-hour rollups</code></pre><p><strong>Downsampling is what makes 13-month retention affordable</strong>, and it is lossy
+by design: nobody queries second-level detail from eight months ago, but
+everybody wants the yearly trend.</p>
+<hr>
+<h2 id="7-logs-hot-and-cold"><a class="anchor" href="#7-logs-hot-and-cold">#</a>7 · Logs — hot and cold</h2><pre class="mermaid">flowchart LR
+    K[[&quot;Kafka&quot;]] --&gt; P[&quot;Parse · enrich · redact&quot;]
+    P --&gt; H[(&quot;HOT: search index&lt;br/&gt;last 7 days&lt;br/&gt;fast, expensive&quot;)]
+    P --&gt; C[(&quot;COLD: object storage&lt;br/&gt;compressed, partitioned&lt;br/&gt;by hour + service&quot;)]
+    H --&gt;|&quot;age out&quot;| C
+    Q[&quot;Query&quot;] --&gt; H
+    Q -.-&gt;|&quot;older than 7d&quot;| C</pre><div class="table-scroll"><table><thead><tr><th>Tier</th><th>Store</th><th>Query speed</th><th>Cost</th></tr></thead><tbody><tr><td><strong>Hot</strong> (7 days)</td><td>Inverted index</td><td>Seconds</td><td>High</td></tr><tr><td><strong>Cold</strong> (30 days)</td><td>Object storage, partitioned by hour and service</td><td>Minutes</td><td>~20× cheaper</td></tr><tr><td>Archive</td><td>Glacier-class</td><td>Hours</td><td>Negligible</td></tr></tbody></table></div><p><strong>Partition cold storage by time and service</strong> so a query for one service on one
+day reads a handful of objects rather than scanning everything. <strong>Partition
+pruning is what makes cold queries feasible at all.</strong></p>
+<p><strong>Redact at ingest, not at query.</strong> Passwords, tokens and card numbers must
+never be written to storage — once they are in cold storage across thirty days
+of files, removing them is an incident.</p>
+<hr>
+<h2 id="8-alerting"><a class="anchor" href="#8-alerting">#</a>8 · Alerting</h2><p><strong>The part that decides whether the system is loved or muted.</strong></p>
+<pre class="mermaid">flowchart TD
+    R[&quot;Rule evaluation&lt;br/&gt;every 30s&quot;] --&gt; C{&quot;Condition met?&quot;}
+    C --&gt;|&quot;no&quot;| R
+    C --&gt;|&quot;yes&quot;| P[&quot;PENDING&lt;br/&gt;wait for the &#39;for&#39; duration&quot;]
+    P --&gt;|&quot;still true&quot;| F[&quot;FIRING&quot;]
+    P --&gt;|&quot;resolved&quot;| R
+    F --&gt; D[&quot;Deduplicate&lt;br/&gt;+ group related alerts&quot;]
+    D --&gt; S{&quot;Silenced or&lt;br/&gt;inhibited?&quot;}
+    S --&gt;|&quot;yes&quot;| DROP[&quot;suppress&quot;]
+    S --&gt;|&quot;no&quot;| N[&quot;Notify: page / chat / ticket&quot;]</pre><div class="table-scroll"><table><thead><tr><th>Mechanism</th><th>Prevents</th></tr></thead><tbody><tr><td><strong><code>for</code> duration</strong></td><td>Flapping — a 30-second blip does not page anyone</td></tr><tr><td><strong>Deduplication</strong></td><td>The same alert from 50 hosts becoming 50 pages</td></tr><tr><td><strong>Grouping</strong></td><td>Related alerts arriving as one notification</td></tr><tr><td><strong>Inhibition</strong></td><td>A datacentre-down alert suppressing the 200 service alerts it caused</td></tr><tr><td><strong>Silences</strong></td><td>Known maintenance</td></tr></tbody></table></div><p><strong>Alert on symptoms, not causes</strong> — and on <strong>error-budget burn rate</strong> rather
+than fixed thresholds. See <a href="observability.html">observability</a>.</p>
+<blockquote>
+<p><strong>Multi-window burn-rate alerting is the mature answer:</strong> page when the budget
+is being consumed fast enough to matter — say 14× normal over an hour — and
+open a ticket when it is a slow burn at 2× over six hours. It catches real
+incidents quickly without paging for a blip.</p>
+<p><strong>And the meta-point: the alerting path must not depend on the systems it
+monitors.</strong> If alert evaluation runs on the same cluster as everything else,
+the outage takes out the alerting too. Run it in an independent failure
+domain, and have an external dead-man&#39;s switch that fires when the monitoring
+system <em>stops</em> reporting.</p>
+</blockquote>
+<hr>
+<h2 id="9-failure-and-wrap"><a class="anchor" href="#9-failure-and-wrap">#</a>9 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Ingest gateway</td><td>Agents cannot send</td><td>Local disk buffer; backoff with jitter; multiple gateway regions</td></tr><tr><td>Kafka lag</td><td>Delayed data</td><td>Alert on consumer lag; prioritise the metrics partition over logs</td></tr><tr><td>Time-series DB</td><td><strong>No alerting</strong></td><td>Replicate; run alert evaluation in a separate failure domain</td></tr><tr><td>Search index</td><td>No log search</td><td>Metrics and alerting unaffected — that separation is the point</td></tr><tr><td><strong>Cardinality explosion</strong></td><td>DB degrades or dies</td><td>Per-tenant series caps enforced at ingest, plus an alert on the cap</td></tr><tr><td>Log storm during an incident</td><td>Ingest saturated</td><td>Kafka absorbs it; agents shed low-priority data and count the drops</td></tr><tr><td><strong>The whole system</strong></td><td>Blind</td><td><strong>External dead-man&#39;s switch</strong> — an outside service alerts when heartbeats stop</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: three signals with genuinely different shapes, so three pipelines
+behind one ingest path. Kafka decouples ingest from storage, which matters most
+during an incident when the log volume spikes exactly as the backends struggle.</em></p>
+<p><em>Metrics go to a time-series store with delta-of-delta and XOR compression —
+that is what turns 700 GB a day into 50 — and downsampling by age is what makes
+thirteen months affordable. Logs are 100× the volume for a fraction of the
+query value, so they are tiered: seven days in an index, the rest in object
+storage partitioned by hour and service.</em></p>
+<p><em>The failure mode I would design hardest against is cardinality explosion,
+because it is caused by a one-line code change adding a user ID as a label and
+it takes the database down. Per-tenant series caps enforced at ingest, and the
+honest answer to high-cardinality data is that it belongs in traces, not
+metrics.</em></p>
+<p><em>And the agent never blocks the application — it drops and counts what it
+dropped. A silent drop is the thing that destroys trust in a monitoring
+system.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="10-follow-ups"><a class="anchor" href="#10-follow-ups">#</a>10 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;5M events/s — how do you ingest that?&quot;</td><td>Agents batch and compress locally, push to a gateway, and everything lands in Kafka partitioned by source. Kafka is what stops a slow backend blocking producers, and it absorbs the log storm that arrives exactly when things are breaking.</td></tr><tr><td>⭐ &quot;What is cardinality explosion?&quot;</td><td>A series is its name plus its full label set, so every label combination is a separate series. Adding an unbounded label like user ID multiplies series by millions and kills the database — from a one-line change. Cap series per tenant at ingest and alert on it.</td></tr><tr><td>⭐ &quot;So where does per-user data go?&quot;</td><td>Traces, or logs. Metrics are for aggregates over bounded dimensions; per-request detail belongs in a trace joined by ID. &quot;Scale the database&quot; is the wrong answer — the data is in the wrong system.</td></tr><tr><td>&quot;Why not one store for everything?&quot;</td><td>The three signals differ in volume by two orders of magnitude, in retention by a factor of fifty, and in query pattern entirely. One store optimises for none of them, and a log storm would then degrade alerting.</td></tr><tr><td>⭐ &quot;How do you store 13 months of metrics?&quot;</td><td>Compression and downsampling. Delta-of-delta timestamps and XOR-encoded values get a point to 1–2 bytes. Then raw for a week, one-minute rollups for a month, hourly beyond — lossy on purpose, because nobody queries second-level detail from last year.</td></tr><tr><td>&quot;Can you lose data?&quot;</td><td>Logs, yes — some loss beats adding latency to customer requests, and the agent counts what it dropped. Metrics feeding alerts, no: those need buffering and replication, because a missing metric looks exactly like a healthy one.</td></tr><tr><td>⭐ &quot;How do you avoid alert fatigue?&quot;</td><td>A <code>for</code> duration so blips do not page, deduplication and grouping so 50 hosts are one notification, inhibition so a datacentre alert suppresses the 200 it caused, and burn-rate alerting rather than fixed thresholds. Every page needs an action and a runbook, or it gets muted.</td></tr><tr><td>⭐ &quot;What if the monitoring system goes down?&quot;</td><td>That is the requirement that shapes the design. Alert evaluation runs in a separate failure domain from what it watches, and an external dead-man&#39;s switch fires when our heartbeats stop — because the dangerous failure is silence, not an error.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>justify three pipelines from the three signals&#39; different shapes,</li>
+<li>explain cardinality explosion and give the right answer, not &quot;scale it&quot;,</li>
+<li>describe metric compression and age-based downsampling,</li>
+<li>defend hot/cold log tiering with the volume-versus-value argument,</li>
+<li>explain why the agent drops rather than blocks — and counts drops, and</li>
+<li>explain the dead-man&#39;s switch and why silence is the dangerous failure.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-key-value-store.html"><span>previous</span>Design a key-value store</a><a class="pager next" href="numbers-to-know.html"><span>next</span>Numbers to know</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-three-signals-three-shapes">3 · Three signals, three shapes</a></li><li class="d2"><a href="#4-architecture">4 · Architecture</a></li><li class="d2"><a href="#5-the-agent-where-correctness-starts">5 · The agent — where correctness starts</a></li><li class="d2"><a href="#6-metrics-storage-and-the-cardinality-problem">6 · Metrics storage and the cardinality problem</a></li><li class="d2"><a href="#7-logs-hot-and-cold">7 · Logs — hot and cold</a></li><li class="d2"><a href="#8-alerting">8 · Alerting</a></li><li class="d2"><a href="#9-failure-and-wrap">9 · Failure and wrap</a></li><li class="d2"><a href="#10-follow-ups">10 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
