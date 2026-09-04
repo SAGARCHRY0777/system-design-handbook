@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API design · System Design Handbook</title>
+<meta name="description" content="REST versus GraphQL versus gRPC decided on real grounds, plus pagination, versioning, webhooks, and the gateway&#39;s actual job.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html" class="active">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="api-design"><a class="anchor" href="#api-design">#</a>API design</h1><blockquote>
+<p>The <a href="the-framework.html">framework</a> gives API design five minutes in phase 3.
+This page is what to say inside those five minutes, and what to say when the
+interviewer decides the API <em>is</em> the deep dive.</p>
+</blockquote>
+<hr>
+<h2 id="1-rest-graphql-grpc"><a class="anchor" href="#1-rest-graphql-grpc">#</a>1 · REST, GraphQL, gRPC</h2><div class="table-scroll"><table><thead><tr><th></th><th>REST</th><th>GraphQL</th><th>gRPC</th></tr></thead><tbody><tr><td><strong>Transport</strong></td><td>HTTP/1.1 or 2, JSON</td><td>HTTP, JSON</td><td>HTTP/2, protobuf binary</td></tr><tr><td><strong>Shape</strong></td><td>Resources and verbs</td><td>One endpoint, a query language</td><td>Typed method calls</td></tr><tr><td><strong>Over/under-fetching</strong></td><td>Both, routinely</td><td><strong>Solved — client asks for exactly what it needs</strong></td><td>Fixed per method</td></tr><tr><td><strong>Caching</strong></td><td><strong>Trivial — HTTP caching just works</strong></td><td>Hard; POST to one URL</td><td>Needs custom work</td></tr><tr><td><strong>Browser support</strong></td><td>Native</td><td>Native</td><td>Needs a proxy (grpc-web)</td></tr><tr><td><strong>Payload size</strong></td><td>Verbose JSON</td><td>Verbose JSON</td><td><strong>Compact binary</strong></td></tr><tr><td><strong>Streaming</strong></td><td>SSE or WebSocket</td><td>Subscriptions</td><td><strong>Native, bidirectional</strong></td></tr><tr><td><strong>Schema</strong></td><td>OpenAPI, optional</td><td><strong>Mandatory and typed</strong></td><td><strong>Mandatory, .proto</strong></td></tr><tr><td><strong>Debuggability</strong></td><td>curl</td><td>Reasonable</td><td>Binary — needs tooling</td></tr></tbody></table></div><h3 id="how-to-actually-choose"><a class="anchor" href="#how-to-actually-choose">#</a>How to actually choose</h3><blockquote>
+<p><strong>Public API → REST. Internal service-to-service → gRPC. A client with wildly
+varying data needs, especially mobile → GraphQL.</strong></p>
+</blockquote>
+<p><strong>REST for anything public</strong>, and the reason is caching and familiarity: HTTP
+caching, CDNs, proxies and every debugging tool on earth already understand it.
+A public GraphQL API means every consumer must learn your schema and you lose
+edge caching.</p>
+<p><strong>gRPC internally</strong>, where you control both ends: binary payloads, HTTP/2
+multiplexing, generated clients, and a schema that breaks the build rather than
+production when it changes. The browser problem does not apply between your own
+services.</p>
+<p><strong>GraphQL when the client&#39;s needs vary and round trips are expensive.</strong> The
+canonical case is a mobile app that would otherwise make six REST calls to
+render one screen.</p>
+<p><strong>GraphQL&#39;s real costs — name them, because they are what the follow-up probes:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Cost</th><th>Detail</th></tr></thead><tbody><tr><td><strong>The N+1 problem</strong></td><td>A query for 100 posts, each with an author, becomes 101 database calls unless you batch. Fixed with DataLoader-style per-request batching — <strong>know this name</strong></td></tr><tr><td><strong>Query cost is unbounded</strong></td><td>A client can request a deeply nested graph. You need depth limits, complexity scoring, or persisted queries</td></tr><tr><td><strong>Caching is largely lost</strong></td><td>One POST endpoint defeats HTTP caching; you cache at the resolver instead</td></tr><tr><td><strong>Rate limiting is harder</strong></td><td>&quot;100 requests&quot; is meaningless when one request can cost 1000× another. Price by computed cost</td></tr></tbody></table></div><hr>
+<h2 id="2-rest-done-properly"><a class="anchor" href="#2-rest-done-properly">#</a>2 · REST done properly</h2><pre class="code"><code>GET    /v1/users/{id}                 -&gt; 200 the user
+GET    /v1/users/{id}/posts?limit=20  -&gt; 200 a page
+POST   /v1/posts                      -&gt; 201 + Location header
+PATCH  /v1/posts/{id}                 -&gt; 200 partial update
+DELETE /v1/posts/{id}                 -&gt; 204 no content</code></pre><div class="table-scroll"><table><thead><tr><th>Rule</th><th>Why</th></tr></thead><tbody><tr><td><strong>Nouns, not verbs</strong></td><td><code>/users/123</code>, never <code>/getUser?id=123</code></td></tr><tr><td><strong>Plural collections</strong></td><td><code>/users</code>, <code>/posts</code> — consistency beats grammar debates</td></tr><tr><td><strong>Nest one level, then stop</strong></td><td><code>/users/1/posts</code> is fine; <code>/users/1/posts/2/comments/3</code> is not — use <code>/comments?post=2</code></td></tr><tr><td><strong><code>PUT</code> replaces, <code>PATCH</code> updates</strong></td><td>And <code>PUT</code> is idempotent by definition</td></tr><tr><td><strong>Return the created resource</strong></td><td>Saves the client an immediate GET</td></tr></tbody></table></div><p><strong>Status codes that carry information:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Code</th><th>Means</th></tr></thead><tbody><tr><td>200 / 201 / 204</td><td>OK / created / done, nothing to return</td></tr><tr><td><strong>400</strong></td><td>Your request is malformed</td></tr><tr><td><strong>401 vs 403</strong></td><td>Not authenticated <strong>vs</strong> authenticated but not allowed</td></tr><tr><td><strong>404</strong></td><td>Not found — <em>or</em> found but you may not know it exists</td></tr><tr><td><strong>409</strong></td><td>Conflict — a version clash, or a duplicate</td></tr><tr><td><strong>422</strong></td><td>Well-formed but semantically invalid</td></tr><tr><td><strong>429</strong></td><td><a href="rate-limiting.html">Rate limited</a> — with <code>Retry-After</code></td></tr><tr><td><strong>5xx</strong></td><td>Our fault. Never return 200 with an error in the body</td></tr></tbody></table></div><blockquote>
+<p><strong>401 versus 403 is a small thing that gets noticed.</strong> And returning 404
+instead of 403 for resources the caller may not know about is a deliberate
+information-leak defence worth mentioning.</p>
+</blockquote>
+<hr>
+<h2 id="3-pagination"><a class="anchor" href="#3-pagination">#</a>3 · Pagination</h2><p><strong>Cursor, not offset</strong>, and be able to say why:</p>
+<pre class="code"><code>OFFSET:  GET /posts?page=3&amp;limit=20
+  - the database SKIPS 40 rows to return 20 -- cost grows with page number
+  - a row inserted at the head SHIFTS everything: the reader sees an item
+    twice, or misses one entirely
+  - deep pages get slower and slower
+
+CURSOR:  GET /posts?after=eyJ0IjoxNzAwfQ&amp;limit=20
+  - WHERE (created_at, id) &lt; (cursor) ORDER BY ... LIMIT 20
+  - uses the index directly; page 1000 costs the same as page 1
+  - stable under concurrent inserts</code></pre><p><strong>Encode the cursor opaquely</strong> — base64 of <code>(sort_key, id)</code> — so clients cannot
+construct one and you can change the scheme later. Include the tiebreaker <code>id</code>,
+or rows sharing a timestamp are skipped or repeated.</p>
+<p><strong>The honest trade-off:</strong> cursors cannot jump to page 50. If the product needs
+numbered pages, you need offset — so cap the depth, and say so.</p>
+<hr>
+<h2 id="4-versioning"><a class="anchor" href="#4-versioning">#</a>4 · Versioning</h2><div class="table-scroll"><table><thead><tr><th>Approach</th><th>Example</th><th>Note</th></tr></thead><tbody><tr><td><strong>URL path</strong></td><td><code>/v1/users</code></td><td><strong>Most common.</strong> Obvious, cacheable, ugly</td></tr><tr><td>Header</td><td><code>Accept: application/vnd.api.v1+json</code></td><td>Cleaner URLs, easy to get wrong, harder to test</td></tr><tr><td>Query param</td><td><code>/users?version=1</code></td><td>Simple; pollutes caching</td></tr><tr><td><strong>No versioning</strong></td><td>Additive changes only</td><td><strong>The real goal</strong></td></tr></tbody></table></div><blockquote>
+<p><strong>The best versioning strategy is not needing one.</strong> Adding a field is
+backward-compatible; removing or renaming one is not. If every change is
+additive and clients ignore unknown fields, you may never cut v2. Version when
+you must break something — and then run both for a deprecation window with
+usage metrics telling you when the old one is safe to retire.</p>
+</blockquote>
+<hr>
+<h2 id="5-webhooks"><a class="anchor" href="#5-webhooks">#</a>5 · Webhooks</h2><p>The server calls <em>you</em> when something happens — the inverse of polling.</p>
+<pre class="mermaid">sequenceDiagram
+    participant P as Provider
+    participant Q as Their queue
+    participant Y as Your endpoint
+    P-&gt;&gt;Q: event occurs
+    Q-&gt;&gt;Y: POST /webhooks/x (signed)
+    Y--&gt;&gt;Q: 200 immediately
+    Y-&gt;&gt;Y: enqueue, process async
+    Note over Q,Y: no 2xx -&gt; retry with backoff -&gt; DLQ</pre><p><strong>Five things a webhook receiver must do</strong>, and they map exactly onto
+<a href="idempotency.html">idempotency</a>:</p>
+<div class="table-scroll"><table><thead><tr><th>Requirement</th><th>Why</th></tr></thead><tbody><tr><td><strong>Verify the signature</strong></td><td>An HMAC over the body with a shared secret. Otherwise anyone can POST you fake events</td></tr><tr><td><strong>Return 2xx fast, process later</strong></td><td>Providers time out in seconds. Ack, enqueue, work asynchronously</td></tr><tr><td><strong>Be idempotent</strong></td><td>Delivery is at-least-once; <strong>you will receive duplicates</strong></td></tr><tr><td><strong>Tolerate out-of-order arrival</strong></td><td>Retries mean event 5 can land before event 4. Use a version or timestamp</td></tr><tr><td><strong>Expect replays</strong></td><td>Providers redeliver after outages</td></tr></tbody></table></div><p><strong>Webhooks versus polling versus streaming:</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Use when</th></tr></thead><tbody><tr><td><strong>Polling</strong></td><td>Low frequency, or you cannot expose an endpoint. Simple, wasteful</td></tr><tr><td><strong>Webhooks</strong></td><td>Events are infrequent and you have a public endpoint</td></tr><tr><td><strong>WebSocket / SSE</strong></td><td>Continuous updates to an active client — see <a href="design-chat.html">chat</a></td></tr></tbody></table></div><hr>
+<h2 id="6-the-api-gateway"><a class="anchor" href="#6-the-api-gateway">#</a>6 · The API gateway</h2><p>One entry point in front of many services.</p>
+<div class="table-scroll"><table><thead><tr><th>Does</th><th>Instead of</th></tr></thead><tbody><tr><td>TLS termination</td><td>Every service holding certificates</td></tr><tr><td>AuthN, and coarse authZ</td><td>Every service re-implementing it</td></tr><tr><td><a href="rate-limiting.html">Rate limiting</a></td><td>Per-service limiters that do not compose</td></tr><tr><td>Routing and versioning</td><td>Clients knowing service topology</td></tr><tr><td>Request/response shaping</td><td>Coupling clients to internal models</td></tr><tr><td>Metrics and tracing entry</td><td>Inconsistent instrumentation</td></tr></tbody></table></div><blockquote>
+<p><strong>The anti-pattern: business logic in the gateway.</strong> It becomes a shared
+component every team must change and no team owns — a distributed monolith with
+extra latency. <strong>Keep it to cross-cutting concerns.</strong></p>
+</blockquote>
+<p><strong>BFF (backend-for-frontend)</strong> is worth naming: one gateway per client type —
+web, iOS, Android — each shaping responses for that client&#39;s needs. It solves
+the same over-fetching problem GraphQL does, without adopting GraphQL.</p>
+<hr>
+<h2 id="7-what-to-say-in-the-round"><a class="anchor" href="#7-what-to-say-in-the-round">#</a>7 · What to say in the round</h2><blockquote>
+<p><em>&quot;REST over HTTP for the public API — it caches at the edge for free and every
+client already understands it. Cursor pagination rather than offset, because
+offset re-scans and shifts under concurrent inserts. Internal service calls are
+gRPC: binary, multiplexed, and the schema breaks the build instead of
+production.</em></p>
+<p><em>Version in the path, but I&#39;d aim never to cut v2 — additive changes with
+clients ignoring unknown fields. Writes carry an idempotency key so a client
+retry after a timeout cannot double-charge, and the gateway handles TLS, auth
+and rate limiting so no service re-implements them.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="8-interview-questions"><a class="anchor" href="#8-interview-questions">#</a>8 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;REST or GraphQL?&quot;</td><td>REST for public APIs — HTTP caching, CDNs and every tool already work. GraphQL when one client needs wildly varying data and round trips are expensive, typically mobile. But then I own the N+1 problem, unbounded query cost, and losing edge caching.</td></tr><tr><td>⭐ &quot;What is the N+1 problem?&quot;</td><td>A GraphQL query for 100 posts with their authors resolves the author field 100 separate times — 101 queries. Fixed by per-request batching, DataLoader-style: collect the IDs requested in one tick and issue a single <code>WHERE id IN (...)</code>.</td></tr><tr><td>⭐ &quot;Why cursor pagination?&quot;</td><td>Offset makes the database skip rows, so deep pages get slower, and an insert at the head shifts everything so readers see duplicates or gaps. A cursor on <code>(sort_key, id)</code> uses the index directly and is stable under writes. The cost is that you cannot jump to page 50.</td></tr><tr><td>&quot;How do you version?&quot;</td><td>Path versioning, but the aim is never to need v2 — keep changes additive and have clients ignore unknown fields. When you must break, run both with usage metrics telling you when it is safe to retire the old one.</td></tr><tr><td>⭐ &quot;Design a webhook receiver.&quot;</td><td>Verify the HMAC signature, return 2xx immediately and process asynchronously, dedupe on the event ID because delivery is at-least-once, and tolerate out-of-order arrival using a version or timestamp. Providers also replay after outages.</td></tr><tr><td>&quot;What belongs in the gateway?&quot;</td><td>Cross-cutting concerns only — TLS, auth, rate limiting, routing, tracing. Business logic there creates a component every team must change and none owns, which is a distributed monolith with an extra hop.</td></tr><tr><td>&quot;gRPC in the browser?&quot;</td><td>Not directly — it needs grpc-web and a proxy. That is a large part of why gRPC stays internal and REST or GraphQL faces the public.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>choose between REST, GraphQL and gRPC on caching, control and payload grounds,</li>
+<li>explain the N+1 problem and name the batching fix,</li>
+<li>give both reasons offset pagination fails,</li>
+<li>argue that the best versioning is additive change,</li>
+<li>list the five requirements of a webhook receiver, and</li>
+<li>say what must <em>not</em> go in a gateway.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="estimation.html"><span>previous</span>Estimation</a><a class="pager next" href="load-balancing.html"><span>next</span>Load balancing & the edge</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-rest-graphql-grpc">1 · REST, GraphQL, gRPC</a></li><li class="d3"><a href="#how-to-actually-choose">How to actually choose</a></li><li class="d2"><a href="#2-rest-done-properly">2 · REST done properly</a></li><li class="d2"><a href="#3-pagination">3 · Pagination</a></li><li class="d2"><a href="#4-versioning">4 · Versioning</a></li><li class="d2"><a href="#5-webhooks">5 · Webhooks</a></li><li class="d2"><a href="#6-the-api-gateway">6 · The API gateway</a></li><li class="d2"><a href="#7-what-to-say-in-the-round">7 · What to say in the round</a></li><li class="d2"><a href="#8-interview-questions">8 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

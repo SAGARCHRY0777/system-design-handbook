@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architectural patterns · System Design Handbook</title>
+<meta name="description" content="Monolith versus microservices answered honestly, plus serverless, event-driven and peer-to-peer — what each costs, and the migration path that actually works.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html" class="active">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="architectural-patterns"><a class="anchor" href="#architectural-patterns">#</a>Architectural patterns</h1><blockquote>
+<p><strong>&quot;Would you use microservices?&quot; is a trap question</strong>, and the trap is
+enthusiasm. The expected answer is not yes. It is <em>&quot;what problem are we
+solving, and is it an organisational one or a technical one?&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="1-monolith-versus-microservices"><a class="anchor" href="#1-monolith-versus-microservices">#</a>1 · Monolith versus microservices</h2><h3 id="the-honest-default-is-a-monolith"><a class="anchor" href="#the-honest-default-is-a-monolith">#</a>The honest default is a monolith</h3><p><strong>Start with a well-structured monolith.</strong> Not a legacy big ball of mud — a
+single deployable with clear internal module boundaries.</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Monolith</th><th>Microservices</th></tr></thead><tbody><tr><td><strong>Deploy</strong></td><td>One artefact</td><td>Many, independently</td></tr><tr><td><strong>Local dev</strong></td><td>Run it</td><td>Run 15 things, or mock them</td></tr><tr><td><strong>A function call</strong></td><td>Nanoseconds, always succeeds</td><td>Milliseconds, can fail, needs a timeout</td></tr><tr><td><strong>Transactions</strong></td><td>One database, ACID</td><td>Saga + compensation</td></tr><tr><td><strong>Refactoring across boundaries</strong></td><td>An IDE rename</td><td>A coordinated multi-team release</td></tr><tr><td><strong>Debugging one request</strong></td><td>A stack trace</td><td>Distributed tracing, if you built it</td></tr><tr><td><strong>Scaling</strong></td><td>Whole app together</td><td>Per service</td></tr><tr><td><strong>Team autonomy</strong></td><td>Coordination required</td><td>Independent</td></tr><tr><td><strong>Failure blast radius</strong></td><td>All or nothing</td><td>Contained — <em>if</em> you built bulkheads</td></tr></tbody></table></div><blockquote>
+<p><strong>The decisive argument, and it is not technical.</strong> Microservices are a
+solution to an <em>organisational</em> problem: too many engineers contending on one
+codebase and one release train. Conway&#39;s law is the real driver. With eight
+engineers you do not have that problem, and you pay every cost above for
+nothing.</p>
+</blockquote>
+<p><strong>What microservices actually cost</strong>, stated as availability arithmetic:</p>
+<pre class="code"><code>A request touching 5 services, each 99.9% available:
+    0.999^5 = 99.5%   -&gt; ~44 hours of downtime a year
+
+The same logic in one process: 99.9%   -&gt; ~9 hours
+
+You did not add reliability by splitting. You multiplied the ways to fail.</code></pre><p>Every network hop needs a timeout, a retry policy, a circuit breaker, and a
+fallback — see <a href="failure-and-resilience.html">failure &amp; resilience</a>. None of that
+exists in a function call.</p>
+<h3 id="when-splitting-is-genuinely-right"><a class="anchor" href="#when-splitting-is-genuinely-right">#</a>When splitting is genuinely right</h3><div class="table-scroll"><table><thead><tr><th>Signal</th><th>Why it justifies a split</th></tr></thead><tbody><tr><td><strong>Teams blocking each other on releases</strong></td><td>The real reason. Independent deploys</td></tr><tr><td><strong>One component&#39;s scaling profile differs wildly</strong></td><td>Video transcoding needs GPUs; the API does not</td></tr><tr><td><strong>Genuinely different availability requirements</strong></td><td>Checkout must not be taken down by recommendations</td></tr><tr><td><strong>A compliance boundary</strong></td><td>Payment data in an isolated, audited service</td></tr><tr><td><strong>A different language is genuinely warranted</strong></td><td>An ML serving path in Python beside a Java core</td></tr></tbody></table></div><p><strong>Not on that list:</strong> &quot;it is modern&quot;, &quot;it scales better&quot; (a monolith scales
+horizontally too), or &quot;we might need it later.&quot;</p>
+<h3 id="the-migration-path"><a class="anchor" href="#the-migration-path">#</a>The migration path</h3><p><strong>The strangler fig, and it is the answer to &quot;how would you migrate?&quot;</strong></p>
+<pre class="mermaid">flowchart LR
+    C[&quot;Clients&quot;] --&gt; P[&quot;Proxy / gateway&quot;]
+    P --&gt;|&quot;most routes&quot;| M[&quot;Monolith&quot;]
+    P --&gt;|&quot;one extracted route&quot;| S[&quot;New service&quot;]
+    M -.-&gt;|&quot;shared, then split&quot;| DB[(&quot;Database&quot;)]
+    S -.-&gt; DB</pre><pre class="code"><code>1. Put a proxy in front of the monolith. Change nothing else.
+2. Extract ONE service -- pick a leaf with few dependencies.
+3. Route just its traffic to the new service. Everything else untouched.
+4. Split its data LAST, once the service boundary has proven correct.
+5. Repeat. Stop when the pain stops.</code></pre><blockquote>
+<p><strong>Splitting the database is the hard part, and it comes last.</strong> Services
+sharing a database are not really independent — a schema change still couples
+them. But splitting data first, before you know the boundary is right, means
+migrating data twice. <strong>Get the boundary right while the data is still
+together, because that is the cheap time to be wrong.</strong></p>
+</blockquote>
+<p><strong>&quot;Stop when the pain stops&quot; is deliberate.</strong> There is no prize for finishing.</p>
+<hr>
+<h2 id="2-serverless"><a class="anchor" href="#2-serverless">#</a>2 · Serverless</h2><p>Functions run on demand; the platform handles scaling and you pay per
+invocation.</p>
+<div class="table-scroll"><table><thead><tr><th>Good for</th><th>Bad for</th></tr></thead><tbody><tr><td>Spiky, unpredictable traffic</td><td>Steady high load — <strong>more expensive than servers</strong></td></tr><tr><td>Event handlers, glue, cron</td><td>Latency-critical paths (cold starts)</td></tr><tr><td>Low or zero baseline traffic</td><td>Long-running work (execution limits)</td></tr><tr><td>Small teams avoiding ops</td><td>Anything needing persistent connections</td></tr></tbody></table></div><p><strong>The three real constraints:</strong></p>
+<p><strong>Cold starts.</strong> An idle function must be initialised — tens of milliseconds to
+seconds depending on runtime and package size. Fine for a webhook; not fine for
+a p99-sensitive read path.</p>
+<p><strong>No persistent connections.</strong> Each invocation may be a new instance, so
+database connection pools do not work in the usual way. This is why serverless
+plus a traditional relational database needs a proxy or pooler in between — a
+genuinely common production failure.</p>
+<p><strong>Cost inverts at scale.</strong> Per-invocation pricing is cheap when idle and
+expensive when busy. There is a crossover point, and past it a reserved instance
+is dramatically cheaper.</p>
+<blockquote>
+<p><strong>The best serverless answer in a design round is narrow</strong>: use it for the
+bursty, stateless, non-latency-critical edges — image thumbnailing, webhook
+receipt, scheduled jobs — and keep the steady-state request path on ordinary
+servers.</p>
+</blockquote>
+<hr>
+<h2 id="3-event-driven-architecture"><a class="anchor" href="#3-event-driven-architecture">#</a>3 · Event-driven architecture</h2><p>Services emit events; other services react. No synchronous call between them.</p>
+<pre class="mermaid">flowchart LR
+    O[&quot;Order service&quot;] --&gt;|&quot;OrderPlaced&quot;| B[[&quot;Event bus&quot;]]
+    B --&gt; I[&quot;Inventory&quot;]
+    B --&gt; N[&quot;Notifications&quot;]
+    B --&gt; A[&quot;Analytics&quot;]
+    B --&gt; F[&quot;Fraud check&quot;]</pre><div class="table-scroll"><table><thead><tr><th>Buys</th><th>Costs</th></tr></thead><tbody><tr><td>Producers do not know consumers</td><td><strong>The flow exists in no single place</strong></td></tr><tr><td>Add a consumer without touching the producer</td><td>Debugging spans many logs</td></tr><tr><td>Natural load levelling</td><td>Eventual consistency everywhere</td></tr><tr><td>Replay, if it is a log</td><td>Ordering only per partition</td></tr></tbody></table></div><p><strong>Two things worth distinguishing</strong>, because interviewers probe it:</p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Event notification</th><th>Event-carrying state transfer</th></tr></thead><tbody><tr><td>Payload</td><td>Just an ID — &quot;order 123 placed&quot;</td><td>The full order object</td></tr><tr><td>Consumer must</td><td>Call back for details</td><td>Nothing — it has what it needs</td></tr><tr><td>Coupling</td><td>Higher — a callback dependency</td><td>Lower</td></tr><tr><td>Payload size</td><td>Tiny</td><td>Large, and can go stale</td></tr></tbody></table></div><blockquote>
+<p><strong>The failure mode nobody mentions until it bites: no one can answer &quot;what
+happens when an order is placed?&quot;</strong> In a synchronous design you read the
+function. In an event-driven one, you grep the whole organisation for
+subscribers. That is the price of the decoupling, and saying it out loud is the
+senior move.</p>
+</blockquote>
+<p><strong>Event sourcing</strong> is a further step — store the events as the source of truth
+and derive state by replaying them. It gives a perfect audit log and
+time-travel, at the cost of schema evolution being genuinely hard, since you
+must replay events written by old code. Mention it; do not reach for it unqueried.</p>
+<hr>
+<h2 id="4-peer-to-peer"><a class="anchor" href="#4-peer-to-peer">#</a>4 · Peer-to-peer</h2><p>No central server for the data path; peers exchange directly.</p>
+<p><strong>Used by:</strong> BitTorrent, WebRTC video calls, blockchain, Netflix&#39;s Open Connect
+in a hybrid form.</p>
+<div class="table-scroll"><table><thead><tr><th>Buys</th><th>Costs</th></tr></thead><tbody><tr><td>Bandwidth scales <em>with</em> users</td><td>NAT traversal is genuinely hard</td></tr><tr><td>No central bandwidth bill</td><td>Peer discovery still needs a server</td></tr><tr><td>Censorship resistance</td><td>No guarantee any peer is available</td></tr><tr><td>Lower latency between nearby peers</td><td>Trust, verification, incentive design</td></tr></tbody></table></div><blockquote>
+<p><strong>Almost all &quot;P2P&quot; systems are hybrid</strong>, and saying so is the accurate answer:
+a central server handles discovery, authentication and signalling, then peers
+talk directly. WebRTC still needs a signalling server to exchange connection
+details, and a TURN relay when NAT traversal fails — which is a substantial
+minority of connections.</p>
+</blockquote>
+<p><strong>In a design round, P2P is right for exactly one reason: the data is large and
+the bandwidth bill would otherwise be yours.</strong> Video calls and file distribution
+qualify. A social feed does not.</p>
+<hr>
+<h2 id="5-choosing-in-the-round"><a class="anchor" href="#5-choosing-in-the-round">#</a>5 · Choosing, in the round</h2><div class="table-scroll"><table><thead><tr><th>Situation</th><th>Say</th></tr></thead><tbody><tr><td>Startup, small team, unknown product</td><td><strong>Modular monolith.</strong> One deploy, clean internal boundaries</td></tr><tr><td>Teams blocking each other</td><td>Extract services along team lines — strangler fig</td></tr><tr><td>One component scales differently</td><td>Extract <em>that one</em>, leave the rest</td></tr><tr><td>Bursty, stateless edge work</td><td>Serverless for that piece only</td></tr><tr><td>Many independent reactions to one event</td><td>Event-driven, and name the debugging cost</td></tr><tr><td>Large media, bandwidth-dominated</td><td>Hybrid P2P or CDN</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;I&#39;d start with a modular monolith — one deployment, but strict internal
+boundaries so extraction is cheap later. I&#39;d split when a team is blocked on
+someone else&#39;s release, or when a component&#39;s scaling profile genuinely
+differs, not before. The cost I want to name up front is availability: five
+services at three nines each is 99.5%, worse than the monolith it replaced,
+unless I build the timeouts, breakers and bulkheads to go with it.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="6-interview-questions"><a class="anchor" href="#6-interview-questions">#</a>6 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;Monolith or microservices?&quot;</td><td>Monolith by default, with real internal module boundaries. Microservices solve an organisational problem — teams contending on one release train — not a technical one. Below roughly that threshold you pay every cost and get nothing.</td></tr><tr><td>⭐ &quot;What do microservices cost?&quot;</td><td>Availability multiplies down: five services at 99.9% is 99.5%. Every call needs a timeout, retry policy, breaker and fallback. Transactions become sagas. Local development needs the whole fleet or mocks. And a cross-boundary refactor becomes a multi-team release.</td></tr><tr><td>⭐ &quot;How would you migrate a monolith?&quot;</td><td>Strangler fig: proxy in front, extract one leaf service, route only its traffic, and <strong>split its data last</strong>. Getting the boundary wrong is cheap while the data is still together and expensive after. Stop when the pain stops — there is no prize for finishing.</td></tr><tr><td>&quot;When is serverless right?&quot;</td><td>Bursty, stateless, non-latency-critical work — webhooks, thumbnails, cron. Not the steady request path: cold starts hurt p99, connection pooling does not work naturally, and per-invocation pricing inverts against reserved capacity at scale.</td></tr><tr><td>⭐ &quot;Event-driven — what is the catch?&quot;</td><td>The business process exists in no single place. You cannot read one function to learn what happens when an order is placed; you search for subscribers. That is the real cost of the decoupling, alongside eventual consistency and per-partition ordering.</td></tr><tr><td>&quot;Event notification or state transfer?&quot;</td><td>Notification keeps payloads small but couples consumers back to the producer for details. State transfer removes that call but ships larger payloads that can be stale. I&#39;d default to notification plus a versioned read API.</td></tr><tr><td>&quot;Is P2P realistic here?&quot;</td><td>Only if bandwidth is the dominant cost — file distribution or video calls. And it is always hybrid: you still need a server for discovery and signalling, plus a relay for the NAT traversals that fail.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You know this block when you can:</p>
+<ol>
+<li>give the organisational argument for microservices, not the technical one,</li>
+<li>do the availability multiplication out loud,</li>
+<li>describe the strangler fig <strong>and</strong> say why data splits last,</li>
+<li>name serverless&#39;s three real constraints,</li>
+<li>state event-driven&#39;s debugging cost unprompted, and</li>
+<li>say why every real P2P system is hybrid.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="observability.html"><span>previous</span>Observability</a><a class="pager next" href="design-url-shortener.html"><span>next</span>Design a URL shortener</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-monolith-versus-microservices">1 · Monolith versus microservices</a></li><li class="d3"><a href="#the-honest-default-is-a-monolith">The honest default is a monolith</a></li><li class="d3"><a href="#when-splitting-is-genuinely-right">When splitting is genuinely right</a></li><li class="d3"><a href="#the-migration-path">The migration path</a></li><li class="d2"><a href="#2-serverless">2 · Serverless</a></li><li class="d2"><a href="#3-event-driven-architecture">3 · Event-driven architecture</a></li><li class="d2"><a href="#4-peer-to-peer">4 · Peer-to-peer</a></li><li class="d2"><a href="#5-choosing-in-the-round">5 · Choosing, in the round</a></li><li class="d2"><a href="#6-interview-questions">6 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>

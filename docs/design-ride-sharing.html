@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a ride-sharing service · System Design Handbook</title>
+<meta name="description" content="The one design where the index is the interesting part — geohash and S2, the matching loop, high-frequency location writes, and the multi-party state machine.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html" class="active">Design a ride-sharing service</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-a-ride-sharing-service"><a class="anchor" href="#design-a-ride-sharing-service">#</a>Design a ride-sharing service</h1><blockquote>
+<p><strong>The shape nothing else in this handbook covers: geospatial.</strong> Uber, Lyft,
+DoorDash, Swiggy. The interesting parts are the spatial index, the write
+volume from constant location updates, and a state machine with two parties
+who can both abandon it.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- driver publishes location       - payments (assume a provider)
+- rider requests a ride           - maps, routing, ETA modelling
+- match rider to nearby driver    - pricing / surge algorithm
+- track the trip to completion    - ratings, support
+
+NON-FUNCTIONAL
+- 10M drivers, 1M concurrent trips
+- driver location updates every 4s
+- matching latency &lt; 5s (a rider waiting is a rider leaving)
+- a driver must NEVER be matched to two rides
+- location data is high-volume and short-lived
+- availability &gt; consistency for LOCATION
+- consistency &gt; availability for the MATCH</code></pre><blockquote>
+<p><strong>The requirement pair that shapes everything:</strong> location is high-volume,
+approximate and disposable; the match is low-volume and must be exactly
+correct. <strong>Two subsystems with opposite properties</strong> — the same split as
+browse/book in <a href="design-ticketing.html">ticketing</a>.</p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>LOCATION WRITES   &lt;- the number that surprises people
+  10M drivers, but say 1M online at peak
+  1 update / 4 seconds  -&gt;  250,000 writes/s
+
+  That is 25x the write volume of the news feed design, for data
+  that is worthless 8 seconds later.
+
+RIDE REQUESTS
+  1M concurrent trips, average 20 min  -&gt;  ~800 requests/s. Small.
+
+MATCHING READS
+  each request queries &quot;drivers near me&quot;
+  800/s x a spatial lookup -- must be an INDEX, not a scan
+
+STORAGE
+  live locations: 1M x ~100 B = 100 MB   -- fits in memory easily
+  trip history:  ~4M trips/day x 1 KB = 4 GB/day = 1.5 TB/year
+
+CONCLUSION
+  - 250k writes/s of DISPOSABLE data -&gt; in-memory store, never a
+    relational database. No durability requirement at all.
+  - trips are few and must be durable -&gt; ordinary transactional DB
+  - the whole design hinges on the SPATIAL INDEX</code></pre><p><strong>&quot;A quarter of a million writes a second of data that is worthless in eight
+seconds&quot; is the observation to land.</strong> It immediately rules out the obvious
+design and justifies everything that follows.</p>
+<hr>
+<h2 id="3-the-spatial-index-the-core-problem"><a class="anchor" href="#3-the-spatial-index-the-core-problem">#</a>3 · The spatial index — the core problem</h2><p><strong>The question is: given a point, find nearby drivers, fast.</strong></p>
+<h3 id="why-the-obvious-approaches-fail"><a class="anchor" href="#why-the-obvious-approaches-fail">#</a>Why the obvious approaches fail</h3><pre class="code"><code>SCAN EVERY DRIVER, compute distance          O(n) per request. No.
+
+TWO B-TREE INDEXES on (lat) and (lng)        The database can use only ONE
+                                             efficiently; the other becomes a
+                                             filter over a huge candidate set.
+                                             A box around Manhattan still
+                                             matches a strip across the world
+                                             on one axis.</code></pre><p><strong>Two dimensions cannot be indexed by one ordered key</strong> — unless you map two
+dimensions down to one while preserving locality. That is exactly what the
+following do.</p>
+<h3 id="geohash"><a class="anchor" href="#geohash">#</a>Geohash</h3><p><strong>Recursively subdivide the world into a grid and encode the cell as a string.</strong></p>
+<pre class="code"><code>Each character narrows the box:
+  &quot;9&quot;        ~ 5000 km
+  &quot;9q&quot;       ~ 1250 km
+  &quot;9q8&quot;      ~  156 km
+  &quot;9q8y&quot;     ~   39 km
+  &quot;9q8yy&quot;    ~    5 km
+  &quot;9q8yyk&quot;   ~    1 km     &lt;- typical matching precision
+  &quot;9q8yykr&quot;  ~  150 m
+
+The property that makes it work:
+  SHARED PREFIX  =&gt;  SPATIALLY CLOSE
+
+So &quot;find drivers near me&quot; becomes a PREFIX SCAN -- and every ordinary
+index, including a plain sorted set, can do a prefix scan.</code></pre><blockquote>
+<p><strong>The edge case you must raise before being asked:</strong> two points either side of
+a cell boundary can be metres apart with completely different geohashes.
+<strong>Always query the cell plus its eight neighbours</strong>, then filter by true
+distance. Failing to mention this is the standard way to lose the follow-up.</p>
+</blockquote>
+<h3 id="s2-and-h3"><a class="anchor" href="#s2-and-h3">#</a>S2 and H3</h3><div class="table-scroll"><table><thead><tr><th></th><th>Geohash</th><th>S2 (Google)</th><th>H3 (Uber)</th></tr></thead><tbody><tr><td>Cell shape</td><td>Rectangle</td><td>Square on a projected cube</td><td><strong>Hexagon</strong></td></tr><tr><td>Distortion near poles</td><td><strong>Severe</strong></td><td>Minimal</td><td>Minimal</td></tr><tr><td>Neighbour distance</td><td>Varies by direction</td><td>Varies</td><td><strong>Uniform — all 6 equal</strong></td></tr><tr><td>Ease</td><td>Trivial, just strings</td><td>Library</td><td>Library</td></tr></tbody></table></div><blockquote>
+<p><strong>Hexagons are why Uber built H3.</strong> With squares, a diagonal neighbour&#39;s
+centre is 1.41× further than an edge neighbour&#39;s, so &quot;adjacent&quot; means two
+different distances. Every hexagon neighbour is equidistant, which makes
+movement, coverage and surge modelling far cleaner. <strong>Naming that reason is
+the strong version of this answer</strong>; naming H3 without it is trivia.</p>
+</blockquote>
+<p><strong>In an interview: propose geohash, explain the boundary problem, and mention
+H3 as the production refinement.</strong></p>
+<hr>
+<h2 id="4-architecture"><a class="anchor" href="#4-architecture">#</a>4 · Architecture</h2><pre class="mermaid">flowchart TD
+    D[&quot;Driver apps&quot;] --&gt;|&quot;location every 4s&quot;| LG[&quot;Location gateway&lt;br/&gt;(WebSocket)&quot;]
+    LG --&gt; GEO[(&quot;Live location store&lt;br/&gt;Redis GEO / geohash&lt;br/&gt;TTL ~30s&quot;)]
+
+    R[&quot;Rider app&quot;] --&gt;|&quot;request ride&quot;| API[&quot;Ride service&quot;]
+    API --&gt; M[&quot;Matching service&quot;]
+    M --&gt;|&quot;query cell + 8 neighbours&quot;| GEO
+    M --&gt;|&quot;lock candidate&quot;| LOCK[(&quot;Driver state&lt;br/&gt;strongly consistent&quot;)]
+    M --&gt;|&quot;offer&quot;| LG
+    LG --&gt;|&quot;push&quot;| D
+
+    API --&gt; TDB[(&quot;Trip store&lt;br/&gt;transactional&quot;)]
+    API --&gt; Q[[&quot;Events: pricing,&lt;br/&gt;analytics, receipts&quot;]]
+    TDB --&gt; H[(&quot;Trip history&lt;br/&gt;partitioned by month&quot;)]</pre><p><strong>Two stores, opposite properties — say this explicitly:</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Live locations</th><th>Trips &amp; driver state</th></tr></thead><tbody><tr><td>Volume</td><td>250k writes/s</td><td>~800/s</td></tr><tr><td>Durability</td><td><strong>None needed</strong></td><td>Full</td></tr><tr><td>TTL</td><td>~30 seconds</td><td>Forever</td></tr><tr><td>Store</td><td>Redis with geo indexing</td><td>Transactional database</td></tr><tr><td>Consistency</td><td>Eventual, approximate</td><td><strong>Strong</strong></td></tr></tbody></table></div><blockquote>
+<p><strong>Losing the entire location store is survivable</strong>: every driver re-publishes
+within four seconds. Losing the trip store is not. Designing them as one system
+would force the strict requirements of the second onto the volume of the first.</p>
+</blockquote>
+<hr>
+<h2 id="5-the-matching-loop"><a class="anchor" href="#5-the-matching-loop">#</a>5 · The matching loop</h2><p><strong>Where the correctness requirement lives.</strong></p>
+<pre class="code"><code>1. Rider requests. Compute their geohash cell.
+2. Query cell + 8 neighbours -&gt; candidate drivers.
+3. Filter: available, correct vehicle class, true distance within radius.
+4. Rank: ETA (not straight-line distance), rating, acceptance rate.
+5. Offer to the best candidate:
+      conditional update -- set state to OFFERED
+      WHERE driver_state = &#39;AVAILABLE&#39;
+   0 rows affected -&gt; someone else got them. Try the next candidate.
+6. Driver has ~15s to accept.
+      accepted -&gt; state MATCHED, trip created
+      declined / timeout -&gt; release, offer to the next
+7. No candidates -&gt; widen the radius, retry, then give up honestly.</code></pre><blockquote>
+<p><strong>Step 5 is the whole correctness story, and it is
+<a href="design-ticketing.html#3--the-core-problem--no-double-booking">optimistic concurrency</a>,
+not a lock.</strong> A driver near three simultaneous requests must be offered to
+exactly one. A conditional update on driver state is atomic in the database;
+two requests race and one gets zero affected rows and moves on. <strong>A Redis lock
+would not be safe here</strong> — a GC pause longer than the TTL means two riders hold
+the same driver.</p>
+</blockquote>
+<p><strong>Offer one at a time, not broadcast to five.</strong> Broadcasting means four drivers
+accept and lose, which is a terrible driver experience and burns trust. Sequential
+offers with a short timeout cost a few seconds and are worth it.</p>
+<p><strong>Rank by ETA, not distance.</strong> A driver 500 m away across a river is further in
+time than one 2 km away on the same road. Straight-line distance is the
+<em>candidate filter</em>; ETA is the <em>ranking</em>.</p>
+<hr>
+<h2 id="6-deep-dive-material"><a class="anchor" href="#6-deep-dive-material">#</a>6 · Deep dive material</h2><h3 id="absorbing-250k-location-writes"><a class="anchor" href="#absorbing-250k-location-writes">#</a>Absorbing 250k location writes</h3><div class="table-scroll"><table><thead><tr><th>Decision</th><th>Why</th></tr></thead><tbody><tr><td><strong>WebSocket, not HTTP</strong></td><td>A new TCP+TLS handshake every 4 seconds per driver is absurd</td></tr><tr><td><strong>Write to memory only</strong></td><td>The data has a 30-second lifespan; durability is meaningless</td></tr><tr><td><strong>TTL on every entry</strong></td><td>A driver that stops publishing disappears automatically — no explicit offline event needed, which is good because you will not get one</td></tr><tr><td><strong>Adaptive frequency</strong></td><td>A stationary or off-shift driver does not need 4-second updates. Cuts volume substantially</td></tr><tr><td><strong>Shard by geohash prefix</strong></td><td>Geographically local queries stay on one node; the load naturally follows population</td></tr><tr><td><strong>Batch to the analytics pipeline</strong></td><td>Historical traces go to a stream, not the live store</td></tr></tbody></table></div><blockquote>
+<p><strong>The TTL trick is the elegant part</strong>, the same mechanism as presence in
+<a href="design-chat.html">chat</a>: you never need a reliable &quot;driver went offline&quot;
+event, because you will not get one when a phone loses signal. Expiry does the
+work.</p>
+</blockquote>
+<h3 id="the-trip-state-machine"><a class="anchor" href="#the-trip-state-machine">#</a>The trip state machine</h3><p><strong>Both parties can abandon at almost any point</strong>, which is what makes this more
+than a CRUD flow.</p>
+<pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Requested
+    Requested --&gt; Offered: driver selected
+    Offered --&gt; Requested: declined / timeout
+    Offered --&gt; Matched: accepted
+    Requested --&gt; Cancelled: no drivers / rider cancels
+    Matched --&gt; EnRoute: driver moving to pickup
+    Matched --&gt; Cancelled: either party cancels
+    EnRoute --&gt; InProgress: rider picked up
+    EnRoute --&gt; Cancelled: rider no-show
+    InProgress --&gt; Completed: dropped off
+    Completed --&gt; [*]
+    Cancelled --&gt; [*]</pre><p><strong>Every transition writes to the transactional store</strong>, and the driver&#39;s state
+must move with it — releasing them on cancellation is what prevents drivers
+being stranded in <code>OFFERED</code> forever. <strong>Add a sweeper for states that outlive
+their expected duration</strong>, exactly as with holds in ticketing.</p>
+<h3 id="sharding"><a class="anchor" href="#sharding">#</a>Sharding</h3><p><strong>Shard by geography, not by user.</strong> A ride is inherently local: the rider,
+driver and match all sit in one region, so every matching transaction stays
+single-shard and no distributed transaction is ever needed.</p>
+<p>The cost, and it is real: <strong>load is wildly uneven.</strong> Manhattan at 18:00 dwarfs a
+rural cell. Use finer cells in dense areas and coarser ones elsewhere rather
+than a uniform grid.</p>
+<h3 id="surge-if-it-comes-back-into-scope"><a class="anchor" href="#surge-if-it-comes-back-into-scope">#</a>Surge (if it comes back into scope)</h3><p>Supply and demand per cell over a short window, computed in a stream. <strong>Keep it
+out of the matching path</strong> — surge is a pricing input, computed asynchronously,
+and matching must not wait for it.</p>
+<hr>
+<h2 id="7-failure-and-wrap"><a class="anchor" href="#7-failure-and-wrap">#</a>7 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Location store node</td><td>Those drivers invisible ~4s</td><td>They re-publish; consistent hashing limits scope</td></tr><tr><td><strong>Entire location tier</strong></td><td>No matching possible</td><td>It rebuilds in seconds as drivers publish — the fastest recovery in the system</td></tr><tr><td>Matching service</td><td>No new rides; <strong>trips in progress continue</strong></td><td>Stateless, horizontally scaled</td></tr><tr><td>Trip store</td><td>Cannot start or complete rides</td><td>Replicas; refuse rather than risk double-matching</td></tr><tr><td>Driver app loses signal mid-trip</td><td>Location gaps</td><td>Buffer locally, upload on reconnect</td></tr><tr><td>Driver never accepts</td><td>Rider waits</td><td>15s timeout, next candidate, widen radius, then say so honestly</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: two subsystems with opposite requirements. Locations are 250,000
+writes a second of data worthless within seconds — in-memory, geo-indexed,
+TTL&#39;d, no durability, and losing the whole tier self-heals in four seconds.
+Trips and driver state are low-volume and must be exactly right, so they are
+transactional and sharded by geography, which keeps every match single-shard.</em></p>
+<p><em>Matching is a geohash prefix query over the cell and its eight neighbours —
+the neighbours matter because two points either side of a boundary are metres
+apart with different hashes — then an optimistic conditional update on driver
+state so a driver near three requests is offered to exactly one. Not a
+distributed lock; that is not a correctness mechanism.</em></p>
+<p><em>The assumption I would validate first is matching latency at peak in the
+densest cell, because that is where the index, the load skew and the rider&#39;s
+patience all fail at once.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="8-follow-ups"><a class="anchor" href="#8-follow-ups">#</a>8 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;How do you find nearby drivers?&quot;</td><td>A spatial index. Two B-tree indexes on lat and lng do not work — the database uses one efficiently and the other becomes a filter over a huge set. Geohash maps 2D to a 1D string where a shared prefix means spatial proximity, so proximity search becomes a prefix scan.</td></tr><tr><td>⭐ &quot;What is the problem with geohash?&quot;</td><td>Boundaries. Two points metres apart on opposite sides of a cell have entirely different hashes, so you must query the cell plus its eight neighbours and then filter by true distance.</td></tr><tr><td>⭐ &quot;Why hexagons?&quot;</td><td>With square cells a diagonal neighbour is 1.41× further than an edge neighbour, so &quot;adjacent&quot; means two different distances. Every hexagon neighbour is equidistant, which makes movement, coverage and surge modelling cleaner. That is why Uber built H3.</td></tr><tr><td>⭐ &quot;250k location writes per second?&quot;</td><td>To memory, never a relational database. The data lives about eight seconds, so durability is meaningless. Redis with geo indexing, sharded by geohash prefix, TTL on every entry — and adaptive update frequency, since a stationary driver does not need 4-second precision.</td></tr><tr><td>⭐ &quot;Two riders request the same driver simultaneously.&quot;</td><td>Optimistic concurrency: a conditional update setting the driver to OFFERED where their state is still AVAILABLE. One request affects a row, the other affects zero and moves to the next candidate. Not a distributed lock — a GC pause past the TTL would give two riders the same driver.</td></tr><tr><td>&quot;Broadcast the request to several drivers?&quot;</td><td>No. Four drivers accepting and losing is a bad experience that erodes trust. Sequential offers with a 15-second timeout, widening the radius if nobody accepts.</td></tr><tr><td>&quot;How do you rank candidates?&quot;</td><td>By ETA, not straight-line distance — a driver across a river is close in metres and far in minutes. Distance filters candidates; ETA ranks them. Then rating and acceptance rate.</td></tr><tr><td>&quot;How do you know a driver went offline?&quot;</td><td>You do not get told, so do not rely on being told. Every location entry carries a TTL; if they stop publishing, they expire out of the index automatically.</td></tr><tr><td>&quot;How do you shard?&quot;</td><td>By geography. A ride is local, so rider, driver and match are in one region and every matching transaction is single-shard. The cost is skew — dense cities dwarf rural areas — so use variable cell sizes rather than a uniform grid.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>open by splitting location from trips on their opposite requirements,</li>
+<li>derive 250k writes/s and say why that rules out a database,</li>
+<li>explain why two single-column indexes fail for 2D search,</li>
+<li>describe geohash <strong>and</strong> raise the boundary problem unprompted,</li>
+<li>give the hexagon argument rather than just naming H3,</li>
+<li>use a conditional update for matching and say why a lock is unsafe, and</li>
+<li>explain the TTL trick for driver liveness.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-file-sync.html"><span>previous</span>Design a file sync service</a><a class="pager next" href="numbers-to-know.html"><span>next</span>Numbers to know</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-the-spatial-index-the-core-problem">3 · The spatial index — the core problem</a></li><li class="d3"><a href="#why-the-obvious-approaches-fail">Why the obvious approaches fail</a></li><li class="d3"><a href="#geohash">Geohash</a></li><li class="d3"><a href="#s2-and-h3">S2 and H3</a></li><li class="d2"><a href="#4-architecture">4 · Architecture</a></li><li class="d2"><a href="#5-the-matching-loop">5 · The matching loop</a></li><li class="d2"><a href="#6-deep-dive-material">6 · Deep dive material</a></li><li class="d3"><a href="#absorbing-250k-location-writes">Absorbing 250k location writes</a></li><li class="d3"><a href="#the-trip-state-machine">The trip state machine</a></li><li class="d3"><a href="#sharding">Sharding</a></li><li class="d3"><a href="#surge-if-it-comes-back-into-scope">Surge (if it comes back into scope)</a></li><li class="d2"><a href="#7-failure-and-wrap">7 · Failure and wrap</a></li><li class="d2"><a href="#8-follow-ups">8 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
