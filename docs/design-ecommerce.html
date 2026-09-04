@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design an e-commerce platform · System Design Handbook</title>
+<meta name="description" content="Catalogue, search, cart and checkout — with the inventory reservation that is the only genuinely hard part, plus the data model and order state machine.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li><li><a href="design-ecommerce.html" class="active">Design an e-commerce platform</a></li><li><a href="design-key-value-store.html">Design a key-value store</a></li><li><a href="design-logging-monitoring.html">Design a logging & monitoring system</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="design-an-e-commerce-platform"><a class="anchor" href="#design-an-e-commerce-platform">#</a>Design an e-commerce platform</h1><blockquote>
+<p><strong>The breadth question.</strong> Amazon, Flipkart, Shopify. It has more subsystems
+than any other design in this handbook, which makes <strong>scoping the deciding
+skill</strong> — and one genuinely hard core: not overselling inventory.</p>
+</blockquote>
+<hr>
+<h2 id="1-scope-05"><a class="anchor" href="#1-scope-05">#</a>1 · Scope (0–5)</h2><pre class="code"><code>IN SCOPE                          OUT OF SCOPE
+- browse / search the catalogue   - recommendations
+- product detail page             - seller onboarding
+- cart                            - logistics / delivery routing
+- checkout: reserve, pay, order   - returns, refunds
+- inventory correctness           - reviews, Q&amp;A
+
+NON-FUNCTIONAL
+- 100M products, 10M DAU
+- browse:   read-heavy, ~50,000 QPS peak, staleness OK
+- checkout: ~500 QPS, MUST be correct
+- NEVER oversell    &lt;- the one hard invariant
+- NEVER double-charge
+- cart survives across devices and sessions
+- flash sales: 100x normal load on a few SKUs</code></pre><blockquote>
+<p><strong>Open by separating the two halves</strong>, as with
+<a href="design-ticketing.html">ticketing</a>: <em>&quot;Browsing is read-heavy, cacheable and
+tolerant of staleness. Checkout is a small fraction of traffic that must be
+exactly right. I&#39;ll design them separately, because forcing one consistency
+model on both gives you something slow and still wrong.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="2-estimation-58"><a class="anchor" href="#2-estimation-58">#</a>2 · Estimation (5–8)</h2><pre class="code"><code>BROWSE   10M DAU x 20 page views = 200M/day = ~2,300 QPS, peak ~7,000
+         plus search, images, recommendations -&gt; call it 50,000 QPS at the edge
+
+CHECKOUT 10M DAU x 2% conversion = 200k orders/day = ~2.3/s, peak ~500/s
+         during a flash sale, concentrated on a HANDFUL of SKUs
+
+CATALOGUE 100M products x 5 KB (text + attributes) = 500 GB
+          images: 100M x 5 variants x 200 KB = 100 TB  -&gt; object storage + CDN
+
+ORDERS   200k/day x 2 KB = 400 MB/day = ~150 GB/year. Small, but must be
+         durable and queryable forever.
+
+CONCLUSION
+  - browse is a CACHING problem: 50k QPS never touches the database
+  - checkout is a CORRECTNESS problem at only 500/s -- tiny volume,
+    strict guarantees
+  - the flash sale is the real difficulty: 100x load on ONE row</code></pre><p><strong>The flash-sale line is the one to land.</strong> Normal load is unremarkable; the
+design exists for the moment 50,000 people want the same SKU.</p>
+<hr>
+<h2 id="3-the-data-model"><a class="anchor" href="#3-the-data-model">#</a>3 · The data model</h2><pre class="mermaid">erDiagram
+    PRODUCT ||--o{ SKU : &quot;has variants&quot;
+    SKU ||--|| INVENTORY : &quot;has stock&quot;
+    SKU ||--o{ CART_ITEM : &quot;added to&quot;
+    CART ||--o{ CART_ITEM : contains
+    USER ||--o{ CART : owns
+    USER ||--o{ ORDER : places
+    ORDER ||--o{ ORDER_ITEM : contains
+    SKU ||--o{ ORDER_ITEM : &quot;ordered as&quot;
+    ORDER ||--|| PAYMENT : &quot;paid by&quot;
+    ORDER ||--o{ RESERVATION : holds
+    SKU ||--o{ RESERVATION : &quot;reserved from&quot;
+
+    PRODUCT {
+        uuid product_id PK
+        string title
+        text description
+        uuid category_id
+    }
+    SKU {
+        uuid sku_id PK
+        uuid product_id FK
+        json attributes &quot;size, colour&quot;
+        int price_cents
+    }
+    INVENTORY {
+        uuid sku_id PK
+        int available
+        int reserved
+        int version &quot;optimistic lock&quot;
+    }
+    ORDER {
+        uuid order_id PK
+        uuid user_id FK
+        string state
+        int total_cents
+        timestamp created_at
+    }
+    ORDER_ITEM {
+        uuid order_id FK
+        uuid sku_id FK
+        int quantity
+        int price_at_purchase &quot;SNAPSHOT&quot;
+    }</pre><p><strong>Three modelling decisions worth defending:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Decision</th><th>Why</th></tr></thead><tbody><tr><td><strong>Product vs SKU are separate</strong></td><td>&quot;T-shirt&quot; is a product; &quot;T-shirt, blue, medium&quot; is the SKU. <strong>Stock lives on the SKU</strong> — this split is the most common modelling mistake and it makes inventory impossible if you get it wrong</td></tr><tr><td><strong><code>price_at_purchase</code> on the order item</strong></td><td>Prices change. An order must record what was actually charged, not join to a live price — otherwise every historical order silently rewrites itself</td></tr><tr><td><strong><code>available</code> and <code>reserved</code> are separate columns</strong></td><td>A reservation is not a sale. Keeping them apart is what lets a hold expire without losing stock</td></tr></tbody></table></div><hr>
+<h2 id="4-architecture"><a class="anchor" href="#4-architecture">#</a>4 · Architecture</h2><pre class="mermaid">flowchart TD
+    U[&quot;Clients&quot;] --&gt; CDN[&quot;CDN&lt;br/&gt;images, static&quot;]
+    U --&gt; GW[&quot;API gateway&lt;br/&gt;auth, rate limit&quot;]
+
+    GW --&gt; CAT[&quot;Catalogue service&quot;]
+    GW --&gt; SRCH[&quot;Search service&quot;]
+    GW --&gt; CART[&quot;Cart service&quot;]
+    GW --&gt; CO[&quot;Checkout service&quot;]
+
+    CAT --&gt; RC[(&quot;Redis&lt;br/&gt;product cache&quot;)]
+    CAT --&gt; PDB[(&quot;Product DB&lt;br/&gt;read replicas&quot;)]
+    SRCH --&gt; ES[(&quot;Elasticsearch&quot;)]
+    PDB --&gt;|&quot;CDC&quot;| ES
+
+    CART --&gt; CRD[(&quot;Redis&lt;br/&gt;cart, TTL 30d&quot;)]
+
+    CO --&gt; INV[(&quot;Inventory DB&lt;br/&gt;STRONGLY consistent&lt;br/&gt;sharded by sku_id&quot;)]
+    CO --&gt; ODB[(&quot;Order DB&quot;)]
+    CO --&gt; PAY[&quot;Payment provider&quot;]
+
+    CO --&gt; Q[[&quot;Events&quot;]]
+    Q --&gt; FUL[&quot;Fulfilment&quot;]
+    Q --&gt; NOTI[&quot;Notifications&quot;]
+    Q --&gt; ANA[&quot;Analytics&quot;]
+
+    SW[&quot;Reservation sweeper&quot;] --&gt; INV</pre><p><strong>Two halves, opposite properties:</strong></p>
+<div class="table-scroll"><table><thead><tr><th></th><th>Browse path</th><th>Checkout path</th></tr></thead><tbody><tr><td>QPS</td><td>~50,000</td><td>~500</td></tr><tr><td>Consistency</td><td>Eventual — a stale price or stock count is fine</td><td><strong>Strong</strong></td></tr><tr><td>Store</td><td>Cache + replicas + Elasticsearch</td><td>Transactional, sharded by SKU</td></tr><tr><td>Failure</td><td>Degrade</td><td><strong>Refuse</strong></td></tr></tbody></table></div><blockquote>
+<p><strong>&quot;12 left in stock&quot; on a product page can be wrong and that is fine.</strong> The
+truth is established at reservation time, not at render time. Users are used to
+&quot;sorry, that just sold out&quot; — they are not used to being charged for something
+that does not exist.</p>
+</blockquote>
+<hr>
+<h2 id="5-the-hard-part-never-oversell"><a class="anchor" href="#5-the-hard-part-never-oversell">#</a>5 · The hard part — never oversell</h2><p><strong>This is the whole question.</strong> Everything else is caching and CRUD.</p>
+<h3 id="the-reservation-model"><a class="anchor" href="#the-reservation-model">#</a>The reservation model</h3><p><strong>A sale is not one step.</strong> Modelling it as three is what makes payment failure
+and abandonment tractable — the same shape as
+<a href="design-ticketing.html#4--the-reservation-model">ticketing</a>.</p>
+<pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Available
+    Available --&gt; Reserved: checkout begins (TTL 15 min)
+    Reserved --&gt; Available: timeout / cart abandoned
+    Reserved --&gt; Sold: payment confirmed
+    Reserved --&gt; Available: payment failed
+    Sold --&gt; Available: order cancelled / returned</pre><h3 id="the-atomic-decrement"><a class="anchor" href="#the-atomic-decrement">#</a>The atomic decrement</h3><pre class="code"><code class="language-sql">-- Reserve. Atomic; no lock held across the payment call.
+UPDATE inventory
+   SET available = available - :qty,
+       reserved  = reserved  + :qty,
+       version   = version + 1
+ WHERE sku_id = :sku
+   AND available &gt;= :qty;          -- the guard that prevents overselling
+
+-- 1 row affected -&gt; reserved.  0 rows -&gt; insufficient stock, tell the user now.</code></pre><blockquote>
+<p><strong><code>available &gt;= :qty</code> in the WHERE clause is the entire correctness
+mechanism.</strong> The database evaluates and updates atomically, so two concurrent
+checkouts for the last item cannot both succeed — one gets zero affected rows.
+<strong>No application-level lock, no distributed lock, no read-then-write race.</strong></p>
+<p>A Redis lock here would be wrong for the same reason as in ticketing: a GC
+pause longer than the TTL means two holders. <strong>The database constraint is the
+source of truth; anything else is an optimisation in front of it.</strong></p>
+</blockquote>
+<h3 id="the-checkout-sequence"><a class="anchor" href="#the-checkout-sequence">#</a>The checkout sequence</h3><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant C as Client
+    participant CO as Checkout
+    participant INV as Inventory DB
+    participant P as Payment provider
+    participant O as Order DB
+    participant Q as Event bus
+
+    C-&gt;&gt;CO: POST /checkout {cart, Idempotency-Key}
+    CO-&gt;&gt;INV: atomic reserve (all items)
+    alt any item unavailable
+        INV--&gt;&gt;CO: 0 rows
+        CO-&gt;&gt;INV: release the ones already reserved
+        CO--&gt;&gt;C: 409 &quot;X is out of stock&quot;
+    else all reserved
+        INV--&gt;&gt;CO: reserved, TTL 15 min
+        CO-&gt;&gt;O: create order (PENDING)
+        CO-&gt;&gt;P: charge (idempotency key)
+        alt paid
+            P--&gt;&gt;CO: success
+            CO-&gt;&gt;INV: reserved -&gt; sold
+            CO-&gt;&gt;O: order CONFIRMED
+            CO-&gt;&gt;Q: OrderPlaced
+            CO--&gt;&gt;C: 201 order
+        else declined
+            P--&gt;&gt;CO: declined
+            CO-&gt;&gt;INV: release reservation
+            CO-&gt;&gt;O: order FAILED
+            CO--&gt;&gt;C: 402 payment declined
+        else TIMEOUT — outcome unknown
+            CO-&gt;&gt;O: order PENDING_VERIFICATION
+            Note over CO,P: do NOT guess. Keep the reservation.&lt;br/&gt;Reconcile against the provider.
+            CO--&gt;&gt;C: 202 &quot;we&#39;re confirming your order&quot;
+        end
+    end</pre><p><strong>Three details that decide this answer:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Detail</th><th>Why</th></tr></thead><tbody><tr><td><strong>Reserve before charging</strong></td><td>Charging first and then finding no stock means refunding a customer for something you never had</td></tr><tr><td><strong>Release partial reservations</strong></td><td>A 5-item cart where item 4 fails must release items 1–3, or abandoned stock accumulates</td></tr><tr><td><strong>Never guess on a payment timeout</strong></td><td>You do not know if the charge happened. Releasing risks giving away paid stock; confirming risks shipping unpaid goods. <strong>Hold and reconcile</strong> — see <a href="idempotency.html">idempotency</a></td></tr></tbody></table></div><h3 id="reservation-expiry"><a class="anchor" href="#reservation-expiry">#</a>Reservation expiry</h3><p><strong>Lazy, not sweeper-dependent</strong> — correctness must not rely on a cron job:</p>
+<pre class="code"><code class="language-sql">-- Expired reservations are treated as available by the reserve query itself.
+UPDATE inventory SET available = available - :qty, reserved = reserved + :qty
+ WHERE sku_id = :sku
+   AND (available &gt;= :qty
+        OR available + (SELECT COALESCE(SUM(qty), 0) FROM reservations
+                         WHERE sku_id = :sku AND expires_at &lt; now()) &gt;= :qty);</code></pre><p>Plus a background sweeper to normalise the rows so the displayed counts stay
+accurate. <strong>The sweeper is for tidiness; the lazy check is for correctness.</strong></p>
+<hr>
+<h2 id="6-the-flash-sale"><a class="anchor" href="#6-the-flash-sale">#</a>6 · The flash sale</h2><p><strong>100× load concentrated on one row.</strong> Row-level contention, not throughput, is
+the problem — every request wants the same lock.</p>
+<div class="table-scroll"><table><thead><tr><th>Technique</th><th>Effect</th></tr></thead><tbody><tr><td><strong>Virtual waiting room</strong></td><td>Admit at a controlled rate; most traffic never reaches the database</td></tr><tr><td><strong>Pre-declare the stock in Redis</strong></td><td>Decrement a counter in memory first; only survivors touch the database</td></tr><tr><td><strong>Sharded counters</strong></td><td>Split 1,000 units into 10 buckets of 100; a request picks one bucket. <strong>10× less contention</strong></td></tr><tr><td><strong>Queue the checkouts</strong></td><td>Serialise per SKU; slower per request, no contention at all</td></tr><tr><td><strong>Reject early</strong></td><td>Once the Redis counter hits zero, reject at the edge</td></tr></tbody></table></div><blockquote>
+<p><strong>Sharded counters are the neat answer and the trade-off is worth stating:</strong>
+splitting stock into buckets removes contention but fragments availability —
+a bucket can be empty while others have stock, so a request may be told &quot;sold
+out&quot; while units remain. Fix by falling through to other buckets, which
+reintroduces some contention. <strong>That tension is the real answer, not the
+technique.</strong></p>
+</blockquote>
+<hr>
+<h2 id="7-the-browse-path"><a class="anchor" href="#7-the-browse-path">#</a>7 · The browse path</h2><p>Straightforward by comparison, but say the decisions:</p>
+<div class="table-scroll"><table><thead><tr><th>Concern</th><th>Approach</th></tr></thead><tbody><tr><td>Product pages</td><td>Cache-aside in Redis, TTL minutes; invalidate on update</td></tr><tr><td>Images</td><td>Object storage + CDN, content-hashed URLs — see <a href="cdn-and-storage.html">CDN &amp; storage</a></td></tr><tr><td>Search</td><td>Elasticsearch kept in sync by <strong>CDC</strong>, not dual writes — see <a href="search.html">search</a></td></tr><tr><td>Listing pages</td><td>Cursor pagination, never offset — see <a href="api-design.html">API design</a></td></tr><tr><td>Stock display</td><td>From cache. Approximate, and that is fine</td></tr><tr><td>Personalisation</td><td>Fragment-cache the page; personalise a small hole in it</td></tr></tbody></table></div><p><strong>The cart lives in Redis with a long TTL, keyed by user.</strong> It is not an order —
+losing a cart is annoying, not incorrect. For guests, key by a cookie and merge
+into the user&#39;s cart at login.</p>
+<blockquote>
+<p><strong>A cart holds no stock.</strong> Only checkout reserves. Reserving on add-to-cart
+means one abandoned cart can hold inventory for hours, and at scale that
+starves real buyers.</p>
+</blockquote>
+<hr>
+<h2 id="8-failure-and-wrap"><a class="anchor" href="#8-failure-and-wrap">#</a>8 · Failure and wrap</h2><div class="table-scroll"><table><thead><tr><th>Fails</th><th>Effect</th><th>Mitigation</th></tr></thead><tbody><tr><td>Product cache</td><td>DB sees full browse load</td><td>Read replicas + circuit breaker; degrade to fewer fields</td></tr><tr><td>Search cluster</td><td>No search</td><td>Fall back to category browse — a degraded store still sells</td></tr><tr><td>Cart store</td><td>Carts lost</td><td>Annoying, not incorrect; users rebuild</td></tr><tr><td><strong>Inventory DB</strong></td><td><strong>No checkouts</strong></td><td><strong>Refuse rather than risk overselling.</strong> Browsing continues</td></tr><tr><td>Payment provider</td><td>Cannot complete</td><td>Circuit-break, hold reservations, queue and retry</td></tr><tr><td>Sweeper</td><td>Stale reservations</td><td>Lazy expiry means correctness is unaffected</td></tr></tbody></table></div><blockquote>
+<p><em>&quot;Summary: two halves. Browse is cached, replica-served and eventually
+consistent at 50,000 QPS. Checkout is 500 QPS, strongly consistent, sharded by
+SKU so contention is local and every transaction is single-shard.</em></p>
+<p><em>Overselling is prevented by an atomic conditional decrement — <code>available &gt;= qty</code> inside the UPDATE — not by any lock. Stock moves available → reserved →
+sold, reservations expire lazily so correctness never depends on a sweeper, and
+a payment timeout holds the reservation and reconciles rather than guessing.</em></p>
+<p><em>The thing I&#39;d design for hardest is the flash sale: 100× load on one row is a
+contention problem, not a throughput one, so a waiting room and a Redis
+pre-check keep most traffic away from the database entirely.&quot;</em></p>
+</blockquote>
+<hr>
+<h2 id="9-follow-ups"><a class="anchor" href="#9-follow-ups">#</a>9 · Follow-ups</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>⭐ &quot;How do you prevent overselling?&quot;</td><td>An atomic conditional update: decrement where <code>available &gt;= qty</code>. The database evaluates and writes in one operation, so two concurrent buyers of the last unit cannot both succeed — one gets zero affected rows. No application lock, and specifically not a distributed lock, which is not a correctness mechanism.</td></tr><tr><td>⭐ &quot;The payment provider times out.&quot;</td><td>Do not guess. Keep the reservation, mark the order pending verification, and reconcile against the provider by idempotency key. Releasing risks giving away stock someone paid for; confirming risks shipping unpaid goods.</td></tr><tr><td>⭐ &quot;50,000 people want the same item at 10am.&quot;</td><td>Contention on one row, not throughput. Waiting room at the edge, a Redis counter that rejects most requests before the database, and sharded counters to split the row — accepting that sharding can report sold-out while other buckets hold stock.</td></tr><tr><td>&quot;Where does the cart live?&quot;</td><td>Redis, keyed by user, long TTL. It holds no inventory — only checkout reserves. Reserving at add-to-cart lets abandoned carts starve real buyers.</td></tr><tr><td>&quot;Product and SKU — why separate?&quot;</td><td>A product is the concept, a SKU is the buyable variant. Stock, price and identifiers live on the SKU. Conflating them makes inventory impossible the moment sizes or colours exist.</td></tr><tr><td>&quot;Why store the price on the order item?&quot;</td><td>Prices change. An order is a historical record of what was charged; joining to a live price silently rewrites history and breaks every reconciliation.</td></tr><tr><td>&quot;How does search stay in sync?&quot;</td><td>Change data capture off the database&#39;s replication log, not dual writes — no transaction spans your database and Elasticsearch, so a dual write diverges permanently with nothing to detect it.</td></tr><tr><td>&quot;Is the stock count on the page accurate?&quot;</td><td>No, and it does not need to be. Truth is established at reservation. Users tolerate &quot;just sold out&quot;; they do not tolerate being charged for nothing.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You can do this design when you can:</p>
+<ol>
+<li>split browse from checkout on their opposite requirements,</li>
+<li>write the atomic conditional decrement and say why it needs no lock,</li>
+<li>draw the reservation state machine and explain lazy expiry,</li>
+<li>handle a payment timeout without guessing,</li>
+<li>explain the flash-sale contention problem and the sharded-counter trade-off, and</li>
+<li>defend the product/SKU split and the price snapshot.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="design-ride-sharing.html"><span>previous</span>Design a ride-sharing service</a><a class="pager next" href="design-key-value-store.html"><span>next</span>Design a key-value store</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-scope-05">1 · Scope (0–5)</a></li><li class="d2"><a href="#2-estimation-58">2 · Estimation (5–8)</a></li><li class="d2"><a href="#3-the-data-model">3 · The data model</a></li><li class="d2"><a href="#4-architecture">4 · Architecture</a></li><li class="d2"><a href="#5-the-hard-part-never-oversell">5 · The hard part — never oversell</a></li><li class="d3"><a href="#the-reservation-model">The reservation model</a></li><li class="d3"><a href="#the-atomic-decrement">The atomic decrement</a></li><li class="d3"><a href="#the-checkout-sequence">The checkout sequence</a></li><li class="d3"><a href="#reservation-expiry">Reservation expiry</a></li><li class="d2"><a href="#6-the-flash-sale">6 · The flash sale</a></li><li class="d2"><a href="#7-the-browse-path">7 · The browse path</a></li><li class="d2"><a href="#8-failure-and-wrap">8 · Failure and wrap</a></li><li class="d2"><a href="#9-follow-ups">9 · Follow-ups</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
