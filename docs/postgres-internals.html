@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postgres internals · System Design Handbook</title>
+<meta name="description" content="Pages, tuples, ctid, xmin/xmax and MVCC — with every claim demonstrated against a live Postgres 16, plus isolation levels, HOT updates, bloat and vacuum.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li><li><a href="postgres-internals.html" class="active">Postgres internals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li><li><a href="design-ecommerce.html">Design an e-commerce platform</a></li><li><a href="design-key-value-store.html">Design a key-value store</a></li><li><a href="design-logging-monitoring.html">Design a logging & monitoring system</a></li><li><a href="low-level-design.html">Low-level design (LLD)</a></li><li><a href="design-collaborative-editor.html">Design a collaborative editor</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="postgres-internals"><a class="anchor" href="#postgres-internals">#</a>Postgres internals</h1><blockquote>
+<p><strong>One fact explains most of Postgres&#39;s behaviour: an <code>UPDATE</code> never modifies a
+row in place.</strong> It writes a new row version and marks the old one dead. Bloat,
+vacuum, long-transaction problems, index write amplification and the isolation
+levels all follow from that.</p>
+</blockquote>
+<blockquote>
+<p><strong>Source and method.</strong> The structure of this page follows
+<a href="https://www.youtube.com/@hnasr">Hussein Nasser&#39;s</a> walkthrough of Postgres
+internals — pages, tables, tuples, heap. <strong>Every claim below was then executed
+against a live PostgreSQL 16 container</strong>, and the outputs are real, not
+illustrative. Where the whiteboard and the running database differ, the
+database wins — see §3.</p>
+</blockquote>
+<hr>
+<h2 id="1-the-physical-layout"><a class="anchor" href="#1-the-physical-layout">#</a>1 · The physical layout</h2><pre class="code"><code>A TABLE is a FILE on disk.
+A FILE is an array of fixed-size PAGES.
+A PAGE is 8 KB by default -- set at compile time.
+A PAGE holds TUPLES -- row versions, not rows.
+The whole structure is called the HEAP.</code></pre><pre class="mermaid">flowchart TD
+    T[&quot;Table &#39;items&#39;&quot;] --&gt; F[&quot;File on disk&quot;]
+    F --&gt; P0[&quot;Page 0 — 8 KB&quot;]
+    F --&gt; P1[&quot;Page 1 — 8 KB&quot;]
+    F --&gt; P2[&quot;Page 2 — 8 KB&quot;]
+    P0 --&gt; LP[&quot;Line pointer array&lt;br/&gt;grows forwards →&quot;]
+    P0 --&gt; TUP[&quot;Tuples&lt;br/&gt;← grow backwards&quot;]
+    LP -.-&gt;|&quot;offset&quot;| TUP</pre><p><strong>Verified:</strong></p>
+<pre class="code"><code>postgres=# SHOW block_size;
+ 8192</code></pre><p><strong>Why 8 KB matters:</strong> it is the unit of I/O. Postgres never reads part of a
+page — a single-row lookup pulls the whole 8 KB into shared buffers. It is also
+why a row cannot exceed a page: values too large are moved out to a <strong>TOAST</strong>
+table (The Oversized-Attribute Storage Technique) and replaced by a pointer.</p>
+<p><strong>A page is filled from both ends.</strong> Line pointers grow forward from the header;
+tuple data grows backward from the end. They meet in the middle, and that is
+when the page is full. The indirection matters: a tuple can be moved <em>within</em> a
+page without changing its line pointer, so nothing outside the page needs
+updating.</p>
+<hr>
+<h2 id="2-ctid-the-physical-address"><a class="anchor" href="#2-ctid-the-physical-address">#</a>2 · ctid — the physical address</h2><p><strong>Every tuple has a <code>ctid</code>: <code>(page number, line pointer)</code>.</strong></p>
+<pre class="code"><code>postgres=# CREATE TABLE items (item_id int PRIMARY KEY, price numeric);
+postgres=# INSERT INTO items VALUES (100, 10), (200, 5);
+postgres=# SELECT ctid, xmin, xmax, item_id, price FROM items ORDER BY ctid;
+
+ ctid  | xmin | xmax | item_id | price
+-------+------+------+---------+-------
+ (0,1) |  731 |    0 |     100 |    10
+ (0,2) |  731 |    0 |     200 |     5</code></pre><p><strong>This is why Postgres reads are fast regardless of table size.</strong> Given
+<code>(0,1)</code>, it computes the file offset arithmetically — page 0 starts at byte 0,
+page 1 at 8192, page <em>n</em> at <em>n</em> × 8192 — reads that one 8 KB page, and finds
+the tuple by its line pointer. <strong>A 7 GB table and a 7 MB table cost the same
+single page read.</strong></p>
+<blockquote>
+<p>⚠️ <strong>Line pointers are 1-indexed, not 0-indexed.</strong> The first tuple on a page is
+<code>(0,1)</code>, not <code>(0,0)</code>. Diagrams frequently show <code>(0,0)</code>; the running database
+disagrees, and <code>(0,0)</code> is in fact an invalid ctid.</p>
+</blockquote>
+<hr>
+<h2 id="3-xmin-and-xmax-how-mvcc-works"><a class="anchor" href="#3-xmin-and-xmax-how-mvcc-works">#</a>3 · xmin and xmax — how MVCC works</h2><p><strong>Two hidden system columns on every tuple:</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Column</th><th>Meaning</th></tr></thead><tbody><tr><td><strong><code>xmin</code></strong></td><td>The transaction ID that <strong>created</strong> this tuple</td></tr><tr><td><strong><code>xmax</code></strong></td><td>The transaction ID that <strong>deleted or superseded</strong> it — <code>0</code> means still live</td></tr></tbody></table></div><p>A tuple is visible to your transaction roughly when <code>xmin</code> is committed and in
+your snapshot, <strong>and</strong> <code>xmax</code> is either 0 or not visible to you. That single
+rule produces every isolation behaviour below.</p>
+<h3 id="insert-one-new-tuple"><a class="anchor" href="#insert-one-new-tuple">#</a>INSERT — one new tuple</h3><p><code>xmin</code> = your transaction, <code>xmax</code> = 0. Shown above.</p>
+<h3 id="update-a-new-tuple-and-the-old-one-marked"><a class="anchor" href="#update-a-new-tuple-and-the-old-one-marked">#</a>UPDATE — a new tuple, and the old one marked</h3><pre class="code"><code>postgres=# UPDATE items SET price = 20 WHERE item_id = 100;
+postgres=# SELECT ctid, xmin, xmax, item_id, price FROM items ORDER BY ctid;
+
+ ctid  | xmin | xmax | item_id | price
+-------+------+------+---------+-------
+ (0,2) |  731 |    0 |     200 |     5
+ (0,3) |  732 |    0 |     100 |    20     &lt;- NEW tuple at a NEW ctid</code></pre><p><strong>The old version is still physically there.</strong> <code>pageinspect</code> shows the page as
+it really is:</p>
+<pre class="code"><code>postgres=# SELECT lp, t_xmin, t_xmax, t_ctid
+             FROM heap_page_items(get_raw_page(&#39;items&#39;, 0));
+
+ lp | t_xmin | t_xmax | t_ctid
+----+--------+--------+--------
+  1 |    731 |    732 | (0,3)    &lt;- OLD version: dead, and it POINTS FORWARD
+  2 |    731 |      0 | (0,2)    &lt;- row 200, untouched
+  3 |    732 |      0 | (0,3)    &lt;- NEW version, points to itself</code></pre><blockquote>
+<p><strong>Three things this proves at once:</strong></p>
+<ol>
+<li><code>UPDATE</code> is a <strong>delete plus an insert</strong>. The row did not move; a second
+version was written.</li>
+<li>The old tuple&#39;s <code>t_xmax</code> is the updating transaction — that is how it is
+marked dead.</li>
+<li><strong>The old tuple&#39;s <code>t_ctid</code> points forward to its replacement.</strong> That
+forward pointer forms the <strong>update chain</strong>, and it is what lets an index
+entry pointing at the old version still find the current one.</li>
+</ol>
+</blockquote>
+<h3 id="delete-nothing-is-removed"><a class="anchor" href="#delete-nothing-is-removed">#</a>DELETE — nothing is removed</h3><pre class="code"><code>postgres=# DELETE FROM items WHERE item_id = 200;
+
+ lp | t_xmin | t_xmax | t_ctid
+----+--------+--------+--------
+  1 |    731 |    732 | (0,3)
+  2 |    731 |    745 | (0,2)    &lt;- still here. Only xmax was set.
+  3 |    732 |      0 | (0,3)</code></pre><p><strong>A <code>DELETE</code> writes four bytes.</strong> The tuple, its data, and its index entries all
+remain on disk until <code>VACUUM</code> reclaims them. This is why deleting a million rows
+frees no disk space and can make the table <em>slower</em> until vacuum runs.</p>
+<hr>
+<h2 id="4-indexes-point-at-ctids"><a class="anchor" href="#4-indexes-point-at-ctids">#</a>4 · Indexes point at ctids</h2><p>An index is a B-tree mapping <strong>key → ctid</strong>.</p>
+<pre class="mermaid">flowchart LR
+    subgraph IDX[&quot;Index on item_id (B+tree)&quot;]
+        K1[&quot;100 → (0,1)&quot;]
+        K2[&quot;100 → (0,3)&quot;]
+        K3[&quot;200 → (0,2)&quot;]
+    end
+    subgraph HEAP[&quot;Heap — page 0&quot;]
+        H1[&quot;lp1: xmin 731, xmax 732 → dead&quot;]
+        H2[&quot;lp2: xmin 731, xmax 0&quot;]
+        H3[&quot;lp3: xmin 732, xmax 0 → live&quot;]
+    end
+    K1 --&gt; H1
+    K2 --&gt; H3
+    K3 --&gt; H2</pre><p><strong>The consequence that costs the most:</strong> because index entries store physical
+addresses, <strong>a normal <code>UPDATE</code> must insert a new entry into every index on the
+table</strong> — even indexes on columns that did not change. One update to a table
+with six indexes can mean seven writes.</p>
+<blockquote>
+<p><strong>This is the &quot;brilliant and catastrophic&quot; design.</strong> Brilliant, because a
+lookup is one arithmetic jump to one page. Catastrophic, because every row
+version needs an entry in every index.</p>
+</blockquote>
+<p><strong>The index cannot tell you if a row is visible.</strong> It only knows a ctid existed.
+Postgres must still visit the heap to read <code>xmin</code>/<code>xmax</code> — which is why an
+&quot;index-only scan&quot; is only possible when the <strong>visibility map</strong> marks the page
+all-visible, and why <code>VACUUM</code> is what makes index-only scans work at all.</p>
+<hr>
+<h2 id="5-hot-updates-the-optimisation-that-saves-you"><a class="anchor" href="#5-hot-updates-the-optimisation-that-saves-you">#</a>5 · HOT updates — the optimisation that saves you</h2><p><strong>Heap-Only Tuple:</strong> if the updated columns are in <strong>no index</strong>, <em>and</em> the new
+version fits on the <strong>same page</strong>, Postgres skips the index writes entirely. The
+old tuple&#39;s forward pointer alone chains to the new one.</p>
+<p><strong>Verified — the difference is total:</strong></p>
+<pre class="code"><code>-- update a column that is NOT indexed
+postgres=# UPDATE hot_demo SET plain_col = plain_col + 1 WHERE id &lt;= 50;
+
+ updates | hot_updates
+---------+-------------
+      50 |          50        &lt;- 100% HOT: zero index writes
+
+-- update a column that IS indexed
+postgres=# UPDATE hot_demo SET indexed_col = indexed_col + 1000 WHERE id &lt;= 50;
+
+ updates | hot_updates
+---------+-------------
+     100 |          50        &lt;- none of the new 50 were HOT</code></pre><div class="table-scroll"><table><thead><tr><th>To get HOT updates</th><th>Why</th></tr></thead><tbody><tr><td><strong>Do not index columns you update frequently</strong></td><td>The single biggest lever</td></tr><tr><td><strong>Leave free space on pages</strong> — lower <code>fillfactor</code> (e.g. 80)</td><td>The new version must fit on the same page</td></tr><tr><td>Keep rows narrow</td><td>More versions fit per page</td></tr></tbody></table></div><blockquote>
+<p><strong><code>fillfactor</code> is the tuning knob nobody uses.</strong> The default is 100, meaning
+pages are packed full, meaning an update has no room on the page and cannot be
+HOT. For an update-heavy table, <code>ALTER TABLE t SET (fillfactor = 80)</code> leaves
+room and can eliminate most index write amplification.</p>
+</blockquote>
+<hr>
+<h2 id="6-isolation-levels-the-same-data-different-answers"><a class="anchor" href="#6-isolation-levels-the-same-data-different-answers">#</a>6 · Isolation levels — the same data, different answers</h2><p><strong>Which version you see depends on who you are.</strong> Postgres offers three
+effective levels (it accepts <code>READ UNCOMMITTED</code> but treats it as
+<code>READ COMMITTED</code> — dirty reads are impossible by construction).</p>
+<div class="table-scroll"><table><thead><tr><th>Level</th><th>Snapshot taken</th><th>Prevents</th></tr></thead><tbody><tr><td><strong>Read committed</strong> <em>(default)</em></td><td><strong>Per statement</strong></td><td>Dirty reads</td></tr><tr><td><strong>Repeatable read</strong></td><td><strong>Once, per transaction</strong></td><td>+ non-repeatable reads, phantoms</td></tr><tr><td><strong>Serializable</strong></td><td>Once, plus conflict tracking (SSI)</td><td>Everything, including write skew</td></tr></tbody></table></div><p><strong>Verified with two concurrent sessions.</strong> Same script, same interleaving, only
+the isolation level differs:</p>
+<pre class="code"><code>READ COMMITTED
+    session A: first read: 100
+    session B: UPDATE bal = 999; COMMIT
+    session A: second read: 999      &lt;- a NEW snapshot per statement
+
+REPEATABLE READ
+    session A: first read: 100
+    session B: UPDATE bal = 777; COMMIT
+    session A: second read: 100      &lt;- snapshot FROZEN at BEGIN</code></pre><p><strong>Both transactions read the same physical page.</strong> They return different values
+because they evaluate <code>xmin</code>/<code>xmax</code> against different snapshots. <strong>That is
+MVCC</strong> — the visibility rule <em>is</em> the isolation level.</p>
+<h3 id="serializable-and-what-it-uniquely-stops"><a class="anchor" href="#serializable-and-what-it-uniquely-stops">#</a>Serializable, and what it uniquely stops</h3><p>The anomaly the others allow is <strong>write skew</strong>: two transactions each read a
+shared set, each check a constraint that still holds, and each write — leaving
+the constraint violated overall. The classic case is two doctors both going
+off-call because each sees the other still on.</p>
+<p>Repeatable read does not catch it: neither wrote what the other read.
+<strong>Serializable does</strong>, using Serializable Snapshot Isolation, which tracks
+read/write dependencies and aborts one transaction.</p>
+<blockquote>
+<p><strong>The practical cost: serializable transactions can fail with a serialization
+error at commit time</strong>, so every caller must be prepared to retry. That
+retry loop is the real price — not the throughput.</p>
+</blockquote>
+<hr>
+<h2 id="7-bloat-and-vacuum"><a class="anchor" href="#7-bloat-and-vacuum">#</a>7 · Bloat and vacuum</h2><p>Dead tuples accumulate. <strong>Verified — one logical row, 20,000 updates:</strong></p>
+<pre class="code"><code>pages after insert:        1
+pages after 20k updates:  89     &lt;- still ONE visible row
+pages after VACUUM:       89     &lt;- space is REUSABLE, not returned to the OS
+pages after VACUUM FULL:   1     &lt;- rewritten, but takes ACCESS EXCLUSIVE</code></pre><div class="table-scroll"><table><thead><tr><th>Operation</th><th>Does</th><th>Lock</th></tr></thead><tbody><tr><td><strong><code>VACUUM</code></strong></td><td>Marks dead space reusable <strong>within</strong> the table; updates the visibility map and FSM</td><td>Non-blocking</td></tr><tr><td><strong><code>VACUUM FULL</code></strong></td><td>Rewrites the whole table compactly, returning space to the OS</td><td><strong><code>ACCESS EXCLUSIVE</code> — blocks everything</strong></td></tr><tr><td><code>ANALYZE</code></td><td>Refreshes planner statistics</td><td>Non-blocking</td></tr><tr><td><strong>autovacuum</strong></td><td>Runs both automatically on thresholds</td><td>Non-blocking</td></tr></tbody></table></div><blockquote>
+<p><strong><code>VACUUM</code> does not shrink the file, and that is usually correct.</strong> The space
+is reused by future inserts, so a steady-state table stabilises. <code>VACUUM FULL</code>
+takes an exclusive lock and is not something you run on a live table.</p>
+</blockquote>
+<h3 id="the-long-transaction-problem"><a class="anchor" href="#the-long-transaction-problem">#</a>The long-transaction problem</h3><p><strong>Vacuum can only remove a tuple no running transaction could still need.</strong> One
+old transaction holds the horizon back for the entire database.</p>
+<p><strong>Verified:</strong></p>
+<pre class="code"><code>dead tuples WITH an old transaction open:  5000
+dead tuples AFTER it committed:               0</code></pre><p>Same table, same 5,000 updates, same <code>VACUUM</code> command. <strong>The only difference is
+whether an unrelated transaction was still open.</strong></p>
+<blockquote>
+<p><strong>This is the most common cause of production Postgres bloat</strong>, and it is
+rarely the obvious culprit: an idle-in-transaction connection, a forgotten
+<code>BEGIN</code> in a REPL, a stuck analytics query, or a replica with
+<code>hot_standby_feedback</code> on. <strong>Alert on <code>pg_stat_activity</code> for long-running and
+idle-in-transaction sessions</strong> — that is the metric that predicts bloat.</p>
+</blockquote>
+<hr>
+<h2 id="8-terminology"><a class="anchor" href="#8-terminology">#</a>8 · Terminology</h2><div class="table-scroll"><table><thead><tr><th>Term</th><th>What it is</th></tr></thead><tbody><tr><td><strong>Heap</strong></td><td>The main table storage — pages of tuples. Postgres tables are heap-organised, so rows are <em>not</em> stored in index order</td></tr><tr><td><strong>Page / block</strong></td><td>8 KB unit of I/O</td></tr><tr><td><strong>Tuple</strong></td><td>A <strong>row version</strong>, not a row</td></tr><tr><td><strong>Line pointer / item pointer</strong></td><td>Slot in a page&#39;s array pointing at a tuple&#39;s offset. 1-indexed</td></tr><tr><td><strong>ctid</strong></td><td><code>(page, line pointer)</code> — a tuple&#39;s physical address. <strong>Not stable across updates</strong></td></tr><tr><td><strong>xmin / xmax</strong></td><td>Creating and deleting transaction IDs</td></tr><tr><td><strong>xid</strong></td><td>32-bit transaction ID</td></tr><tr><td><strong>Snapshot</strong></td><td>The set of transactions visible to you; what isolation levels manipulate</td></tr><tr><td><strong>MVCC</strong></td><td>Multi-version concurrency control — readers never block writers, writers never block readers</td></tr><tr><td><strong>Dead tuple</strong></td><td>A version no transaction can see; reclaimable</td></tr><tr><td><strong>Bloat</strong></td><td>Space held by dead tuples</td></tr><tr><td><strong>HOT update</strong></td><td>Update with no index writes; requires unindexed columns and same-page room</td></tr><tr><td><strong>Update chain</strong></td><td>Forward <code>t_ctid</code> pointers linking versions</td></tr><tr><td><strong>TOAST</strong></td><td>Out-of-line storage for values too big for a page</td></tr><tr><td><strong>Shared buffers</strong></td><td>Postgres&#39;s page cache in RAM</td></tr><tr><td><strong>WAL</strong></td><td>Write-ahead log — changes are logged before pages are written, giving crash recovery</td></tr><tr><td><strong>LSN</strong></td><td>Log sequence number; a position in the WAL</td></tr><tr><td><strong>Checkpoint</strong></td><td>Flush of dirty buffers, bounding recovery time</td></tr><tr><td><strong>FSM</strong></td><td>Free space map — which pages have room</td></tr><tr><td><strong>Visibility map</strong></td><td>Which pages are all-visible; <strong>enables index-only scans</strong></td></tr><tr><td><strong>clog / pg_xact</strong></td><td>Commit status of each transaction ID</td></tr><tr><td><strong>Hint bits</strong></td><td>Cached commit status on the tuple, avoiding repeated clog lookups</td></tr><tr><td><strong>Fillfactor</strong></td><td>% of a page to fill on insert; lower leaves room for HOT</td></tr><tr><td><strong>Sequential scan</strong></td><td>Read every page</td></tr><tr><td><strong>Index scan</strong></td><td>Walk the index, then fetch each heap tuple</td></tr><tr><td><strong>Bitmap heap scan</strong></td><td>Collect ctids, sort by page, then read each page once</td></tr><tr><td><strong>Index-only scan</strong></td><td>Answer from the index alone — only if the visibility map allows</td></tr><tr><td><strong>Transaction ID wraparound</strong></td><td>32-bit xids exhaust after ~4B; vacuum must freeze old tuples or the database shuts down to protect itself</td></tr><tr><td><strong>Freezing</strong></td><td>Marking a tuple as visible to everyone, so its xid can be reused</td></tr><tr><td><strong>SSI</strong></td><td>Serializable Snapshot Isolation — how serializable is implemented</td></tr><tr><td><strong>Write skew</strong></td><td>The anomaly only serializable prevents</td></tr></tbody></table></div><hr>
+<h2 id="9-what-this-explains"><a class="anchor" href="#9-what-this-explains">#</a>9 · What this explains</h2><div class="table-scroll"><table><thead><tr><th>Observation</th><th>Cause</th></tr></thead><tbody><tr><td><code>DELETE</code> frees no disk space</td><td>Tuples remain until vacuum</td></tr><tr><td>Table grows despite constant row count</td><td>Every update writes a new version</td></tr><tr><td>Updates are slower with more indexes</td><td>Each non-HOT update writes to every index</td></tr><tr><td>A read-only reporting query causes bloat</td><td>It pins the snapshot horizon</td></tr><tr><td>Count(*) is slow</td><td>No stored count; visibility must be checked per tuple</td></tr><tr><td>Queries slow down after a bulk delete</td><td>Dead tuples still get scanned</td></tr><tr><td><code>VACUUM FULL</code> fixed it but caused an outage</td><td><code>ACCESS EXCLUSIVE</code> lock</td></tr><tr><td>Index-only scans sometimes don&#39;t happen</td><td>Visibility map not current — vacuum</td></tr></tbody></table></div><hr>
+<h2 id="10-interview-questions"><a class="anchor" href="#10-interview-questions">#</a>10 · Interview questions</h2><div class="table-scroll"><table><thead><tr><th>Question</th><th>What to say</th></tr></thead><tbody><tr><td>⭐ &quot;What does an UPDATE do in Postgres?&quot;</td><td>Writes a <strong>new tuple</strong> and sets the old one&#39;s <code>xmax</code> to the updating transaction — never an in-place modification. The old version stays on the page until vacuum, with a forward <code>t_ctid</code> pointing at its replacement.</td></tr><tr><td>⭐ &quot;Why is Postgres MVCC &#39;expensive&#39;?&quot;</td><td>Every update creates a version, and unless the update is HOT, every index gets a new entry pointing at the new ctid — even indexes on unchanged columns. That is write amplification, plus the bloat that vacuum must later reclaim.</td></tr><tr><td>⭐ &quot;What is a HOT update?&quot;</td><td>Heap-Only Tuple: if no indexed column changed and the new version fits on the same page, Postgres skips all index writes and chains via the old tuple&#39;s forward pointer. You encourage it by not indexing frequently-updated columns and by lowering <code>fillfactor</code> so pages have room.</td></tr><tr><td>⭐ &quot;Read committed vs repeatable read?&quot;</td><td>Read committed takes a fresh snapshot per <strong>statement</strong>, so two reads in one transaction can differ. Repeatable read takes one snapshot at BEGIN and holds it. Both read the same physical tuples — they just evaluate <code>xmin</code>/<code>xmax</code> against different snapshots.</td></tr><tr><td>&quot;What does serializable add?&quot;</td><td>It prevents write skew, where two transactions each read and each write without overlapping, leaving a constraint violated. Implemented as SSI, tracking read/write dependencies. The cost is that transactions can abort at commit, so callers need a retry loop.</td></tr><tr><td>⭐ &quot;Why did the table grow after deleting rows?&quot;</td><td>Delete only sets <code>xmax</code>. The tuples and their index entries stay until vacuum, and vacuum makes space <strong>reusable</strong> rather than returning it — I measured 89 pages for one visible row after 20,000 updates, unchanged by VACUUM and back to 1 only after VACUUM FULL.</td></tr><tr><td>⭐ &quot;One long-running query is causing bloat everywhere.&quot;</td><td>It pins the snapshot horizon. Vacuum cannot remove a tuple any running transaction might still need, so one old transaction blocks cleanup database-wide. Usually idle-in-transaction, a forgotten BEGIN, or a replica with <code>hot_standby_feedback</code>. Alert on <code>pg_stat_activity</code>.</td></tr><tr><td>&quot;Why is <code>SELECT count(*)</code> slow?&quot;</td><td>There is no stored count, and the index cannot answer it, because visibility lives in the heap. Postgres must check <code>xmin</code>/<code>xmax</code> per tuple — an index-only scan helps, but only where the visibility map says the page is all-visible.</td></tr><tr><td>&quot;What is transaction ID wraparound?&quot;</td><td>Transaction IDs are 32-bit and wrap after ~4 billion. Vacuum must <strong>freeze</strong> old tuples — marking them visible to everyone — or Postgres shuts down to avoid data appearing to come from the future. It is the failure mode of never vacuuming.</td></tr></tbody></table></div><hr>
+<h2 id="stop-condition"><a class="anchor" href="#stop-condition">#</a>Stop condition</h2><p>You understand this when you can:</p>
+<ol>
+<li>say what <code>UPDATE</code> physically does and why the old version survives,</li>
+<li>read a <code>ctid</code> and explain why lookups cost the same at any table size,</li>
+<li>explain <code>xmin</code>/<code>xmax</code> visibility and derive both isolation levels from it,</li>
+<li>state the two conditions for a HOT update and the <code>fillfactor</code> lever,</li>
+<li>distinguish <code>VACUUM</code> from <code>VACUUM FULL</code> by what they reclaim and lock, and</li>
+<li>explain how one long transaction bloats the whole database.</li>
+</ol>
+</article>
+    <div class="pager-row"><a class="pager previous" href="replication-and-consistency.html"><span>previous</span>Replication & consistency</a><a class="pager next" href="cap-and-consistency.html"><span>next</span>CAP & consistency models</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-the-physical-layout">1 · The physical layout</a></li><li class="d2"><a href="#2-ctid-the-physical-address">2 · ctid — the physical address</a></li><li class="d2"><a href="#3-xmin-and-xmax-how-mvcc-works">3 · xmin and xmax — how MVCC works</a></li><li class="d3"><a href="#insert-one-new-tuple">INSERT — one new tuple</a></li><li class="d3"><a href="#update-a-new-tuple-and-the-old-one-marked">UPDATE — a new tuple, and the old one marked</a></li><li class="d3"><a href="#delete-nothing-is-removed">DELETE — nothing is removed</a></li><li class="d2"><a href="#4-indexes-point-at-ctids">4 · Indexes point at ctids</a></li><li class="d2"><a href="#5-hot-updates-the-optimisation-that-saves-you">5 · HOT updates — the optimisation that saves you</a></li><li class="d2"><a href="#6-isolation-levels-the-same-data-different-answers">6 · Isolation levels — the same data, different answers</a></li><li class="d3"><a href="#serializable-and-what-it-uniquely-stops">Serializable, and what it uniquely stops</a></li><li class="d2"><a href="#7-bloat-and-vacuum">7 · Bloat and vacuum</a></li><li class="d3"><a href="#the-long-transaction-problem">The long-transaction problem</a></li><li class="d2"><a href="#8-terminology">8 · Terminology</a></li><li class="d2"><a href="#9-what-this-explains">9 · What this explains</a></li><li class="d2"><a href="#10-interview-questions">10 · Interview questions</a></li><li class="d2"><a href="#stop-condition">Stop condition</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
