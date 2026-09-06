@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The self-mock kit · System Design Handbook</title>
+<meta name="description" content="Run a real 45-minute round alone and score it — the rubric, the recording protocol, the review checklist, and what each score means for what to fix.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F4E79'/%3E%3Cpath d='M13 16h3v-5h3M16 16v5h3' stroke='%23A9CCEC' stroke-width='1.6' fill='none'/%3E%3Crect x='5' y='12' width='8' height='8' rx='2' fill='%23fff'/%3E%3Crect x='19' y='8' width='8' height='6' rx='2' fill='%237FB2E0'/%3E%3Crect x='19' y='18' width='8' height='6' rx='2' fill='%23A9CCEC'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Applied before first paint so the page never flashes the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem("sdh:theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="menu-btn" id="menu-btn" aria-label="Open navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html">System&nbsp;Design</a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the handbook…" autocomplete="off"
+           aria-label="Search" aria-controls="results" aria-expanded="false">
+    <div id="results" class="results" role="listbox" hidden></div>
+  </div>
+  <button class="theme-btn" id="theme-btn" aria-label="Switch theme">◐</button>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar"><div class="nav-group"><div class="nav-group-title">Start here</div><ul><li><a href="index.html">Start here</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Driving the round</div><ul><li><a href="the-framework.html">The 45-minute framework</a></li><li><a href="requirements-and-scope.html">Requirements & scope</a></li><li><a href="estimation.html">Estimation</a></li><li><a href="api-design.html">API design</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Building blocks</div><ul><li><a href="load-balancing.html">Load balancing & the edge</a></li><li><a href="caching.html">Caching</a></li><li><a href="queues-and-streams.html">Queues & streams</a></li><li><a href="cdn-and-storage.html">CDN & object storage</a></li><li><a href="rate-limiting.html">Rate limiting</a></li><li><a href="search.html">Search & typeahead</a></li><li><a href="networking.html">Networking fundamentals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Data & storage</div><ul><li><a href="databases.html">Databases & indexes</a></li><li><a href="sharding.html">Sharding & partitioning</a></li><li><a href="replication-and-consistency.html">Replication & consistency</a></li><li><a href="postgres-internals.html">Postgres internals</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Distributed systems</div><ul><li><a href="cap-and-consistency.html">CAP & consistency models</a></li><li><a href="idempotency.html">Idempotency & exactly-once</a></li><li><a href="failure-and-resilience.html">Failure & resilience</a></li><li><a href="observability.html">Observability</a></li><li><a href="architecture-patterns.html">Architectural patterns</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Worked designs</div><ul><li><a href="design-url-shortener.html">Design a URL shortener</a></li><li><a href="design-news-feed.html">Design a news feed</a></li><li><a href="design-chat.html">Design a chat system</a></li><li><a href="design-web-crawler.html">Design a web crawler</a></li><li><a href="design-ticketing.html">Design a ticket booking system</a></li><li><a href="design-notifications.html">Design a notification system</a></li><li><a href="design-video-streaming.html">Design a video platform</a></li><li><a href="design-file-sync.html">Design a file sync service</a></li><li><a href="design-ride-sharing.html">Design a ride-sharing service</a></li><li><a href="design-ecommerce.html">Design an e-commerce platform</a></li><li><a href="design-key-value-store.html">Design a key-value store</a></li><li><a href="design-logging-monitoring.html">Design a logging & monitoring system</a></li><li><a href="low-level-design.html">Low-level design (LLD)</a></li><li><a href="design-collaborative-editor.html">Design a collaborative editor</a></li></ul></div><div class="nav-group"><div class="nav-group-title">Reference</div><ul><li><a href="numbers-to-know.html">Numbers to know</a></li><li><a href="anti-patterns.html">Anti-patterns</a></li><li><a href="checklist.html">The checklist</a></li><li><a href="question-bank.html">Question bank</a></li><li><a href="tradeoffs.html">The trade-off catalogue</a></li><li><a href="mock-kit.html" class="active">The self-mock kit</a></li></ul></div></aside>
+
+  <main id="main" class="main">
+    <article class="prose"><h1 id="the-self-mock-kit"><a class="anchor" href="#the-self-mock-kit">#</a>The self-mock kit</h1><blockquote>
+<p><strong>The reading is finished. This page is the one you use.</strong></p>
+<p>Every other page here is input. This one produces <strong>output</strong>: a number, a
+recording, and a specific thing to fix. Without that loop, more reading
+changes nothing.</p>
+</blockquote>
+<hr>
+<h2 id="1-why-score-at-all"><a class="anchor" href="#1-why-score-at-all">#</a>1 · Why score at all</h2><p><strong>Because &quot;that felt okay&quot; is not information.</strong> After an unscored practice
+attempt you know only whether you enjoyed it. After a scored one you know that
+you never stated a trade-off&#39;s cost, or that you were still scoping at minute
+22 — and those are fixable.</p>
+<blockquote>
+<p><strong>A number you gave yourself is worth more than a feeling</strong>, even when the
+number is rough. It is comparable across attempts, which a feeling is not.</p>
+</blockquote>
+<hr>
+<h2 id="2-setup-3-minutes"><a class="anchor" href="#2-setup-3-minutes">#</a>2 · Setup — 3 minutes</h2><pre class="code"><code>[ ] Pick a prompt you have NOT read the write-up for
+        -&gt; question-bank.html, or pick blind from the eight shapes
+[ ] Timer: 45 minutes. Visible. Do NOT pause it.
+[ ] Stand at a whiteboard, or a blank digital canvas. NOT an editor.
+[ ] Start a screen + audio recording. Phone camera propped up works.
+[ ] Close every tab. No handbook, no search, no notes.
+[ ] Speak out loud the entire time, to an empty room.</code></pre><p><strong>The recording is non-negotiable and it is the part people skip.</strong> You cannot
+hear your own filler, hedging, or silence while producing it. You can hear all
+three on playback, immediately.</p>
+<p><strong>No lookups.</strong> An attempt with a tab open measures your reading speed. The
+interview does not have that tab.</p>
+<hr>
+<h2 id="3-the-scorecard"><a class="anchor" href="#3-the-scorecard">#</a>3 · The scorecard</h2><p>Score each 0–3 immediately after, before watching the recording.
+<strong>Maximum 24.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>#</th><th>Dimension</th><th>0</th><th>1</th><th>2</th><th>3</th></tr></thead><tbody><tr><td>1</td><td><strong>Scoping</strong></td><td>Started designing immediately</td><td>Asked one or two questions</td><td>Asked about scale and core actions</td><td>Wrote in/out on the board and confirmed it</td></tr><tr><td>2</td><td><strong>Estimation</strong></td><td>Skipped it</td><td>Did maths that changed nothing</td><td>One number changed a decision</td><td>Numbers drove ≥2 decisions, stated aloud</td></tr><tr><td>3</td><td><strong>Structure</strong></td><td>Interviewer would have had to steer</td><td>Drifted, recovered</td><td>Followed the phases loosely</td><td>Ran the clock; announced each transition</td></tr><tr><td>4</td><td><strong>Justification</strong></td><td>Named technologies, no reasons</td><td>Some choices justified</td><td>Most choices tied to a requirement</td><td>Every major choice traced to a stated requirement</td></tr><tr><td>5</td><td><strong>Depth</strong></td><td>Stayed at box level</td><td>One component at level 2</td><td>One at level 3</td><td>Level 3 on two, and offered the interviewer a choice</td></tr><tr><td>6</td><td><strong>Trade-offs</strong></td><td>None stated</td><td>Named without resolving</td><td>Resolved with a reason</td><td><strong>Volunteered the cost of your own choice, unprompted</strong></td></tr><tr><td>7</td><td><strong>Failure</strong></td><td>Never reached it</td><td>Mentioned redundancy</td><td>Walked the diagram killing boxes</td><td>Also named the assumption the design leans on hardest</td></tr><tr><td>8</td><td><strong>Communication</strong></td><td>Board unreadable; long silences</td><td>Followable with effort</td><td>Clear, mostly narrated</td><td>Narrated throughout; board readable at minute 45</td></tr></tbody></table></div><p><strong>Add it up.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Score</th><th>Where you are</th><th>Do next</th></tr></thead><tbody><tr><td><strong>0–8</strong></td><td>Not yet a round</td><td>Drill the framework alone. Re-run the same prompt tomorrow</td></tr><tr><td><strong>9–14</strong></td><td>Recognisable, thin</td><td>You are reciting. Attack <strong>depth (5)</strong> and <strong>justification (4)</strong></td></tr><tr><td><strong>15–19</strong></td><td>Would pass some loops</td><td>Push <strong>trade-offs (6)</strong> and <strong>failure (7)</strong> — the two most-skipped</td></tr><tr><td><strong>20–24</strong></td><td>Above the bar</td><td>New shapes, not repeat prompts. Book a real mock</td></tr></tbody></table></div><blockquote>
+<p><strong>Row 6 at a 3 is the single strongest predictor.</strong> Volunteering what your own
+choice costs — before anyone asks — is the behaviour that separates hire from
+strong hire, and almost nobody does it unprompted.</p>
+</blockquote>
+<hr>
+<h2 id="4-watch-the-recording-20-minutes"><a class="anchor" href="#4-watch-the-recording-20-minutes">#</a>4 · Watch the recording — 20 minutes</h2><p><strong>This is the highest-value part of the whole exercise and it is uncomfortable.</strong>
+Watch at 1.5×, with a pen.</p>
+<pre class="code"><code>[ ] Count the silences longer than 10 seconds.        ______
+[ ] Count &quot;um&quot;, &quot;like&quot;, &quot;basically&quot;, &quot;sort of&quot;.        ______
+[ ] Timestamp when you first drew a box.               ______   (target: ~13 min)
+[ ] Timestamp when you started the deep dive.          ______   (target: ~25 min)
+[ ] Timestamp when you first mentioned failure.        ______   (target: ~40 min)
+[ ] Did you ever say a number and then use it?         Y / N
+[ ] Did you ever say &quot;which costs me...&quot;?              Y / N
+[ ] Is the board readable in the final frame?          Y / N
+[ ] Count choices with no &quot;because&quot;.                   ______</code></pre><blockquote>
+<p><strong>The three timestamps are the most diagnostic thing on this page.</strong> They are
+objective, they take seconds to collect, and they tell you exactly which phase
+is eating your clock. Nearly every failed round is visible in them.</p>
+</blockquote>
+<hr>
+<h2 id="5-symptom-fix"><a class="anchor" href="#5-symptom-fix">#</a>5 · Symptom → fix</h2><div class="table-scroll"><table><thead><tr><th>What you observe</th><th>Actual problem</th><th>Fix</th></tr></thead><tbody><tr><td>First box after minute 20</td><td>Over-scoping</td><td>Hard-stop scoping at 5 minutes, even mid-question</td></tr><tr><td>Never reached failure</td><td>Deep dive ran long</td><td>Watch the clock at 40; stop adding, start killing boxes</td></tr><tr><td>Many silences</td><td>Thinking without narrating</td><td>Say the uncertainty out loud — it is scored</td></tr><tr><td>Choices with no &quot;because&quot;</td><td>Reciting an architecture</td><td>For each box ask &quot;what requirement demanded this?&quot;</td></tr><tr><td>Only level 2 depth</td><td>Breadth reflex</td><td>Pick one component; force three levels before moving</td></tr><tr><td>No trade-off costs</td><td>The commonest gap</td><td>Add &quot;which costs me…&quot; to every decision, mechanically, until it is habit</td></tr><tr><td>Unreadable board</td><td>No layout plan</td><td>Scope box top-left, flow left-to-right, leave the lower third empty</td></tr><tr><td>Ran out of things at minute 30</td><td>Scoped too small</td><td>Add a requirement yourself: &quot;what if this were multi-region?&quot;</td></tr></tbody></table></div><hr>
+<h2 id="6-a-four-week-schedule-that-produces-reps"><a class="anchor" href="#6-a-four-week-schedule-that-produces-reps">#</a>6 · A four-week schedule that produces reps</h2><p><strong>Twelve attempts. Not twelve read pages.</strong></p>
+<div class="table-scroll"><table><thead><tr><th>Week</th><th>Attempts</th><th>Focus</th></tr></thead><tbody><tr><td><strong>1</strong></td><td>3</td><td>Framework and clock. Repeat the same prompt on days 1 and 3 — the improvement is the point</td></tr><tr><td><strong>2</strong></td><td>3</td><td>New shapes. Target depth: three levels on one component</td></tr><tr><td><strong>3</strong></td><td>3</td><td>Target trade-offs and failure. <strong>Book one real mock this week</strong></td></tr><tr><td><strong>4</strong></td><td>3</td><td>Full dress rehearsal. No new material</td></tr></tbody></table></div><p><strong>Rules that make it work:</strong></p>
+<pre class="code"><code>1. Never do the same prompt twice in a week -- you are testing recall,
+   not memory of yesterday.
+2. Score EVERY attempt. An unscored attempt is practice you cannot compare.
+3. Read the write-up only AFTER attempting, and mark only where you
+   DIFFERED. Places you matched teach nothing.
+4. One fix per attempt. Chasing all eight rows at once fixes none.</code></pre><hr>
+<h2 id="7-the-twelve-prompts"><a class="anchor" href="#7-the-twelve-prompts">#</a>7 · The twelve prompts</h2><p><strong>Do not read the write-up first.</strong> Grouped so consecutive attempts exercise
+different shapes.</p>
+<div class="table-scroll"><table><thead><tr><th>#</th><th>Prompt</th><th>Shape</th><th>Write-up</th></tr></thead><tbody><tr><td>1</td><td>URL shortener</td><td>Read-heavy key lookup</td><td><a href="design-url-shortener.html">design</a></td></tr><tr><td>2</td><td>Rate limiter</td><td>Algorithms, distributed counting</td><td><a href="rate-limiting.html">block</a></td></tr><tr><td>3</td><td>News feed</td><td>Fan-out, hot keys</td><td><a href="design-news-feed.html">design</a></td></tr><tr><td>4</td><td>Chat</td><td>Stateful connections</td><td><a href="design-chat.html">design</a></td></tr><tr><td>5</td><td>Ticket booking</td><td>Strong consistency</td><td><a href="design-ticketing.html">design</a></td></tr><tr><td>6</td><td>Web crawler</td><td>Queues, politeness, dedup</td><td><a href="design-web-crawler.html">design</a></td></tr><tr><td>7</td><td>Video platform</td><td>Pipelines, bandwidth economics</td><td><a href="design-video-streaming.html">design</a></td></tr><tr><td>8</td><td>Ride-sharing</td><td>Geospatial</td><td><a href="design-ride-sharing.html">design</a></td></tr><tr><td>9</td><td>E-commerce</td><td>Breadth + inventory correctness</td><td><a href="design-ecommerce.html">design</a></td></tr><tr><td>10</td><td>Key-value store</td><td>Distributed systems, undisguised</td><td><a href="design-key-value-store.html">design</a></td></tr><tr><td>11</td><td>Logging &amp; monitoring</td><td>Write-heavy, cardinality</td><td><a href="design-logging-monitoring.html">design</a></td></tr><tr><td>12</td><td>Collaborative editor</td><td>Conflict resolution</td><td><a href="design-collaborative-editor.html">design</a></td></tr></tbody></table></div><p><strong>If you only manage six: 1, 3, 5, 8, 9, 10.</strong> They cover six of the eight
+shapes.</p>
+<hr>
+<h2 id="8-the-tracker"><a class="anchor" href="#8-the-tracker">#</a>8 · The tracker</h2><p>One row per attempt. A spreadsheet is fine; the columns are the point.</p>
+<pre class="code"><code>date | prompt | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | total | first box | deep dive | the ONE fix
+-----|--------|---|---|---|---|---|---|---|---|-------|-----------|-----------|-------------
+     |        |   |   |   |   |   |   |   |   |       |           |           |</code></pre><blockquote>
+<p><strong>Sort by column, not by total.</strong> A flat total hides everything. Seeing that
+row 6 has been 0 or 1 for six consecutive attempts tells you precisely what to
+work on — and that pattern is invisible in an average.</p>
+</blockquote>
+<hr>
+<h2 id="9-when-to-stop-practising"><a class="anchor" href="#9-when-to-stop-practising">#</a>9 · When to stop practising</h2><p>You are ready when, across three consecutive attempts on <strong>unseen</strong> prompts:</p>
+<pre class="code"><code>[ ] total &gt;= 18 every time
+[ ] first box drawn before minute 15, every time
+[ ] you reached failure analysis, every time
+[ ] row 6 (trade-off costs) scored &gt;= 2, every time
+[ ] fewer than three silences over 10 seconds</code></pre><p><strong>Consistency matters more than a peak.</strong> One good attempt is luck; three in a
+row on prompts you had not seen is a skill.</p>
+<blockquote>
+<p><strong>And the thing this page cannot give you: a real person interrupting.</strong>
+Self-mocks train structure, depth and narration. They cannot train being
+pushed back on, being asked something you did not prepare, or being wrong in
+front of someone. <strong>Book one real mock.</strong> Everything here makes that mock more
+useful; none of it replaces it.</p>
+</blockquote>
+</article>
+    <div class="pager-row"><a class="pager previous" href="tradeoffs.html"><span>previous</span>The trade-off catalogue</a></div>
+  </main>
+
+  <nav class="toc" aria-label="On this page"><div class="toc-title">On this page</div><ul><li class="d2"><a href="#1-why-score-at-all">1 · Why score at all</a></li><li class="d2"><a href="#2-setup-3-minutes">2 · Setup — 3 minutes</a></li><li class="d2"><a href="#3-the-scorecard">3 · The scorecard</a></li><li class="d2"><a href="#4-watch-the-recording-20-minutes">4 · Watch the recording — 20 minutes</a></li><li class="d2"><a href="#5-symptom-fix">5 · Symptom → fix</a></li><li class="d2"><a href="#6-a-four-week-schedule-that-produces-reps">6 · A four-week schedule that produces reps</a></li><li class="d2"><a href="#7-the-twelve-prompts">7 · The twelve prompts</a></li><li class="d2"><a href="#8-the-tracker">8 · The tracker</a></li><li class="d2"><a href="#9-when-to-stop-practising">9 · When to stop practising</a></li></ul></nav>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  window.__mermaid = mermaid;
+  const dark = () => {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit === "dark";
+    return matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const start = () => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark() ? "dark" : "neutral",
+      securityLevel: "strict",
+      fontFamily: "IBM Plex Sans, system-ui, sans-serif",
+    });
+    mermaid.run({ querySelector: "pre.mermaid" });
+  };
+  start();
+  // Diagrams carry their own colours, so they have to be re-rendered when the
+  // reader flips the theme rather than restyled by CSS.
+  window.addEventListener("themechange", () => {
+    document.querySelectorAll("pre.mermaid").forEach((el) => {
+      if (el.dataset.src) { el.innerHTML = el.dataset.src; el.removeAttribute("data-processed"); }
+    });
+    start();
+  });
+</script>
+<script src="app.js"></script>
+</body>
+</html>
