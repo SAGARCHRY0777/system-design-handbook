@@ -60,6 +60,7 @@ stronger answer than either extreme.</p>
 </blockquote>
 <p><strong>When to genuinely leave relational:</strong></p>
 <div class="table-scroll"><table><thead><tr><th>Signal</th><th>Choose</th></tr></thead><tbody><tr><td>Writes exceed what one primary can take, and the access pattern is a known key</td><td>Wide-column</td></tr><tr><td>Objects are read and written whole, with varying shape</td><td>Document</td></tr><tr><td>Access is purely by key and latency must be sub-millisecond</td><td>Key-value</td></tr><tr><td>Relationships are the query — &quot;friends of friends who like X&quot;</td><td>Graph</td></tr><tr><td>Time-ordered metrics with retention and rollups</td><td>Time-series</td></tr></tbody></table></div><hr>
+<div class="sim" data-sim="sddatabases"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-b-tree-versus-lsm-tree"><a class="anchor" href="#2-b-tree-versus-lsm-tree">#</a>2 · B-tree versus LSM-tree</h2><p><strong>This is the highest-value storage-engine question</strong>, because it explains <em>why</em>
 write-heavy systems choose different databases — and most candidates cannot
 answer it.</p>
@@ -178,5 +179,7 @@ finding.</p>
   });
 </script>
 <script src="app.js"></script>
+<script src="sims.js"></script>
+<script src="simdefs.js"></script>
 </body>
 </html>

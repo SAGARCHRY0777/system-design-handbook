@@ -63,6 +63,15 @@ function makeRenderer(headings) {
     if (lang === "mermaid") {
       return `<pre class="mermaid">${escapeHtml(text)}</pre>`;
     }
+    // A ```sim fence names a simulation in site/sims.js. Where a lab is a
+    // sandbox you drive, a sim plays a mechanism forward in TIME -- scenario
+    // tabs, a step timeline, and a caption that narrates each frame. It earns
+    // its place only when the mechanism actually unfolds in stages.
+    if (lang === "sim") {
+      const name = escapeHtml(text.trim().split(/\s+/)[0]);
+      return `<div class="sim" data-sim="${name}">` +
+        `<p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div>`;
+    }
     const cls = lang ? ` class="language-${lang}"` : "";
     return `<pre class="code"><code${cls}>${escapeHtml(text)}</code></pre>`;
   };
@@ -200,7 +209,7 @@ function build() {
     )
   );
 
-  for (const asset of ["style.css", "app.js"]) {
+  for (const asset of ["style.css", "app.js", "sims.js", "simdefs.js"]) {
     if (existsSync(join(SITE, asset))) cpSync(join(SITE, asset), join(OUT, asset));
   }
   // Pages would otherwise run the output through Jekyll and drop _-prefixed paths.
