@@ -67,6 +67,7 @@ correct, you make retrying <em>safe</em>. That is idempotency, and framing it th
 that reads as senior.</p>
 </blockquote>
 <hr>
+<div class="sim" data-sim="sdidempotency"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-which-operations-are-already-idempotent"><a class="anchor" href="#2-which-operations-are-already-idempotent">#</a>2 · Which operations are already idempotent</h2><div class="table-scroll"><table><thead><tr><th>Operation</th><th>Idempotent?</th><th>Why</th></tr></thead><tbody><tr><td><code>GET /users/1</code></td><td>✓</td><td>Reads change nothing</td></tr><tr><td><code>PUT /users/1 {name: &quot;A&quot;}</code></td><td>✓</td><td>Setting to a value is repeatable</td></tr><tr><td><code>DELETE /users/1</code></td><td>✓</td><td>Already deleted stays deleted</td></tr><tr><td><code>POST /orders</code></td><td>✗</td><td><strong>Creates a new one each time</strong></td></tr><tr><td><code>balance = balance - 10</code></td><td>✗</td><td>Applies again</td></tr><tr><td><code>SET status = &#39;paid&#39;</code></td><td>✓</td><td>Assignment, not increment</td></tr><tr><td><code>INSERT ... ON CONFLICT DO NOTHING</code></td><td>✓</td><td>The conflict absorbs the duplicate</td></tr></tbody></table></div><p><strong>Absolute versus relative is the pattern.</strong> <code>SET x = 5</code> is idempotent; <code>x += 1</code>
 is not. Where you can express the operation absolutely, do — it removes the
 problem instead of managing it.</p>

@@ -43,6 +43,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignchat
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

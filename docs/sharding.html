@@ -63,6 +63,7 @@ those questions.</p>
 you are sampling the tail of the latency distribution 100 times. That is why a
 p99 that looks fine per-shard becomes a p50 problem for the fan-out query.</p>
 <hr>
+<div class="sim" data-sim="sdsharding"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-the-four-strategies"><a class="anchor" href="#2-the-four-strategies">#</a>2 · The four strategies</h2><h3 id="range"><a class="anchor" href="#range">#</a>Range</h3><pre class="code"><code>shard 1: user_id 0        - 10,000,000
 shard 2: user_id 10M      - 20,000,000
 shard 3: user_id 20M      - 30,000,000</code></pre><p>Range scans work; <strong>sequential keys create a hot spot</strong> — with autoincrement IDs

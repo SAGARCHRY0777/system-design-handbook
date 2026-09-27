@@ -30,6 +30,12 @@ you never stated a trade-off's cost, or that you were still scoping at minute
 
 ---
 
+```sim
+sdmockkit
+```
+
+---
+
 ## 2 · Setup — 3 minutes
 
 ```

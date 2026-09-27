@@ -45,6 +45,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignnotificati
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

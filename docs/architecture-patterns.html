@@ -85,6 +85,7 @@ together, because that is the cheap time to be wrong.</strong></p>
 </blockquote>
 <p><strong>&quot;Stop when the pain stops&quot; is deliberate.</strong> There is no prize for finishing.</p>
 <hr>
+<div class="sim" data-sim="sdarchitecturepatt"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-serverless"><a class="anchor" href="#2-serverless">#</a>2 · Serverless</h2><p>Functions run on demand; the platform handles scaling and you pay per
 invocation.</p>
 <div class="table-scroll"><table><thead><tr><th>Good for</th><th>Bad for</th></tr></thead><tbody><tr><td>Spiky, unpredictable traffic</td><td>Steady high load — <strong>more expensive than servers</strong></td></tr><tr><td>Event handlers, glue, cron</td><td>Latency-critical paths (cold starts)</td></tr><tr><td>Low or zero baseline traffic</td><td>Long-running work (execution limits)</td></tr><tr><td>Small teams avoiding ops</td><td>Anything needing persistent connections</td></tr></tbody></table></div><p><strong>The three real constraints:</strong></p>

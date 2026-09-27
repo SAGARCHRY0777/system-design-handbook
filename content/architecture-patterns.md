@@ -100,6 +100,12 @@ flowchart LR
 
 ---
 
+```sim
+sdarchitecturepatt
+```
+
+---
+
 ## 2 · Serverless
 
 Functions run on demand; the platform handles scaling and you pay per

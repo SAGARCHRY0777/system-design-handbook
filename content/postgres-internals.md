@@ -65,6 +65,12 @@ updating.
 
 ---
 
+```sim
+sdpostgresinternal
+```
+
+---
+
 ## 2 · ctid — the physical address
 
 **Every tuple has a `ctid`: `(page number, line pointer)`.**

@@ -35,6 +35,12 @@ you are reasoning from structure.
 
 ---
 
+```sim
+sdquestionbank
+```
+
+---
+
 ## 2 · The prompts
 
 ### Read-heavy key lookup

@@ -31,6 +31,12 @@ which cannot be true for everyone at once.
 
 ---
 
+```sim
+sdreplicationandco
+```
+
+---
+
 ## 2 · Leader-follower (primary-replica)
 
 The default, and the right first answer.

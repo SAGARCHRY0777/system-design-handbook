@@ -48,6 +48,12 @@ reasoning is the artefact.
 
 ---
 
+```sim
+sdindex
+```
+
+---
+
 ## 2 · Why most preparation fails
 
 Three failure modes, in descending order of how common they are:

@@ -37,6 +37,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignwebcrawler
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

@@ -78,6 +78,7 @@ when the page is full. The indirection matters: a tuple can be moved <em>within<
 page without changing its line pointer, so nothing outside the page needs
 updating.</p>
 <hr>
+<div class="sim" data-sim="sdpostgresinternal"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-ctid-the-physical-address"><a class="anchor" href="#2-ctid-the-physical-address">#</a>2 · ctid — the physical address</h2><p><strong>Every tuple has a <code>ctid</code>: <code>(page number, line pointer)</code>.</strong></p>
 <pre class="code"><code>postgres=# CREATE TABLE items (item_id int PRIMARY KEY, price numeric);
 postgres=# INSERT INTO items VALUES (100, 10), (200, 5);

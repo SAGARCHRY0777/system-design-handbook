@@ -50,6 +50,12 @@ before, and it buys you the scoping time that impatient candidates skip.
 
 ---
 
+```sim
+sdtheframework
+```
+
+---
+
 ## 2 · Phase 1 — Requirements and scope (0–5)
 
 The prompt is deliberately underspecified. *"Design Twitter"* is not a problem

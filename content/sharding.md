@@ -44,6 +44,12 @@ p99 that looks fine per-shard becomes a p50 problem for the fan-out query.
 
 ---
 
+```sim
+sdsharding
+```
+
+---
+
 ## 2 · The four strategies
 
 ### Range

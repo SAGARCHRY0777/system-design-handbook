@@ -40,6 +40,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignfilesync
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

@@ -43,6 +43,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignridesharin
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

@@ -46,6 +46,12 @@ flowchart LR
 
 ---
 
+```sim
+sdcaching
+```
+
+---
+
 ## 2 · The read patterns
 
 ### Cache-aside (lazy loading) — the default

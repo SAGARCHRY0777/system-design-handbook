@@ -36,6 +36,12 @@ Every entry below has a **decision rule** — the thing that tips it.
 
 ---
 
+```sim
+sdtradeoffs
+```
+
+---
+
 ## 2 · Consistency vs availability
 
 **Only a live question during a partition** — see [CAP](cap-and-consistency.html).

@@ -44,6 +44,12 @@ You cannot make the client's decision safe by trying harder.
 
 ---
 
+```sim
+sdidempotency
+```
+
+---
+
 ## 2 · Which operations are already idempotent
 
 | Operation | Idempotent? | Why |

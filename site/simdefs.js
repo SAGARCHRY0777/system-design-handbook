@@ -1632,6 +1632,1303 @@ S["sdapidesign"] = {
 };
 
   // ====================================================================
+// ======================================================================
+// SIM · sdarchitecturepatt  (architecture-patterns.md)
+//
+// The page's time axis is the migration. Section 1.3 is literally a numbered
+// five-step procedure ("1. Put a proxy in front... 5. Repeat. Stop when the
+// pain stops."), and section 1's availability arithmetic is what the
+// procedure is trying not to pay for. So: ONE commerce monolith, three ways
+// of getting services out of it — big bang, strangler fig, and the subtle
+// wrong one the page warns about by name (splitting the data first).
+//
+// Nothing here is scored by opinion. A declared call graph decides how many
+// in-process calls become network calls; the page's own 99.9%-per-component
+// figure decides availability; the page's own "when splitting is genuinely
+// right" table decides which extractions were justified.
+//
+// CONFIG — page figures used verbatim
+//   0.999 per component  "A request touching 5 services, each 99.9% available"
+//   0.999^5 = 99.5%      the page's arithmetic; 8760 h/yr gives ~44 h, its figure
+//   0.999^1 = 99.9%      "The same logic in one process: 99.9% -> ~9 hours"
+//   4 guards per hop     "a timeout, a retry policy, a circuit breaker, and a
+//                         fallback" — the page's list, counted
+//   8 engineers          "With eight engineers you do not have that problem"
+//   5 split signals      the rows of "When splitting is genuinely right";
+//                        three of them map onto modules below, and the page
+//                        supplies each mapping itself:
+//                          payments  "Payment data in an isolated, audited service"
+//                          transcode "Video transcoding needs GPUs; the API does not"
+//                          recommend "An ML serving path in Python beside a Java core"
+//                        catalog and checkout match no row — the page's
+//                        "Not on that list" paragraph is about exactly those.
+//   step order 1-5       section 1.3's numbered strangler-fig procedure
+//
+// CONFIG — declared here, because the page states no concrete system
+//   5 modules and a 10-edge in-process call graph (below). Out-degree is what
+//   the page's step 2 means by "a leaf with few dependencies"; checkout's
+//   out-neighbours are why a lift-and-shift split puts FIVE components on one
+//   checkout request, which is the page's own arithmetic falling out of the
+//   graph rather than being asserted.
+// ======================================================================
+
+var sdarchitecturepatt_A = 0.999;        // page: each component 99.9% available
+var sdarchitecturepatt_HOURS = 8760;     // hours in a year
+var sdarchitecturepatt_GUARDS = 4;       // page: timeout, retry, breaker, fallback
+var sdarchitecturepatt_TEAM = 8;         // page: "with eight engineers"
+
+// name, and the row of the page's split-signal table that applies (or null)
+var sdarchitecturepatt_MODS = [
+  { name: "catalog", signal: null },
+  { name: "checkout", signal: null },
+  { name: "payments", signal: "compliance boundary" },
+  { name: "recommend", signal: "different language" },
+  { name: "transcode", signal: "scaling profile" }
+];
+
+// the in-process call graph: 10 function calls, nanoseconds each, always succeed
+var sdarchitecturepatt_EDGES = [
+  ["checkout", "catalog"], ["checkout", "payments"], ["checkout", "recommend"],
+  ["checkout", "transcode"], ["catalog", "transcode"], ["catalog", "recommend"],
+  ["recommend", "catalog"], ["recommend", "checkout"], ["payments", "checkout"],
+  ["transcode", "catalog"]
+];
+
+function sdarchitecturepatt_has(arr, x) {
+  for (var i = 0; i < arr.length; i++) if (arr[i] === x) return true;
+  return false;
+}
+
+function sdarchitecturepatt_names() {
+  var a = [];
+  for (var i = 0; i < sdarchitecturepatt_MODS.length; i++) a.push(sdarchitecturepatt_MODS[i].name);
+  return a;
+}
+
+function sdarchitecturepatt_mod(name) {
+  for (var i = 0; i < sdarchitecturepatt_MODS.length; i++) {
+    if (sdarchitecturepatt_MODS[i].name === name) return sdarchitecturepatt_MODS[i];
+  }
+  return { name: name, signal: null };
+}
+
+function sdarchitecturepatt_outdeg(name) {
+  var n = 0;
+  for (var i = 0; i < sdarchitecturepatt_EDGES.length; i++) {
+    if (sdarchitecturepatt_EDGES[i][0] === name) n++;
+  }
+  return n;
+}
+
+function sdarchitecturepatt_indeg(name) {
+  var n = 0;
+  for (var i = 0; i < sdarchitecturepatt_EDGES.length; i++) {
+    if (sdarchitecturepatt_EDGES[i][1] === name) n++;
+  }
+  return n;
+}
+
+// an edge crosses a process boundary unless BOTH ends are still in the monolith
+function sdarchitecturepatt_crossing(out) {
+  var n = 0;
+  for (var i = 0; i < sdarchitecturepatt_EDGES.length; i++) {
+    var a = sdarchitecturepatt_has(out, sdarchitecturepatt_EDGES[i][0]);
+    var b = sdarchitecturepatt_has(out, sdarchitecturepatt_EDGES[i][1]);
+    if (a || b) n++;
+  }
+  return n;
+}
+
+// the synchronous checkout request: checkout plus every out-neighbour whose
+// call has not been made asynchronous. k = distinct DEPLOYABLES it touches.
+function sdarchitecturepatt_hotK(s) {
+  var touch = ["checkout"], i;
+  for (i = 0; i < sdarchitecturepatt_EDGES.length; i++) {
+    if (sdarchitecturepatt_EDGES[i][0] === "checkout" &&
+        !sdarchitecturepatt_has(s.async, sdarchitecturepatt_EDGES[i][1])) {
+      touch.push(sdarchitecturepatt_EDGES[i][1]);
+    }
+  }
+  var svcs = 0, mono = false;
+  for (i = 0; i < touch.length; i++) {
+    if (sdarchitecturepatt_has(s.out, touch[i])) svcs++; else mono = true;
+  }
+  return { k: svcs + (mono ? 1 : 0), touch: touch };
+}
+
+function sdarchitecturepatt_avail(k) { return Math.pow(sdarchitecturepatt_A, k); }
+function sdarchitecturepatt_down(k) {
+  return sdarchitecturepatt_HOURS * (1 - sdarchitecturepatt_avail(k));
+}
+function sdarchitecturepatt_pa(k) { return (sdarchitecturepatt_avail(k) * 100).toFixed(1) + "%"; }
+function sdarchitecturepatt_ph(k) { return sdarchitecturepatt_down(k).toFixed(0) + " h"; }
+
+function sdarchitecturepatt_signalCount(out) {
+  var n = 0;
+  for (var i = 0; i < out.length; i++) if (sdarchitecturepatt_mod(out[i]).signal) n++;
+  return n;
+}
+
+function sdarchitecturepatt_deployables(out) {
+  return out.length + (out.length < sdarchitecturepatt_MODS.length ? 1 : 0);
+}
+
+function sdarchitecturepatt_st(o) {
+  return {
+    out: o.out || [],          // extracted as their own deployable
+    plan: o.plan || [],        // marked for extraction, not yet moved
+    kept: o.kept || [],        // ruled out of extraction for good
+    split: o.split || [],      // owns its own database
+    wrong: o.wrong || [],      // boundary later proved wrong
+    async: o.async || [],      // checkout's call to it is no longer synchronous
+    routed: o.routed || [],    // the proxy sends this module's traffic to the service
+    proxy: !!o.proxy,
+    guards: o.guards || 0,     // resilience pieces actually written
+    moves: o.moves || 0,       // data migrations performed
+    saga: !!o.saga,
+    live: o.live !== false,
+    hotLane: !!o.hotLane,
+    ledger: !!o.ledger
+  };
+}
+
+function sdarchitecturepatt_step(caption, state, flag) {
+  return { caption: caption, state: state, flag: flag };
+}
+
+function sdarchitecturepatt_ledger() {
+  var ALL = sdarchitecturepatt_names();
+  function row(label, out, async, moves) {
+    var k = sdarchitecturepatt_hotK({ out: out, async: async }).k;
+    return [label, String(out.length), String(k), sdarchitecturepatt_ph(k),
+      String(moves), sdarchitecturepatt_signalCount(out) + " / " + out.length];
+  }
+  return [
+    row("big bang", ALL, [], sdarchitecturepatt_MODS.length +
+      (sdarchitecturepatt_MODS.length - sdarchitecturepatt_signalCount(ALL))),
+    row("strangler fig", ["transcode", "recommend", "payments"],
+      ["transcode", "recommend"], 3),
+    row("data first", ["checkout"], [], 3)
+  ];
+}
+
+// ---- run 1: the big bang ----------------------------------------------
+function sdarchitecturepatt_runBig() {
+  var ALL = sdarchitecturepatt_names();
+  var sig = sdarchitecturepatt_signalCount(ALL);
+  var nosig = ALL.length - sig;
+  var edges = sdarchitecturepatt_EDGES.length;
+  var need = sdarchitecturepatt_GUARDS * edges;
+  var k5 = sdarchitecturepatt_hotK({ out: ALL, async: [] }).k;
+  var wrongList = [];
+  for (var i = 0; i < sdarchitecturepatt_MODS.length; i++) {
+    if (!sdarchitecturepatt_MODS[i].signal) wrongList.push(sdarchitecturepatt_MODS[i].name);
+  }
+
+  return {
+    id: "big", label: "Big bang",
+    phases: ["monolith", "the decision", "5 services", "first request",
+      "guards", "boundary wrong", "verdict"],
+    steps: [
+      sdarchitecturepatt_step(
+        "One deployable, <b>" + ALL.length + "</b> modules, <b>" +
+        sdarchitecturepatt_TEAM + "</b> engineers. The <b>" + edges +
+        "</b> calls between modules are function calls — <i>nanoseconds, always " +
+        "succeed</i>. Hot-path availability is one component's: <b>" +
+        sdarchitecturepatt_pa(1) + "</b>, " + sdarchitecturepatt_ph(1) +
+        " a year. Press Play.",
+        sdarchitecturepatt_st({ live: false })),
+
+      sdarchitecturepatt_step(
+        "<b>&ldquo;Would you use microservices?&rdquo;</b> — and the trap is " +
+        "enthusiasm. All " + ALL.length + " modules are marked for extraction. " +
+        "Audit them against the page's <i>when splitting is genuinely right</i> " +
+        "table first: <b>" + sig + " of " + ALL.length + "</b> have a signal. " +
+        "<code>" + wrongList.join("</code> and <code>") + "</code> have none.",
+        sdarchitecturepatt_st({ plan: ALL, guards: 0 }), "warn"),
+
+      sdarchitecturepatt_step(
+        "<b>All " + ALL.length + " ship as services, each with its own database, " +
+        "in one release.</b> " + sdarchitecturepatt_MODS.length +
+        " data migrations. Local dev now means running <b>" +
+        sdarchitecturepatt_deployables(ALL) + " things</b>, and all <b>" + edges +
+        "</b> function calls just became network calls.",
+        sdarchitecturepatt_st({
+          out: ALL, split: ALL, moves: sdarchitecturepatt_MODS.length, guards: 0
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>The first checkout request.</b> The boundaries were guessed, so the " +
+        "call graph is still the old in-process one — <code>checkout</code> " +
+        "reaches <b>" + sdarchitecturepatt_outdeg("checkout") + "</b> other " +
+        "modules directly, so the request now touches <b>" + k5 +
+        " services over the network</b>. That is the page's arithmetic, and it " +
+        "was not chosen: it fell out of the call graph.",
+        sdarchitecturepatt_st({
+          out: ALL, split: ALL, moves: sdarchitecturepatt_MODS.length,
+          guards: 0, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>" + sdarchitecturepatt_avail(1).toFixed(3) + "<sup>" + k5 + "</sup> = " +
+        sdarchitecturepatt_pa(k5) + " — " + sdarchitecturepatt_ph(k5) +
+        " of downtime a year against the monolith's " + sdarchitecturepatt_ph(1) +
+        ".</b> After the first outage the team writes the guards: " +
+        sdarchitecturepatt_GUARDS + " per hop × " + edges + " hops = <b>" + need +
+        "</b> pieces of resilience code that did not exist. The availability " +
+        "number does not move. <i>You did not add reliability by splitting. You " +
+        "multiplied the ways to fail.</i>",
+        sdarchitecturepatt_st({
+          out: ALL, split: ALL, moves: sdarchitecturepatt_MODS.length,
+          guards: need, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>Two boundaries were wrong</b> — the " + nosig + " with no signal. " +
+        "A rename across them is no longer an IDE refactor, it is a coordinated " +
+        "multi-team release, and the data has to move a second time: <b>" +
+        (sdarchitecturepatt_MODS.length + nosig) + " migrations</b> in total. " +
+        "The page's warning is exact: <i>splitting data first means migrating " +
+        "data twice.</i>",
+        sdarchitecturepatt_st({
+          out: ALL, split: ALL, wrong: wrongList,
+          moves: sdarchitecturepatt_MODS.length + nosig, guards: need, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>" + ALL.length + " services, " + sdarchitecturepatt_pa(k5) +
+        ", " + (sdarchitecturepatt_MODS.length + nosig) + " data migrations, and " +
+        sig + " of " + ALL.length + " extractions that anything justified.</b> " +
+        "Every cost in the page's comparison table, and the organisational " +
+        "problem microservices solve — teams contending on one release train — " +
+        "was never present at " + sdarchitecturepatt_TEAM + " engineers.",
+        sdarchitecturepatt_st({
+          out: ALL, split: ALL, wrong: wrongList,
+          moves: sdarchitecturepatt_MODS.length + nosig, guards: need,
+          hotLane: true, ledger: true
+        }), "bad")
+    ]
+  };
+}
+
+// ---- run 2: the strangler fig, the page's five numbered steps ----------
+function sdarchitecturepatt_runStrangle() {
+  var leaf = "transcode";
+  var second = "recommend";
+  var third = "payments";
+  var g1 = sdarchitecturepatt_GUARDS * sdarchitecturepatt_crossing([leaf]);
+  var g2 = sdarchitecturepatt_GUARDS * sdarchitecturepatt_crossing([leaf, second]);
+  var g3 = sdarchitecturepatt_GUARDS * sdarchitecturepatt_crossing([leaf, second, third]);
+  var gAll = sdarchitecturepatt_GUARDS * sdarchitecturepatt_EDGES.length;
+  var stay = [];
+  for (var i = 0; i < sdarchitecturepatt_MODS.length; i++) {
+    if (!sdarchitecturepatt_MODS[i].signal) stay.push(sdarchitecturepatt_MODS[i].name);
+  }
+  var k3 = sdarchitecturepatt_hotK({
+    out: [leaf, second, third], async: [leaf, second]
+  }).k;
+
+  return {
+    id: "fig", label: "Strangler fig",
+    phases: ["monolith", "1 · proxy", "2 · pick a leaf", "3 · route", "4 · split data",
+      "5 · repeat", "payments", "stop", "verdict"],
+    steps: [
+      sdarchitecturepatt_step(
+        "The same monolith, the same " + sdarchitecturepatt_EDGES.length +
+        " internal calls, the same <b>" + sdarchitecturepatt_pa(1) +
+        "</b> hot path. The question is now <i>&ldquo;how would you " +
+        "migrate?&rdquo;</i>. Press Play.",
+        sdarchitecturepatt_st({ live: false })),
+
+      sdarchitecturepatt_step(
+        "<b>1 · Put a proxy in front of the monolith. Change nothing else.</b> " +
+        "Zero services, zero data migrations, zero network hops between modules — " +
+        "availability is still <b>" + sdarchitecturepatt_pa(1) + "</b>. The proxy " +
+        "is the seam every later step routes through, and installing it is " +
+        "reversible in an afternoon.",
+        sdarchitecturepatt_st({ proxy: true })),
+
+      sdarchitecturepatt_step(
+        "<b>2 · Extract ONE service — pick a leaf with few dependencies.</b> " +
+        "<code>" + leaf + "</code> has out-degree <b>" +
+        sdarchitecturepatt_outdeg(leaf) + "</b>, the lowest of the " +
+        sdarchitecturepatt_MODS.length + ", and it carries a real signal from the " +
+        "page's table: <i>" + sdarchitecturepatt_mod(leaf).signal +
+        "</i> — transcoding needs GPUs, the API does not. It is deployed, but " +
+        "the proxy still sends it no traffic and it still reads the shared database.",
+        sdarchitecturepatt_st({ proxy: true, out: [leaf], plan: [leaf] }), "warn"),
+
+      sdarchitecturepatt_step(
+        "<b>3 · Route just its traffic. Everything else untouched.</b> <b>" +
+        sdarchitecturepatt_crossing([leaf]) + "</b> of the " +
+        sdarchitecturepatt_EDGES.length + " call sites now cross a process " +
+        "boundary, so <b>" + g1 + "</b> guards get written — that is the per-service " +
+        "tax, paid once, for one leaf. <code>checkout</code>'s call to it becomes " +
+        "asynchronous, so the hot path is <i>still</i> <b>" +
+        sdarchitecturepatt_pa(1) + "</b>.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [leaf], routed: [leaf], async: [leaf], guards: g1
+        }), "warn"),
+
+      sdarchitecturepatt_step(
+        "<b>4 · Split its data LAST, once the boundary has proven correct.</b> " +
+        "Weeks of real traffic said the seam was in the right place, so now — and " +
+        "only now — <code>" + leaf + "</code> gets its own store. <b>1</b> data " +
+        "migration. Had the boundary been wrong, correcting it would have cost " +
+        "an import change, not a migration.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [leaf], routed: [leaf], split: [leaf],
+          async: [leaf], guards: g1, moves: 1
+        }), "ok"),
+
+      sdarchitecturepatt_step(
+        "<b>5 · Repeat.</b> <code>" + second + "</code> next — signal: <i>" +
+        sdarchitecturepatt_mod(second).signal + "</i>, a Python ML path beside a " +
+        "Java core. Crossing calls rise to <b>" +
+        sdarchitecturepatt_crossing([leaf, second]) + "</b> and guards to <b>" + g2 +
+        "</b>. Extracting it is also when you stop calling it synchronously — the " +
+        "page's own line is <i>checkout must not be taken down by " +
+        "recommendations</i> — so the hot path holds at <b>" +
+        sdarchitecturepatt_pa(1) + "</b>.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [leaf, second], routed: [leaf, second],
+          split: [leaf, second], async: [leaf, second], guards: g2, moves: 2
+        }), "warn"),
+
+      sdarchitecturepatt_step(
+        "<b><code>" + third + "</code> is the first extraction that costs " +
+        "availability.</b> Signal: <i>" + sdarchitecturepatt_mod(third).signal +
+        "</i> — payment data in an isolated, audited service. It is on the " +
+        "synchronous checkout path and cannot be made async, so the request now " +
+        "touches <b>" + k3 + "</b> deployables: " + sdarchitecturepatt_pa(k3) +
+        ", <b>" + sdarchitecturepatt_ph(k3) + "</b> a year against " +
+        sdarchitecturepatt_ph(1) + ". <b>Paid knowingly, for a compliance boundary.</b>",
+        sdarchitecturepatt_st({
+          proxy: true, out: [leaf, second, third], routed: [leaf, second, third],
+          split: [leaf, second, third], async: [leaf, second], guards: g3,
+          moves: 3, hotLane: true
+        }), "warn"),
+
+      sdarchitecturepatt_step(
+        "<b>Stop when the pain stops.</b> <code>" + stay.join("</code> and <code>") +
+        "</code> match no row of the signal table, so they stay in the monolith " +
+        "and keep their ACID transaction and their IDE-rename refactors. Note the " +
+        "honest number: " + sdarchitecturepatt_crossing([leaf, second, third]) +
+        " crossing calls already, <b>" + g3 + " of the " + gAll +
+        "</b> guards a full split would need. <i>There is no prize for finishing.</i>",
+        sdarchitecturepatt_st({
+          proxy: true, out: [leaf, second, third], routed: [leaf, second, third],
+          split: [leaf, second, third], async: [leaf, second], guards: g3,
+          moves: 3, hotLane: true, kept: stay
+        }), "ok"),
+
+      sdarchitecturepatt_step(
+        "<b>3 services, all 3 justified, " + sdarchitecturepatt_pa(k3) +
+        " and 3 data migrations</b> — against the big bang's " +
+        sdarchitecturepatt_MODS.length + " services, " +
+        sdarchitecturepatt_pa(sdarchitecturepatt_hotK({
+          out: sdarchitecturepatt_names(), async: [] }).k) + " and " +
+        (sdarchitecturepatt_MODS.length + stay.length) + " migrations. The " +
+        "difference is not speed. It is that every step was reversible until the " +
+        "data moved, and the data moved last.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [leaf, second, third], routed: [leaf, second, third],
+          split: [leaf, second, third], async: [leaf, second], guards: g3,
+          moves: 3, hotLane: true, ledger: true, kept: stay
+        }), "ok")
+    ]
+  };
+}
+
+// ---- run 3: right pattern, wrong order --------------------------------
+function sdarchitecturepatt_runDataFirst() {
+  var m = "checkout";
+  var cross = sdarchitecturepatt_crossing([m]);
+  var g = sdarchitecturepatt_GUARDS * cross;
+  var k = sdarchitecturepatt_hotK({ out: [m], async: [] }).k;
+  var leafDeg = sdarchitecturepatt_outdeg("transcode");
+
+  return {
+    id: "data", label: "Data first",
+    phases: ["monolith", "pick checkout", cross + " call sites", "split data",
+      "saga", "boundary wrong", "migrate back", "re-split", "verdict"],
+    steps: [
+      sdarchitecturepatt_step(
+        "Third run, same monolith. This team has read about the strangler fig " +
+        "and is going to do it — <b>one service at a time</b> — but in the wrong " +
+        "order, which is the mistake the page spends a whole box on. Press Play.",
+        sdarchitecturepatt_st({ live: false })),
+
+      sdarchitecturepatt_step(
+        "<b><code>" + m + "</code> is chosen first</b>, because it sounds like a " +
+        "service. It is the worst possible choice: out-degree <b>" +
+        sdarchitecturepatt_outdeg(m) + "</b> and in-degree <b>" +
+        sdarchitecturepatt_indeg(m) + "</b> — the most connected module of the " +
+        sdarchitecturepatt_MODS.length + ", against the leaf's out-degree of " +
+        leafDeg + ". It also matches <b>no row</b> of the page's signal table.",
+        sdarchitecturepatt_st({ proxy: true, plan: [m] }), "warn"),
+
+      sdarchitecturepatt_step(
+        "<b>Extracted.</b> <b>" + cross + " of " + sdarchitecturepatt_EDGES.length +
+        "</b> call sites cross a boundary for this <i>single</i> service — <b>" + g +
+        "</b> guards, against the " + (sdarchitecturepatt_GUARDS *
+        sdarchitecturepatt_crossing(["transcode"])) + " the leaf cost. The " +
+        "checkout request touches <b>" + k + "</b> deployables: " +
+        sdarchitecturepatt_pa(k) + ", " + sdarchitecturepatt_ph(k) + " a year. " +
+        "<i>Pick a leaf</i> is step 2 for this reason.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], guards: g, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>And the data is split the same week</b>, because a service with its " +
+        "own database feels like the finished thing. <b>1</b> migration: the " +
+        "order and inventory tables leave the monolith's schema. The boundary has " +
+        "not been tested by a single day of production traffic.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], split: [m], guards: g,
+          moves: 1, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>The first thing to break is the transaction.</b> &ldquo;Decrement " +
+        "stock and record the order&rdquo; was one ACID commit in one database. " +
+        "It now spans two, so it becomes a <b>saga with compensation</b> — a " +
+        "rollback path, written by hand, for every step. That is permanent: it " +
+        "does not go away when the boundary is fixed.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], split: [m], guards: g,
+          moves: 1, saga: true, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>Month three: the boundary is wrong.</b> <code>catalog</code> writes " +
+        "inventory too, and it is on the other side of the line — so every stock " +
+        "change is a cross-service call inside a saga. The fix is to move " +
+        "inventory back to <code>catalog</code>. <b>The data is already split, so " +
+        "the fix is a migration, not a refactor.</b>",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], split: [m], wrong: [m],
+          guards: g, moves: 1, saga: true, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>Migration 2: inventory goes back into the monolith's schema</b>, " +
+        "under a dual-write window with backfill and reconciliation, because the " +
+        "rows are live. Everything the team built in month one is being undone at " +
+        "full production risk.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], wrong: [m],
+          guards: g, moves: 2, saga: true, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>Migration 3: split again on the corrected boundary.</b> The end shape " +
+        "is what <i>one</i> strangler-fig step would have produced — <b>1 " +
+        "service</b> — reached with <b>3</b> data migrations instead of 1, a saga " +
+        "that is now permanent, and " + g + " guards for a service nothing on the " +
+        "page's signal table justified.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], split: [m],
+          guards: g, moves: 3, saga: true, hotLane: true
+        }), "bad"),
+
+      sdarchitecturepatt_step(
+        "<b>Same pattern, same one service, three times the data movement.</b> " +
+        "The page's sentence is the whole lesson: <i>get the boundary right while " +
+        "the data is still together, because that is the cheap time to be " +
+        "wrong.</i> Step 4 says split data <b>last</b> — and last is not a " +
+        "preference, it is where the cost of being wrong changes by an order of " +
+        "magnitude.",
+        sdarchitecturepatt_st({
+          proxy: true, out: [m], routed: [m], split: [m],
+          guards: g, moves: 3, saga: true, hotLane: true, ledger: true
+        }), "bad")
+    ]
+  };
+}
+
+function sdarchitecturepatt_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined
+    });
+  }
+  return d.pills(chips);
+}
+
+S["sdarchitecturepatt"] = {
+  title: "Get services out of one monolith, three ways",
+  note: "One commerce monolith: <b>" + sdarchitecturepatt_MODS.length +
+    "</b> modules, <b>" + sdarchitecturepatt_EDGES.length +
+    "</b> in-process calls between them, <b>" + sdarchitecturepatt_TEAM +
+    "</b> engineers — the page's own headcount for <i>&ldquo;you do not have " +
+    "that problem&rdquo;</i>. Every component is <b>99.9%</b> available, the " +
+    "page's figure, so a request touching <i>k</i> deployables is 0.999<sup>k</sup> " +
+    "against 8,760 hours a year: the page's <b>0.999<sup>5</sup> = " +
+    sdarchitecturepatt_pa(5) + ", ~" + sdarchitecturepatt_ph(5) +
+    "</b> and <b>" + sdarchitecturepatt_pa(1) + ", ~" + sdarchitecturepatt_ph(1) +
+    "</b> both fall out of that. Each crossing call needs the page's four " +
+    "guards — timeout, retry policy, circuit breaker, fallback. Which " +
+    "extractions were justified is scored against the page's <i>when splitting " +
+    "is genuinely right</i> table: <b>" +
+    sdarchitecturepatt_signalCount(sdarchitecturepatt_names()) + " of " +
+    sdarchitecturepatt_MODS.length + "</b> modules carry a signal. Same monolith " +
+    "in all three tabs; only the order of operations changes.",
+  interval: 1600,
+
+  scenarios: [
+    sdarchitecturepatt_runBig(),
+    sdarchitecturepatt_runStrangle(),
+    sdarchitecturepatt_runDataFirst()
+  ],
+
+  draw: function (step, d, ctx) {
+    var s = step.state;
+    var hot = sdarchitecturepatt_hotK(s);
+    var k = hot.k;
+    var cross = sdarchitecturepatt_crossing(s.out);
+    var need = sdarchitecturepatt_GUARDS * cross;
+    var deploy = sdarchitecturepatt_deployables(s.out);
+    var i, m, where, data, flag;
+
+    var availFlag = !s.live ? "idle" : k >= 5 ? "bad" : k >= 2 ? "warn" : "ok";
+
+    var cost = d.node({
+      title: "cost of the split",
+      status: !s.live ? "NONE YET" : s.wrong.length ? "PAID TWICE" :
+        cross ? "DISTRIBUTED" : "SINGLE PROCESS",
+      statusFlag: !s.live ? "idle" : s.wrong.length ? "bad" : cross ? "warn" : "ok",
+      badge: deploy + (deploy === 1 ? " deployable" : " deployables"),
+      meta: "local dev must run " + deploy,
+      flag: !s.live ? "idle" : s.wrong.length ? "bad" : cross ? "warn" : "ok",
+      gauges: [{
+        label: "guards written",
+        pct: need ? (s.guards / need) * 100 : 100,
+        value: s.guards + " / " + need,
+        flag: need === 0 ? "ok" : s.guards >= need ? "warn" : "bad"
+      }],
+      rows: [
+        { label: "calls now over the network",
+          value: cross + " of " + sdarchitecturepatt_EDGES.length,
+          flag: cross === 0 ? "ok" : cross >= sdarchitecturepatt_EDGES.length ? "bad" : "warn" },
+        { label: "data migrations", value: String(s.moves),
+          flag: s.moves === 0 ? "ok" : s.moves <= 3 ? "warn" : "bad" },
+        { label: "cross-boundary transaction",
+          value: s.saga ? "saga + compensation" : "one ACID commit",
+          flag: s.saga ? "bad" : "ok" },
+        { label: "extractions with a signal",
+          value: sdarchitecturepatt_signalCount(s.out) + " of " + s.out.length,
+          flag: s.out.length === 0 ? "idle"
+            : sdarchitecturepatt_signalCount(s.out) === s.out.length ? "ok" : "bad" }
+      ]
+    });
+
+    var head = d.cols([
+      d.stack([
+        d.big(sdarchitecturepatt_pa(k), "hot-path availability", availFlag),
+        d.big(sdarchitecturepatt_ph(k), "down / year", availFlag),
+        d.pill(s.proxy ? "proxy in front" : "no proxy", s.proxy ? "ok" : "idle")
+      ]),
+      cost
+    ]);
+
+    var rows = [];
+    for (i = 0; i < sdarchitecturepatt_MODS.length; i++) {
+      m = sdarchitecturepatt_MODS[i];
+      if (!sdarchitecturepatt_has(s.out, m.name)) {
+        where = sdarchitecturepatt_has(s.plan, m.name) ? "monolith · marked"
+          : sdarchitecturepatt_has(s.kept, m.name) ? "monolith · kept, no signal"
+            : "monolith";
+      } else if (sdarchitecturepatt_has(s.wrong, m.name)) {
+        where = "service · wrong seam";
+      } else if (!sdarchitecturepatt_has(s.routed, m.name) && s.proxy) {
+        where = "service · no traffic";
+      } else {
+        where = "service";
+      }
+      data = sdarchitecturepatt_has(s.split, m.name) ? "own store" : "shared schema";
+      rows.push([
+        m.name,
+        sdarchitecturepatt_outdeg(m.name) + " / " + sdarchitecturepatt_indeg(m.name),
+        m.signal ? m.signal : "none",
+        where,
+        data
+      ]);
+    }
+
+    var out = [sdarchitecturepatt_phases(d, ctx), head,
+      d.table(["module", "out / in", "split signal", "lives in", "data"], rows)];
+
+    if (s.hotLane) {
+      var pills = [];
+      for (i = 0; i < hot.touch.length; i++) {
+        var name = hot.touch[i];
+        var isSvc = sdarchitecturepatt_has(s.out, name);
+        pills.push({
+          label: name + (isSvc ? " · svc" : " · mono"),
+          flag: isSvc ? (sdarchitecturepatt_has(s.wrong, name) ? "bad" : "warn") : "ok"
+        });
+      }
+      out.push(d.node({
+        title: "the synchronous checkout request",
+        status: k + (k === 1 ? " component" : " components"),
+        statusFlag: availFlag,
+        flag: availFlag,
+        meta: k === 1 ? "one process, no hop can fail"
+          : (k - 1) + (k === 2 ? " network hop" : " network hops") + " that can each time out",
+        body: d.pills(pills)
+      }));
+    }
+
+    if (s.ledger) {
+      out.push(d.table(
+        ["run", "services", "hot-path k", "down / yr", "data moves", "justified"],
+        sdarchitecturepatt_ledger()));
+    }
+
+    out.push(d.note(
+      "Availability is 0.999<sup>k</sup> over the deployables one checkout " +
+      "request touches — the page's arithmetic, with <i>k</i> counted off the " +
+      "call graph rather than chosen. <b>Green</b> is still in the monolith, " +
+      "<b>amber</b> is extracted, <b>red</b> is extracted on a seam that later " +
+      "proved wrong.",
+      step.flag === "bad" ? "bad" : undefined));
+
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdcaching  (caching.md)
+//
+// The page hands over its own time axis in §5: a four-line stampede
+// timeline with real clock stamps —
+//     t=0    key "top_posts" expires
+//     t=0.1  10,000 requests miss simultaneously
+//     t=0.1  10,000 identical queries hit the database
+//     t=0.2  database saturates -> everything is slow -> more requests pile up
+// — so the sim is that key, that second, run three ways. Tab 1 is the page's
+// timeline with no protection. Tab 2 is the same second with single-flight,
+// serve-stale-while-revalidate and a jittered TTL, which is the answer §5
+// tells you to give. Tab 3 is avalanche: the same cache tier losing a node
+// and then a whole unjittered batch of keys, which is how the page's closing
+// question — "is the database sized for what happens when the hit rate
+// drops?" — gets answered with a number instead of a shrug.
+//
+// CONFIG — page figures used verbatim
+//   1 ms cache / 50 ms DB      §7: "0.9 x 1ms + 0.1 x 50ms = 5.9 ms"
+//   95% steady hit rate        §8: "Sizing assumes a 95% hit rate"
+//   10,000 concurrent misses   §5 stampede, and it is derived here rather
+//                              than typed: one hot key taking half of a
+//                              20,000 reads/s tier IS 10,000 requests
+//   ttl = 300 + random(0,60)   §4, both the base and the jitter window
+//   1/N on a dead node         §5 avalanche / §8: "consistent hashing means
+//                              we lose 1/N"
+//   the 90 / 95 / 99 ladder    §7, recomputed in the verdict table; the page's
+//                              "quarters your latency, cuts DB load by 10x"
+//                              is checked in the note rather than asserted
+//
+// CONFIG — declared here, because the page states no capacity numbers
+//   20,000 reads/s offered, of which one key takes 50% (that is what makes it
+//   hot). 1,000 sampled keys. 4 cache nodes. Read tier sized at 5,000/s —
+//   5x the 1,000/s a 95% hit rate produces, which is generous sizing and
+//   still not enough, which is the point. 500-connection pool.
+//   SATURATION MODEL, declared: a read tier asked for more than its ceiling
+//   does not serve more, it slows down — service time multiplies by
+//   offered/ceiling. In-flight requests then follow Little's law,
+//   concurrency = throughput x latency, which is what exhausts the pool.
+// ======================================================================
+
+var sdcaching_QPS = 20000;        // reads/s offered at the cache tier
+var sdcaching_HOTSHARE = 0.5;     // one key's share of reads -> 10,000/s
+var sdcaching_HIT = 0.95;         // page §8 sizing assumption
+var sdcaching_CACHE_MS = 1;       // page §7
+var sdcaching_DB_MS = 50;         // page §7
+var sdcaching_DB_CEIL = 5000;     // 5x the steady miss load
+var sdcaching_POOL = 500;         // connections / workers
+var sdcaching_TTL = 300;          // page §4: ttl=300
+var sdcaching_JITTER = 60;        // page §4: random(0, 60)
+var sdcaching_NODES = 4;          // page §5/§8: "we lose 1/N"
+var sdcaching_KEYS = 1000;        // page §4: "a thousand keys written together"
+var sdcaching_BUCKETS = 12;       // 5-second buckets across the jitter window
+
+var sdcaching_HOTQPS = sdcaching_QPS * sdcaching_HOTSHARE;          // 10,000
+var sdcaching_STAMPEDE_HIT = sdcaching_HIT - sdcaching_HOTSHARE;    // 0.45
+var sdcaching_ONENODE_HIT = sdcaching_HIT * (1 - 1 / sdcaching_NODES);
+var sdcaching_STEADY_DB = sdcaching_QPS * (1 - sdcaching_HIT);      // 1,000/s
+
+function sdcaching_n(x) { return Math.round(x).toLocaleString("en-US"); }
+function sdcaching_pc(x) { return (x * 100).toFixed(1) + "%"; }
+
+// the declared saturation model, applied consistently everywhere.
+// `wait` is traffic that will be served from cache but is currently parked on
+// a single-flight lock, so it pays the recompute latency rather than 1 ms.
+// `sat` off means the queries have just arrived and the queue has not built.
+function sdcaching_solve(hit, extra, breaker, wait, sat) {
+  var offered = sdcaching_QPS * (1 - hit) + extra;
+  var admitted = breaker ? Math.min(offered, sdcaching_DB_CEIL) : offered;
+  var shed = offered - admitted;
+  var dbMs = sdcaching_DB_MS *
+    (sat === false ? 1 : Math.max(1, admitted / sdcaching_DB_CEIL));
+  var served = sdcaching_QPS - shed;
+  var cacheServed = sdcaching_QPS * hit;
+  var parked = Math.min(wait || 0, cacheServed);
+  var eff = served > 0
+    ? ((cacheServed - parked) * sdcaching_CACHE_MS + parked * dbMs +
+       (served - cacheServed) * dbMs) / served
+    : 0;
+  return {
+    offered: offered, admitted: admitted, shed: shed, dbMs: dbMs,
+    served: served, eff: eff, parked: parked,
+    load: offered / sdcaching_DB_CEIL,
+    inflight: served * eff / 1000              // Little's law
+  };
+}
+
+// the page's §7 ladder, recomputed
+function sdcaching_ladder() {
+  var rates = [0.99, 0.95, 0.90, sdcaching_ONENODE_HIT, 0];
+  var rows = [], i, r;
+  for (i = 0; i < rates.length; i++) {
+    r = sdcaching_solve(rates[i], 0, false, 0, true);
+    rows.push([
+      (rates[i] * 100).toFixed(1) + "%",
+      (rates[i] * sdcaching_CACHE_MS + (1 - rates[i]) * sdcaching_DB_MS).toFixed(1) + " ms",
+      sdcaching_n(sdcaching_QPS * (1 - rates[i])) + " /s",
+      (sdcaching_QPS * (1 - rates[i]) / sdcaching_DB_CEIL).toFixed(2) + "×"
+    ]);
+  }
+  return rows;
+}
+
+function sdcaching_st(o) {
+  var nodes = [], i;
+  for (i = 0; i < sdcaching_NODES; i++) nodes.push("warm");
+  if (o.down) for (i = 0; i < o.down.length; i++) nodes[o.down[i]] = "down";
+  if (o.cold) for (i = 0; i < o.cold.length; i++) {
+    if (nodes[o.cold[i]] !== "down") nodes[o.cold[i]] = "cold";
+  }
+  return {
+    hit: o.hit === undefined ? sdcaching_HIT : o.hit,
+    extra: o.extra || 0,            // absolute extra reads/s at the DB
+    wait: o.wait || 0,              // reads/s parked on a single-flight lock
+    sat: o.sat !== false,           // has the read tier's queue built yet
+    breaker: !!o.breaker,
+    nodes: nodes,
+    key: o.key || "fresh",          // fresh | expired | stale | locked | refreshing
+    lock: !!o.lock,
+    hotToDb: o.hotToDb === undefined ? 0 : o.hotToDb,
+    stalled: !!o.stalled,
+    spread: !!o.spread,
+    ladder: !!o.ladder,
+    live: o.live !== false
+  };
+}
+
+function sdcaching_step(caption, state, flag) {
+  return { caption: caption, state: state, flag: flag };
+}
+
+// ---- run 1: the page's stampede timeline, unprotected ------------------
+function sdcaching_runNaive() {
+  var warm = sdcaching_solve(sdcaching_HIT, 0, false, 0, true);
+  var hitBurst = sdcaching_solve(sdcaching_STAMPEDE_HIT, 0, false, 0, false);
+  var burst = sdcaching_solve(sdcaching_STAMPEDE_HIT, 0, false, 0, true);
+
+  return {
+    id: "naive", label: "No protection",
+    phases: ["warm", "t=0 · expiry", "t=0.1 · 10k miss", "t=0.2 · saturated",
+      "pile-up", "refilled", "verdict"],
+    steps: [
+      sdcaching_step(
+        "Cache-aside in front of the read tier. <b>" + sdcaching_n(sdcaching_QPS) +
+        " reads/s</b> at a <b>" + sdcaching_pc(sdcaching_HIT) + "</b> hit rate, so " +
+        "the database sees <b>" + sdcaching_n(sdcaching_STEADY_DB) + "/s</b> — " +
+        (warm.load * 100).toFixed(0) + "% of its " + sdcaching_n(sdcaching_DB_CEIL) +
+        " ceiling. Effective latency <b>" + warm.eff.toFixed(1) +
+        " ms</b>. Press Play.",
+        sdcaching_st({ live: false })),
+
+      sdcaching_step(
+        "<b>t=0 — <code>top_posts</code> expires.</b> It was written with " +
+        "<code>ttl=" + sdcaching_TTL + "</code> and no jitter, and it carries <b>" +
+        sdcaching_pc(sdcaching_HOTSHARE) + "</b> of all reads. Nothing has gone " +
+        "wrong yet: " + (sdcaching_KEYS - 1) + " of " + sdcaching_n(sdcaching_KEYS) +
+        " keys are still warm. One key is missing, and it is the one that matters.",
+        sdcaching_st({ key: "expired" }), "warn"),
+
+      sdcaching_step(
+        "<b>t=0.1 — " + sdcaching_n(sdcaching_HOTQPS) + " requests miss " +
+        "simultaneously, and " + sdcaching_n(sdcaching_HOTQPS) + " identical " +
+        "queries hit the database.</b> Cache-aside has no idea they are the same " +
+        "request: each checks the cache, finds nothing, and goes to the database " +
+        "on its own. With the " + sdcaching_n(sdcaching_STEADY_DB) +
+        "/s of ordinary misses that is <b>" + sdcaching_n(hitBurst.offered) +
+        " reads/s</b> against a " + sdcaching_n(sdcaching_DB_CEIL) +
+        " ceiling — <b>" + hitBurst.load.toFixed(1) + "×</b> — of which <b>" +
+        sdcaching_n(sdcaching_HOTQPS - 1) + " are redundant</b>. The queue has " +
+        "not built yet, so service time is still " + sdcaching_DB_MS + " ms.",
+        sdcaching_st({
+          key: "expired", hit: sdcaching_STAMPEDE_HIT,
+          hotToDb: sdcaching_HOTQPS, sat: false
+        }), "bad"),
+
+      sdcaching_step(
+        "<b>t=0.2 — the database saturates, so everything is slow.</b> A read " +
+        "tier asked for " + burst.load.toFixed(1) + "× its ceiling does not serve " +
+        burst.load.toFixed(1) + "× the work; it queues, and service time " +
+        "multiplies: <b>" + sdcaching_DB_MS + " ms → " + burst.dbMs.toFixed(0) +
+        " ms</b>. Effective latency across all reads goes from " +
+        hitBurst.eff.toFixed(0) + " ms to <b>" + burst.eff.toFixed(0) + " ms</b>.",
+        sdcaching_st({
+          key: "expired", hit: sdcaching_STAMPEDE_HIT, hotToDb: sdcaching_HOTQPS
+        }), "bad"),
+
+      sdcaching_step(
+        "<b>…and more requests pile up.</b> That is Little's law doing the " +
+        "damage: in-flight requests are throughput × latency, so " +
+        sdcaching_n(sdcaching_QPS) + "/s at " + burst.eff.toFixed(0) +
+        " ms is <b>" + sdcaching_n(burst.inflight) + " in flight</b> against a " +
+        sdcaching_POOL + "-connection pool — <b>" +
+        (burst.inflight / sdcaching_POOL).toFixed(1) + "×</b>. At " +
+        warm.eff.toFixed(1) + " ms it was " + sdcaching_n(warm.inflight) +
+        ". <b>The pool exhausts, and now the " +
+        sdcaching_pc(sdcaching_STAMPEDE_HIT) + " that would have hit the cache " +
+        "queue behind it too.</b>",
+        sdcaching_st({
+          key: "expired", hit: sdcaching_STAMPEDE_HIT, hotToDb: sdcaching_HOTQPS,
+          stalled: true
+        }), "bad"),
+
+      sdcaching_step(
+        "<b>One of the " + sdcaching_n(sdcaching_HOTQPS) + " queries finally " +
+        "returns and writes the key.</b> The hit rate snaps back to " +
+        sdcaching_pc(sdcaching_HIT) + " and the incident is over — until the " +
+        "next <code>ttl=" + sdcaching_TTL + "</code> elapses, which it will, <b>" +
+        (86400 / sdcaching_TTL).toFixed(0) + " times a day</b>.",
+        sdcaching_st({ key: "fresh" }), "warn"),
+
+      sdcaching_step(
+        "<b>One key expiring took the read tier to " + burst.load.toFixed(1) +
+        "× capacity and the connection pool to " +
+        (burst.inflight / sdcaching_POOL).toFixed(1) + "×.</b> Nothing failed, " +
+        "nobody deployed, no traffic spike — a TTL elapsed. Cache-aside is the " +
+        "right default and this is its one sharp edge: <i>it has no idea that " +
+        sdcaching_n(sdcaching_HOTQPS) + " concurrent misses are the same miss.</i>",
+        sdcaching_st({ key: "fresh", ladder: true }), "bad")
+    ]
+  };
+}
+
+// ---- run 2: single-flight + serve-stale + jittered TTL ------------------
+function sdcaching_runFixed() {
+  var warm = sdcaching_solve(sdcaching_HIT, 0, false, 0, true);
+  var one = sdcaching_solve(sdcaching_HIT, 1, false, 0, true);
+  var parked = sdcaching_solve(sdcaching_HIT, 1, false, sdcaching_HOTQPS - 1, true);
+  var burst = sdcaching_solve(sdcaching_STAMPEDE_HIT, 0, false, 0, true);
+  var perBucket = sdcaching_KEYS / sdcaching_BUCKETS;
+  var jitterPeak = sdcaching_KEYS / sdcaching_JITTER;
+
+  return {
+    id: "fixed", label: "Single-flight + stale",
+    phases: ["warm", "t=0 · expiry", "lock taken", "stale served", "recomputed",
+      "refilled", "jittered TTL", "verdict"],
+    steps: [
+      sdcaching_step(
+        "Identical tier, identical traffic: <b>" + sdcaching_n(sdcaching_QPS) +
+        " reads/s</b>, <b>" + sdcaching_pc(sdcaching_HIT) + "</b> hit, <b>" +
+        sdcaching_n(sdcaching_STEADY_DB) + "/s</b> at the database. The only " +
+        "difference is three lines of policy: <i>single-flight</i>, <i>serve " +
+        "stale while revalidating</i>, and <code>ttl = " + sdcaching_TTL +
+        " + random(0, " + sdcaching_JITTER + ")</code>. Press Play.",
+        sdcaching_st({ live: false })),
+
+      sdcaching_step(
+        "<b>t=0 — the same key reaches the same TTL.</b> But the entry is not " +
+        "deleted, it is marked <b>stale</b>. The value is still in memory and " +
+        "still correct enough to serve for a few hundred milliseconds. " +
+        "<i>Expiry stops meaning &ldquo;gone&rdquo; and starts meaning " +
+        "&ldquo;somebody should refresh this&rdquo;.</i>",
+        sdcaching_st({ key: "stale" }), "warn"),
+
+      sdcaching_step(
+        "<b>t=0.1 — the first of the " + sdcaching_n(sdcaching_HOTQPS) +
+        " takes the lock.</b> <code>SET key:lock NX EX 5</code> succeeds exactly " +
+        "once. That one request goes to the database; the other <b>" +
+        sdcaching_n(sdcaching_HOTQPS - 1) + "</b> find the lock held. Plain " +
+        "single-flight <b>parks them</b>: the database is safe at " +
+        sdcaching_n(one.offered) + "/s, but those requests now wait out the " +
+        "recompute, so effective latency is <b>" + parked.eff.toFixed(1) +
+        " ms</b> and " + sdcaching_n(parked.inflight) + " sit in flight.",
+        sdcaching_st({
+          key: "stale", lock: true, extra: 1, hotToDb: 1,
+          wait: sdcaching_HOTQPS - 1
+        }), "warn"),
+
+      sdcaching_step(
+        "<b>Serve stale while revalidating instead, and the parked requests " +
+        "leave immediately.</b> The " + sdcaching_n(sdcaching_HOTQPS - 1) +
+        " get the old value at cache latency rather than waiting out the " +
+        "refresh: effective latency drops from " + parked.eff.toFixed(1) +
+        " ms back to <b>" + one.eff.toFixed(1) + " ms</b> and in-flight from " +
+        sdcaching_n(parked.inflight) + " to <b>" + sdcaching_n(one.inflight) +
+        "</b>. <i>That is the difference the page flags: single-flight protects " +
+        "the database, serving stale is what keeps p99 flat.</i>",
+        sdcaching_st({
+          key: "stale", lock: true, extra: 1, hotToDb: 1
+        }), "ok"),
+
+      sdcaching_step(
+        "<b>The database serves exactly one query</b> — " +
+        sdcaching_n(one.offered) + "/s total against the " +
+        sdcaching_n(sdcaching_DB_CEIL) + " ceiling, versus <b>" +
+        sdcaching_n(burst.offered) + "/s</b> on the previous tab. A <b>" +
+        sdcaching_n(sdcaching_HOTQPS) + "×</b> reduction in duplicate work, from " +
+        "one lock. Service time stays " + sdcaching_DB_MS +
+        " ms because nothing is queueing.",
+        sdcaching_st({
+          key: "refreshing", lock: true, extra: 1, hotToDb: 1
+        }), "ok"),
+
+      sdcaching_step(
+        "<b>The key is rewritten and the lock released.</b> With both policies " +
+        "on, the hit rate never left " + sdcaching_pc(sdcaching_HIT) +
+        ", effective latency never left <b>" + warm.eff.toFixed(1) +
+        " ms</b>, and in-flight requests never left <b>" +
+        sdcaching_n(warm.inflight) + " of " + sdcaching_POOL + "</b>. " +
+        "<i>From the outside, the expiry did not happen.</i>",
+        sdcaching_st({ key: "fresh" }), "ok"),
+
+      sdcaching_step(
+        "<b>And the jitter, which fixes the other half.</b> " +
+        sdcaching_n(sdcaching_KEYS) + " keys written in the same batch with a " +
+        "flat <code>ttl=" + sdcaching_TTL + "</code> all expire in the same " +
+        "second: <b>" + sdcaching_n(sdcaching_KEYS) + " recomputes/s</b>. With " +
+        "<code>+ random(0, " + sdcaching_JITTER + ")</code> they spread across " +
+        sdcaching_JITTER + " seconds — about <b>" + perBucket.toFixed(0) +
+        "</b> per 5-second bucket, a peak of <b>" + jitterPeak.toFixed(0) +
+        "/s</b>. <b>" + (sdcaching_KEYS / jitterPeak).toFixed(0) +
+        "× lower</b>, for one extra term.",
+        sdcaching_st({ key: "fresh", spread: true }), "ok"),
+
+      sdcaching_step(
+        "<b>Same expiry, same " + sdcaching_n(sdcaching_HOTQPS) +
+        " concurrent requests, " + sdcaching_n(burst.offered - one.offered) +
+        " fewer database reads.</b> Single-flight collapses the duplicates, " +
+        "serving stale keeps p99 flat while the one refresh runs, and jitter " +
+        "stops the batch behind it from doing the same thing at once. " +
+        "<i>None of the three changes the hit rate — they change what a miss " +
+        "costs.</i>",
+        sdcaching_st({ key: "fresh", ladder: true }), "ok")
+    ]
+  };
+}
+
+// ---- run 3: avalanche, and the sizing question --------------------------
+function sdcaching_runAvalanche() {
+  var warm = sdcaching_solve(sdcaching_HIT, 0, false, 0, true);
+  var one = sdcaching_solve(sdcaching_ONENODE_HIT, 0, false, 0, true);
+  var zero = sdcaching_solve(0, 0, false, 0, true);
+  var shed = sdcaching_solve(0, 0, true, 0, true);
+  var dead = sdcaching_NODES - 1;               // index of the node that dies
+  var allDown = [], i;
+  for (i = 0; i < sdcaching_NODES; i++) allDown.push(i);
+
+  return {
+    id: "aval", label: "Avalanche",
+    phases: ["warm", "node dies", "refilled", "batch expiry", "pool exhausted",
+      "the question", "breaker + shed", "verdict"],
+    steps: [
+      sdcaching_step(
+        "The protected tier from tab 2, now drawn as its <b>" + sdcaching_NODES +
+        "</b> nodes. Single-flight and jitter are still on. <b>" +
+        sdcaching_pc(sdcaching_HIT) + "</b> hit, <b>" +
+        sdcaching_n(sdcaching_STEADY_DB) + "/s</b> at the database, <b>" +
+        warm.eff.toFixed(1) + " ms</b>. Press Play.",
+        sdcaching_st({ live: false })),
+
+      sdcaching_step(
+        "<b>Node " + (dead + 1) + " of " + sdcaching_NODES + " dies.</b> " +
+        "Consistent hashing is doing exactly what it is for: only <b>1/" +
+        sdcaching_NODES + "</b> of the keyspace loses its owner, not all of it. " +
+        "Hit rate falls to <b>" + sdcaching_pc(sdcaching_ONENODE_HIT) +
+        "</b> — " + sdcaching_pc(sdcaching_HIT) + " × " +
+        ((1 - 1 / sdcaching_NODES) * 100).toFixed(0) + "% — and the database " +
+        "takes <b>" + sdcaching_n(one.offered) + "/s</b>, <b>" +
+        one.load.toFixed(2) + "×</b> its ceiling.",
+        sdcaching_st({
+          hit: sdcaching_ONENODE_HIT, down: [dead], cold: [0, 1]
+        }), "warn"),
+
+      sdcaching_step(
+        "<b>And it holds.</b> At " + one.load.toFixed(2) + "× the service time " +
+        "is " + one.dbMs.toFixed(0) + " ms, effective latency <b>" +
+        one.eff.toFixed(0) + " ms</b>, in-flight <b>" + sdcaching_n(one.inflight) +
+        " of " + sdcaching_POOL + "</b>. The moved keys refill within one TTL and " +
+        "the tier returns to " + sdcaching_pc(sdcaching_HIT) + " on " +
+        (sdcaching_NODES - 1) + " nodes. <i>Degraded capacity, no incident — " +
+        "this is the 1/N guarantee being worth what it costs.</i>",
+        sdcaching_st({ down: [dead] }), "ok"),
+
+      sdcaching_step(
+        "<b>Then the second cause the page names: many keys share an expiry.</b> " +
+        "A deploy warmed " + sdcaching_n(sdcaching_KEYS) + " keys in one loop " +
+        "with a flat <code>ttl=" + sdcaching_TTL + "</code> — the jitter was on " +
+        "the read path, not the warmer. They all expire in the same second. Hit " +
+        "rate <b>" + sdcaching_pc(sdcaching_HIT) + " → 0%</b>, database offered <b>" +
+        sdcaching_n(zero.offered) + "/s</b> = <b>" + zero.load.toFixed(1) +
+        "×</b> ceiling.",
+        sdcaching_st({
+          hit: 0, down: [dead], cold: [0, 1, 2], key: "expired"
+        }), "bad"),
+
+      sdcaching_step(
+        "<b>Service time " + sdcaching_DB_MS + " ms → " + zero.dbMs.toFixed(0) +
+        " ms, and Little's law finishes it.</b> " + sdcaching_n(sdcaching_QPS) +
+        "/s × " + (zero.eff / 1000).toFixed(2) + " s = <b>" +
+        sdcaching_n(zero.inflight) + " in flight</b> against " + sdcaching_POOL +
+        " connections — <b>" + (zero.inflight / sdcaching_POOL).toFixed(0) +
+        "×</b>. Single-flight cannot help: these are " +
+        sdcaching_n(sdcaching_KEYS) + " <i>different</i> keys, so there is no " +
+        "duplicate work to collapse.",
+        sdcaching_st({
+          hit: 0, down: [dead], cold: [0, 1, 2], key: "expired", stalled: true
+        }), "bad"),
+
+      sdcaching_step(
+        "<b>&ldquo;What is your cache hit rate, and is the database sized for " +
+        "what happens when it drops?&rdquo;</b> Here is the answer as a table. " +
+        "The design is comfortable down to <b>" +
+        sdcaching_pc(sdcaching_ONENODE_HIT) + "</b> and dead at <b>0%</b>: " +
+        sdcaching_n(sdcaching_QPS) + "/s against " + sdcaching_n(sdcaching_DB_CEIL) +
+        " is <b>" + zero.load.toFixed(1) + "× short</b>. <i>Sizing for a 0% hit " +
+        "rate would mean a read tier " + zero.load.toFixed(1) +
+        "× larger that is 80% idle every ordinary day — which is why nobody " +
+        "does it, and why the next frame is the real answer.</i>",
+        sdcaching_st({
+          hit: 0, down: [dead], cold: [0, 1, 2], key: "expired",
+          stalled: true, ladder: true
+        }), "bad"),
+
+      sdcaching_step(
+        "<b>Circuit breaker and load shedding.</b> Admit <b>" +
+        sdcaching_n(shed.admitted) + "/s</b> — exactly the ceiling — and reject " +
+        "the other <b>" + sdcaching_n(shed.shed) + "/s</b> immediately with an " +
+        "error. Service time returns to " + shed.dbMs.toFixed(0) +
+        " ms, in-flight to <b>" + sdcaching_n(shed.inflight) + " of " +
+        sdcaching_POOL + "</b>. <b>" +
+        (shed.served / sdcaching_QPS * 100).toFixed(0) + "% of users are served " +
+        "and " + (shed.shed / sdcaching_QPS * 100).toFixed(0) +
+        "% get an error — instead of 100% getting a timeout.</b>",
+        sdcaching_st({
+          hit: 0, down: [dead], cold: [0, 1, 2], key: "expired", breaker: true
+        }), "warn"),
+
+      sdcaching_step(
+        "<b>Three fixes, three different jobs.</b> Consistent hashing bounded " +
+        "the first failure to 1/" + sdcaching_NODES + " and the tier absorbed it. " +
+        "Jitter would have stopped the batch expiry, and did not, because it was " +
+        "applied in one place and not the other. The breaker is what is left when " +
+        "both have failed — it does not save the design, it decides who loses. " +
+        "<i>A design that works at " + sdcaching_pc(sdcaching_HIT) +
+        " and collapses at 0% is only fragile if you have not said so out loud.</i>",
+        sdcaching_st({
+          hit: 0, down: allDown, key: "expired", breaker: true, ladder: true
+        }), "bad")
+    ]
+  };
+}
+
+function sdcaching_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined
+    });
+  }
+  return d.pills(chips);
+}
+
+S["sdcaching"] = {
+  title: "One hot key expires, three ways",
+  note: "A cache-aside tier taking <b>" + sdcaching_n(sdcaching_QPS) +
+    " reads/s</b> across <b>" + sdcaching_n(sdcaching_KEYS) + "</b> keys on <b>" +
+    sdcaching_NODES + "</b> nodes, at the page's own <b>" +
+    sdcaching_pc(sdcaching_HIT) + "</b> sizing hit rate, <b>" +
+    sdcaching_CACHE_MS + " ms</b> from cache and <b>" + sdcaching_DB_MS +
+    " ms</b> from the database. One key — <code>top_posts</code> — takes <b>" +
+    sdcaching_pc(sdcaching_HOTSHARE) + "</b> of the reads, which is what makes " +
+    "it hot and which is where the page's <b>" + sdcaching_n(sdcaching_HOTQPS) +
+    " concurrent misses</b> comes from. The read tier is sized at <b>" +
+    sdcaching_n(sdcaching_DB_CEIL) + "/s</b>, five times the " +
+    sdcaching_n(sdcaching_STEADY_DB) + "/s a " + sdcaching_pc(sdcaching_HIT) +
+    " hit rate produces, behind a " + sdcaching_POOL + "-connection pool. " +
+    "Over its ceiling it slows rather than serving more, and in-flight work " +
+    "follows Little's law. Every latency below is the page's " +
+    "<code>hit×1 + miss×50</code>, so its ladder reproduces exactly: <b>" +
+    (0.90 * sdcaching_CACHE_MS + 0.10 * sdcaching_DB_MS).toFixed(1) +
+    " ms</b> at 90%, <b>" +
+    (0.95 * sdcaching_CACHE_MS + 0.05 * sdcaching_DB_MS).toFixed(1) +
+    " ms</b> at 95%, <b>" +
+    (0.99 * sdcaching_CACHE_MS + 0.01 * sdcaching_DB_MS).toFixed(1) +
+    " ms</b> at 99% — a <b>" +
+    ((0.90 + 0.10 * sdcaching_DB_MS) / (0.99 + 0.01 * sdcaching_DB_MS)).toFixed(1) +
+    "×</b> latency drop and a <b>" + (0.10 / 0.01).toFixed(0) +
+    "×</b> cut in database load.",
+  interval: 1500,
+
+  scenarios: [
+    sdcaching_runNaive(),
+    sdcaching_runFixed(),
+    sdcaching_runAvalanche()
+  ],
+
+  draw: function (step, d, ctx) {
+    var s = step.state;
+    var r = sdcaching_solve(s.hit, s.extra, s.breaker, s.wait, s.sat);
+    var i;
+
+    var loadFlag = !s.live ? "idle" : r.load > 1 ? "bad" : r.load > 0.6 ? "warn" : "ok";
+    var poolPct = r.inflight / sdcaching_POOL * 100;
+    var poolFlag = !s.live ? "idle" : poolPct > 100 ? "bad" : poolPct > 60 ? "warn" : "ok";
+
+    var tier = d.node({
+      title: "read tier",
+      status: !s.live ? "IDLE" : s.breaker ? "SHEDDING"
+        : r.load > 1 ? "SATURATED" : r.load > 0.6 ? "ABSORBING" : "STEADY",
+      statusFlag: !s.live ? "idle" : s.breaker ? "warn" : loadFlag,
+      badge: "ceiling " + sdcaching_n(sdcaching_DB_CEIL) + " /s",
+      meta: "service time " + r.dbMs.toFixed(0) + " ms at this load",
+      flag: loadFlag,
+      gauges: [
+        { label: "reads/s offered", pct: r.load * 100,
+          value: sdcaching_n(r.offered) +
+            (r.load > 1 ? " (" + r.load.toFixed(1) + "× over)" : ""),
+          flag: loadFlag },
+        { label: "in flight · Little's law", pct: poolPct,
+          value: sdcaching_n(r.inflight) + " / " + sdcaching_POOL,
+          flag: poolFlag }
+      ],
+      rows: [
+        { label: "queries for the hot key",
+          value: s.hotToDb > 0 ? sdcaching_n(s.hotToDb) : "none in flight",
+          flag: s.hotToDb > 1 ? "bad" : s.hotToDb === 1 ? "ok" : "idle" },
+        { label: "app tier",
+          value: s.stalled ? "pool exhausted — cache hits queue too" : "healthy",
+          flag: s.stalled ? "bad" : "ok" },
+        { label: "requests rejected",
+          value: r.shed > 0 ? sdcaching_n(r.shed) + " /s" : "none",
+          flag: r.shed > 0 ? "warn" : "ok" }
+      ]
+    });
+
+    var head = d.cols([
+      d.stack([
+        d.big(sdcaching_pc(s.hit), "cache hit rate",
+          !s.live ? "idle" : s.hit >= 0.9 ? "ok" : s.hit >= 0.5 ? "warn" : "bad"),
+        d.big(r.eff.toFixed(1) + " ms", "effective read latency",
+          !s.live ? "idle" : r.eff <= 5 ? "ok" : r.eff <= 30 ? "warn" : "bad"),
+        d.pill("top_posts · " + s.key,
+          s.key === "fresh" ? "ok" : s.key === "expired" ? "bad" : "warn")
+      ]),
+      tier
+    ]);
+
+    var cells = [];
+    for (i = 0; i < s.nodes.length; i++) {
+      cells.push({
+        label: "n" + (i + 1),
+        flag: s.nodes[i] === "down" ? "bad" : s.nodes[i] === "cold" ? "warn" : "ok",
+        title: s.nodes[i] === "down" ? "dead — its 1/" + sdcaching_NODES +
+          " of the keyspace has no owner"
+          : s.nodes[i] === "cold" ? "alive, holding keys that are cold or expired"
+            : "alive and warm"
+      });
+    }
+
+    var served = r.served - sdcaching_QPS * s.hit;
+    var bars = [
+      d.bar({ label: "served from cache",
+        pct: (sdcaching_QPS * s.hit - r.parked) / sdcaching_QPS * 100,
+        value: sdcaching_n(sdcaching_QPS * s.hit - r.parked) + " /s",
+        flag: s.stalled ? "bad" : s.hit >= 0.9 ? "ok" : "warn" }),
+      d.bar({ label: "served from the database",
+        pct: served / sdcaching_QPS * 100,
+        value: sdcaching_n(served) + " /s @ " + r.dbMs.toFixed(0) + " ms",
+        flag: r.load > 1 ? "bad" : r.load > 0.6 ? "warn" : "ok" })
+    ];
+    if (r.parked > 0) {
+      bars.push(d.bar({ label: "parked on the single-flight lock",
+        pct: r.parked / sdcaching_QPS * 100,
+        value: sdcaching_n(r.parked) + " /s waiting " + r.dbMs.toFixed(0) + " ms",
+        flag: "warn" }));
+    }
+    if (r.shed > 0) {
+      bars.push(d.bar({ label: "shed by the breaker",
+        pct: r.shed / sdcaching_QPS * 100,
+        value: sdcaching_n(r.shed) + " /s rejected", flag: "warn" }));
+    }
+
+    var out = [sdcaching_phases(d, ctx), head,
+      d.lane({ label: "cache tier", cells: cells }), d.stack(bars)];
+
+    if (s.spread) {
+      var flat = [], jit = [];
+      for (i = 0; i < sdcaching_BUCKETS; i++) {
+        flat.push({
+          label: i === 0 ? String(sdcaching_KEYS) : "",
+          flag: i === 0 ? "bad" : "idle",
+          title: (i * sdcaching_JITTER / sdcaching_BUCKETS) + "–" +
+            ((i + 1) * sdcaching_JITTER / sdcaching_BUCKETS) + " s"
+        });
+        jit.push({
+          label: String(Math.round(sdcaching_KEYS / sdcaching_BUCKETS)),
+          flag: "ok",
+          title: (i * sdcaching_JITTER / sdcaching_BUCKETS) + "–" +
+            ((i + 1) * sdcaching_JITTER / sdcaching_BUCKETS) + " s"
+        });
+      }
+      out.push(d.node({
+        title: "when " + sdcaching_n(sdcaching_KEYS) + " keys written together expire",
+        status: sdcaching_JITTER + "-second window",
+        statusFlag: "ok",
+        meta: "each block is " + (sdcaching_JITTER / sdcaching_BUCKETS) + " seconds",
+        body: d.stack([
+          d.lane({ label: "ttl=" + sdcaching_TTL, cells: flat }),
+          d.lane({ label: "+ rand(0," + sdcaching_JITTER + ")", cells: jit })
+        ])
+      }));
+    }
+
+    if (s.ladder) {
+      out.push(d.table(
+        ["hit rate", "effective latency", "database reads", "vs ceiling"],
+        sdcaching_ladder()));
+    }
+
+    out.push(d.note(
+      "Effective latency is the page's <code>hit × " + sdcaching_CACHE_MS +
+      " ms + miss × " + sdcaching_DB_MS + " ms</code>, with the database's " +
+      sdcaching_DB_MS + " ms multiplied by how far past its ceiling it is asked " +
+      "to go. The ladder row at <b>" + sdcaching_pc(sdcaching_ONENODE_HIT) +
+      "</b> is not a guess either — it is " + sdcaching_pc(sdcaching_HIT) +
+      " × (1 − 1/" + sdcaching_NODES + "), one dead node under consistent hashing.",
+      step.flag === "bad" ? "bad" : undefined));
+
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
   // ======================================================================
   // SIM · sdcapandconsistenc  (cap-and-consistency.md)
   //
@@ -3059,6 +4356,584 @@ S["sdapidesign"] = {
   };
 
   // ====================================================================
+// ======================================================================
+// SIM · sdchecklist  (checklist.md)
+//
+// A reference page, but §7 is a procedure with a real order — "FAILURE
+// SWEEP", eight boxes to kill, and §10 tells you when to do it: "stop
+// adding at minute 40 and start killing boxes". So the time axis is the
+// sweep: one design, built from §5's component defaults and sized by §3's
+// formulas, with its boxes killed one at a time in the page's own order.
+//
+// What changes between the three tabs is §6, the depth ladder — the page's
+// "Level 3 is the interview". Level 1 has the boxes and says nothing about
+// what happens when one dies; level 2 names the mechanism inside each box;
+// level 3 has the failure semantics. Each box's §7 answer belongs to one of
+// those depths, and the same kill lands differently depending on whether
+// the answer exists. The score is not opinion: a box BREAKS when more than
+// half of peak traffic stops, and that is computed from the sizing.
+//
+// This sim deliberately avoids the estimation script itself (sdestimation
+// and sdnumberstoknow own that); §3's formulas appear once, to size the
+// boxes the sweep then kills.
+//
+// CONFIG — page figures used verbatim
+//   actions/day ÷ 100,000 = avg QPS        §3, line 1
+//   × 2–3 = peak                            §3, line 1 (3 taken, stated)
+//   peak QPS ÷ 10,000 = app servers, round up   §3, line 3
+//   < 1,000 writes/s -> one primary, do not shard   §3 threshold table
+//   reads > 10× writes -> cache                      §3 threshold table
+//   "I'd shard when writes approach 5,000 a second"  §8, anti-over-engineering
+//   the eight sweep boxes and their answers          §7, verbatim, in order
+//   "~30s write pause" on leader failover            §7
+//   the three depth levels                           §6
+//   component defaults                               §5
+//
+// CONFIG — declared here, because the page states no product or capacities
+//   50,000,000 DAU × 40 actions/day; 5% of actions are writes
+//   one app server holds 10,000 QPS (that IS §3's divisor) for 50 ms, so
+//     its thread pool is 10,000 × 0.05 = 500 — derived, not chosen
+//   N+1: one spare app server above §3's rounded-up count
+//   4 cache nodes; 95% hit rate; read tier ceiling 20,000 reads/s
+//   COLLAPSE, declared: a read tier asked for more than 1.5× its ceiling
+//     stops serving altogether — connections pile up faster than they drain
+//   slow dependency: 30% of requests touch it, it takes 10 s, the timeout
+//     is 1 s and the bulkhead is sized to its 30% share
+//   manual failover 15 minutes; naive retry 3 attempts; retry budget 10%
+//   queue: one message per write, consumers drain 2,000/s, depth 1,000,000
+//   BREAK, declared: a box breaks the design when it has no answer AND
+//     more than half of peak traffic stops
+// ======================================================================
+
+var sdchecklist_DAU = 50000000;
+var sdchecklist_ACT = 40;                 // actions per user per day
+var sdchecklist_SECS = 100000;            // §3: actions/day / 100,000
+var sdchecklist_PEAKX = 3;                // §3: "x2-3 = peak"
+var sdchecklist_CAP = 10000;              // §3: peak QPS / 10,000 = app servers
+var sdchecklist_WSHARE = 0.05;
+var sdchecklist_SHARD_AT = 5000;          // §8: "shard when writes approach 5,000/s"
+var sdchecklist_HIT = 0.95;
+var sdchecklist_CACHE_N = 4;
+var sdchecklist_DBR = 20000;              // read-tier ceiling, reads/s
+var sdchecklist_COLLAPSE = 1.5;
+var sdchecklist_HOLD = 0.05;              // seconds a healthy request holds a thread
+var sdchecklist_DEP = 0.3;                // share of requests touching the dependency
+var sdchecklist_SLOW = 10;                // seconds, the degraded dependency
+var sdchecklist_FAILOVER = 30;            // §7: "~30s write pause"
+var sdchecklist_MANUAL = 900;             // 15 minutes, declared
+var sdchecklist_RETRY = 3;                // naive: 3 immediate attempts
+var sdchecklist_BUDGET = 0.10;            // retry budget, 10% of traffic
+var sdchecklist_QCONS = 2000;             // messages/s the consumer group drains
+var sdchecklist_QCAP = 1000000;           // messages the queue holds
+
+var sdchecklist_ACTIONS = sdchecklist_DAU * sdchecklist_ACT;
+var sdchecklist_AVG = sdchecklist_ACTIONS / sdchecklist_SECS;
+var sdchecklist_PEAK = sdchecklist_AVG * sdchecklist_PEAKX;
+var sdchecklist_SERVERS = Math.ceil(sdchecklist_PEAK / sdchecklist_CAP) + 1;
+var sdchecklist_FLEET = sdchecklist_SERVERS * sdchecklist_CAP;
+var sdchecklist_WPEAK = sdchecklist_PEAK * sdchecklist_WSHARE;
+var sdchecklist_RPEAK = sdchecklist_PEAK - sdchecklist_WPEAK;
+var sdchecklist_POOL = sdchecklist_CAP * sdchecklist_HOLD;   // 500 threads/server
+
+function sdchecklist_n(x) { return Math.round(x).toLocaleString("en-US"); }
+function sdchecklist_pc(x) { return (x * 100).toFixed(1) + "%"; }
+
+// the declared read-tier model: over 1.5x its ceiling it serves nothing
+function sdchecklist_dbServe(miss) {
+  if (miss > sdchecklist_DBR * sdchecklist_COLLAPSE) return 0;
+  return Math.min(miss, sdchecklist_DBR);
+}
+
+// §5's component defaults — the boxes the sweep kills
+var sdchecklist_COMPS = [
+  { key: "lb", name: "Load balancer", def: "L7, least connections" },
+  { key: "app", name: "App tier", def: "stateless × " + sdchecklist_SERVERS },
+  { key: "cache", name: "Cache", def: "Redis cache-aside, TTL + jitter × " + sdchecklist_CACHE_N },
+  { key: "db", name: "Database", def: "Postgres, one primary" },
+  { key: "queue", name: "Queue", def: "SQS for work" },
+  { key: "blob", name: "Blobs", def: "object storage + CDN" },
+  { key: "rate", name: "Rate limit", def: "token bucket at the edge" },
+  { key: "dep", name: "Dependency", def: "third-party call" }
+];
+
+// §7's eight boxes, in the page's order. `depth` is the level of §6's ladder
+// at which the page's own answer becomes available: 2 when the answer is a
+// mechanism you name while describing the component, 3 when it is failure
+// semantics or a number.
+var sdchecklist_ITEMS = [
+  {
+    tag: "app server", box: "App server dies", depth: 2,
+    fix: "stateless, health-checked, LB removes it",
+    calc: function (ans) {
+      if (ans) {
+        var cap = (sdchecklist_SERVERS - 1) * sdchecklist_CAP;
+        return {
+          served: Math.min(sdchecklist_PEAK, cap),
+          cost: "health check pulls it in one interval; " +
+            (sdchecklist_SERVERS - 1) + " servers still cover the peak, with no spare left",
+          comp: { app: (sdchecklist_SERVERS - 1) + " of " + sdchecklist_SERVERS +
+            " up · N+1 spent", lb: "health check removed it" }
+        };
+      }
+      return {
+        served: sdchecklist_PEAK * (sdchecklist_SERVERS - 1) / sdchecklist_SERVERS,
+        cost: "no health check, so the balancer keeps sending 1 in " +
+          sdchecklist_SERVERS + " requests to a box that is gone",
+        comp: { app: (sdchecklist_SERVERS - 1) + " of " + sdchecklist_SERVERS + " up",
+          lb: "still routing to the dead one" }
+      };
+    }
+  },
+  {
+    tag: "cache node", box: "Cache node lost", depth: 2,
+    fix: "consistent hashing; is the DB sized for the miss?",
+    calc: function (ans) {
+      var hit, miss, reads;
+      if (ans) {
+        hit = sdchecklist_HIT * (1 - 1 / sdchecklist_CACHE_N);
+        miss = sdchecklist_RPEAK * (1 - hit);
+        reads = sdchecklist_RPEAK * hit + sdchecklist_dbServe(miss);
+        return {
+          served: Math.min(sdchecklist_RPEAK, reads) + sdchecklist_WPEAK,
+          cost: "1/" + sdchecklist_CACHE_N + " of the keyspace cold, " +
+            sdchecklist_n(miss) + " reads/s at a " + sdchecklist_n(sdchecklist_DBR) +
+            " ceiling — it fits, which is the whole answer to the page's follow-up",
+          comp: { cache: (sdchecklist_CACHE_N - 1) + " of " + sdchecklist_CACHE_N +
+            " up · 1/" + sdchecklist_CACHE_N + " cold",
+            db: sdchecklist_n(miss) + " reads/s absorbed" }
+        };
+      }
+      var keep = 1 / (sdchecklist_CACHE_N - 1);          // modulo remap, N -> N-1
+      hit = sdchecklist_HIT * keep;
+      miss = sdchecklist_RPEAK * (1 - hit);
+      return {
+        served: sdchecklist_RPEAK * hit + sdchecklist_dbServe(miss),
+        cost: "plain <code>% N</code>, so only about 1 key in " +
+          (sdchecklist_CACHE_N - 1) + " keeps its owner: " + sdchecklist_n(miss) +
+          " reads/s at a " + sdchecklist_n(sdchecklist_DBR) + " ceiling, past the " +
+          sdchecklist_COLLAPSE + "× cliff",
+        comp: { cache: (sdchecklist_CACHE_N - 1) + " of " + sdchecklist_CACHE_N +
+          " up · " + sdchecklist_pc(1 - hit / sdchecklist_HIT) + " remapped",
+          db: "collapsed at " + sdchecklist_n(miss) + " reads/s" }
+      };
+    }
+  },
+  {
+    tag: "cache tier", box: "Whole cache tier", depth: 3,
+    fix: "circuit breaker + load shedding",
+    calc: function (ans) {
+      if (ans) {
+        var admitted = sdchecklist_dbServe(sdchecklist_DBR);
+        return {
+          served: admitted + sdchecklist_WPEAK,
+          cost: "the breaker admits exactly " + sdchecklist_n(sdchecklist_DBR) +
+            " reads/s and rejects the other " +
+            sdchecklist_n(sdchecklist_RPEAK - sdchecklist_DBR) +
+            " immediately — a deliberate, survivable " +
+            sdchecklist_pc((admitted + sdchecklist_WPEAK) / sdchecklist_PEAK),
+          comp: { cache: "0 of " + sdchecklist_CACHE_N + " up",
+            db: "at ceiling, breaker shedding" }
+        };
+      }
+      return {
+        served: sdchecklist_dbServe(sdchecklist_RPEAK),
+        cost: "all " + sdchecklist_n(sdchecklist_RPEAK) + " reads/s land on a " +
+          sdchecklist_n(sdchecklist_DBR) + " tier — " +
+          (sdchecklist_RPEAK / sdchecklist_DBR).toFixed(1) +
+          "×, past the cliff, so it serves nothing rather than most",
+        comp: { cache: "0 of " + sdchecklist_CACHE_N + " up", db: "fell over" }
+      };
+    }
+  },
+  {
+    tag: "queue", box: "Queue backs up", depth: 2,
+    fix: "alert on consumer lag; degrade, not break",
+    calc: function (ans) {
+      var grow = sdchecklist_WPEAK - sdchecklist_QCONS;
+      var fill = sdchecklist_QCAP / grow;
+      if (ans) {
+        return {
+          served: sdchecklist_PEAK,
+          cost: "lag grows " + sdchecklist_n(grow) + " msg/s and alarms long " +
+            "before the " + sdchecklist_n(fill / 60) +
+            " minutes it would take to fill; the async feature is late, the " +
+            "synchronous path is untouched",
+          comp: { queue: "lag rising " + sdchecklist_n(grow) + "/s · alerting" }
+        };
+      }
+      return {
+        served: sdchecklist_PEAK - sdchecklist_WPEAK,
+        cost: "nothing watches lag, so it fills in " +
+          sdchecklist_n(fill / 60) + " minutes and producers start blocking — " +
+          "the write path fails with the queue",
+        comp: { queue: "full at " + sdchecklist_n(sdchecklist_QCAP) +
+          " · producers blocked", db: "writes rejected" }
+      };
+    }
+  },
+  {
+    tag: "DB leader", box: "DB leader fails", depth: 2,
+    fix: "~30s write pause, cold cache, possible lost async writes",
+    calc: function (ans) {
+      var secs = ans ? sdchecklist_FAILOVER : sdchecklist_MANUAL;
+      var lost = secs * sdchecklist_WPEAK;
+      return {
+        served: sdchecklist_RPEAK,
+        cost: (ans ? "automated failover: a " + secs + "-second write pause, " +
+          sdchecklist_n(lost) + " writes queued or rejected, and the new leader " +
+          "starts on a cold cache"
+          : "no automated failover, so writes are down until a human is paged — " +
+          sdchecklist_n(secs / 60) + " minutes and " + sdchecklist_n(lost) +
+          " writes, " + (sdchecklist_MANUAL / sdchecklist_FAILOVER).toFixed(0) +
+          "× the answered case"),
+        comp: { db: ans ? "failing over, " + secs + " s" : "no leader, " +
+          sdchecklist_n(secs / 60) + " min", cache: "cold after promotion" }
+      };
+    }
+  },
+  {
+    tag: "slow dep", box: "Dependency SLOW", depth: 3,
+    fix: "worse than down. Timeouts, breaker, bulkhead.",
+    calc: function (ans) {
+      if (ans) {
+        var free = sdchecklist_POOL * (1 - sdchecklist_DEP);
+        var cap = free / sdchecklist_HOLD * sdchecklist_SERVERS;
+        var safe = sdchecklist_PEAK * (1 - sdchecklist_DEP);
+        return {
+          served: Math.min(safe, cap),
+          cost: "the bulkhead caps it at " +
+            sdchecklist_pc(sdchecklist_DEP) + " of the pool, so " +
+            sdchecklist_n(free) + " threads a server stay free: the other " +
+            sdchecklist_n(safe) + " QPS is untouched and the dependency's " +
+            sdchecklist_n(sdchecklist_PEAK * sdchecklist_DEP) +
+            " gets a fast fallback",
+          comp: { dep: "slow · breaker open, 1 s timeout",
+            app: sdchecklist_n(free) + " of " + sdchecklist_n(sdchecklist_POOL) +
+              " threads free" }
+        };
+      }
+      var hold = sdchecklist_DEP * sdchecklist_SLOW +
+        (1 - sdchecklist_DEP) * sdchecklist_HOLD;
+      var cap2 = sdchecklist_POOL / hold * sdchecklist_SERVERS;
+      return {
+        served: Math.min(sdchecklist_PEAK, cap2),
+        cost: "one shared pool and no timeout, so the average hold goes " +
+          sdchecklist_HOLD + " s → " + hold.toFixed(2) + " s and the fleet's " +
+          "throughput goes " + sdchecklist_n(sdchecklist_FLEET) + " → " +
+          sdchecklist_n(cap2) + " QPS. The dependency is not down",
+        comp: { dep: "slow · " + sdchecklist_SLOW + " s, no timeout",
+          app: "all " + sdchecklist_n(sdchecklist_POOL) + " threads held" }
+      };
+    }
+  },
+  {
+    tag: "retry storm", box: "Retry storm", depth: 3,
+    fix: "backoff + jitter + cap + retry budget",
+    calc: function (ans) {
+      var mult = ans ? 1 + sdchecklist_BUDGET : sdchecklist_RETRY;
+      var offered = sdchecklist_PEAK * mult;
+      var attempts = Math.min(sdchecklist_FLEET, offered);
+      return {
+        served: attempts / mult,
+        cost: (ans ? "the budget caps retries at " +
+          sdchecklist_pc(sdchecklist_BUDGET) + " of traffic: " +
+          sdchecklist_n(offered) + " attempts/s against a " +
+          sdchecklist_n(sdchecklist_FLEET) + " fleet, still inside capacity"
+          : sdchecklist_RETRY + " immediate attempts each: " +
+          sdchecklist_n(offered) + " attempts/s against a " +
+          sdchecklist_n(sdchecklist_FLEET) + " fleet, so the tier spends " +
+          sdchecklist_pc(1 - 1 / sdchecklist_RETRY) + " of itself on duplicates"),
+        comp: { app: sdchecklist_n(attempts) + " of " + sdchecklist_n(offered) +
+          " attempts/s served", rate: ans ? "budget holding" : "bypassed by clients" }
+      };
+    }
+  },
+  {
+    tag: "region", box: "Region lost", depth: 3, scope: true,
+    fix: "in scope? If not, say so.",
+    calc: function (ans) {
+      return {
+        served: 0,
+        cost: (ans ? "single region, declared out of scope in minute 3 and " +
+          "written on the board — the only box whose answer is a sentence " +
+          "rather than a mechanism"
+          : "never scoped, so the design quietly implies something it cannot " +
+          "do, and the first person to ask finds out"),
+        comp: { lb: "unreachable", app: "unreachable", db: "unreachable",
+          cache: "unreachable", queue: "unreachable", blob: "CDN still serving",
+          rate: "unreachable", dep: "unreachable" }
+      };
+    }
+  }
+];
+
+function sdchecklist_answered(item, level) { return level >= item.depth; }
+
+function sdchecklist_broke(item, level) {
+  if (sdchecklist_answered(item, level)) return false;
+  return item.calc(false).served < sdchecklist_PEAK * 0.5;
+}
+
+function sdchecklist_score(level) {
+  var ans = 0, br = 0, worst = -1, worstS = Infinity, i, r;
+  for (i = 0; i < sdchecklist_ITEMS.length; i++) {
+    var a = sdchecklist_answered(sdchecklist_ITEMS[i], level);
+    if (a) ans++;
+    if (sdchecklist_broke(sdchecklist_ITEMS[i], level)) br++;
+    if (!sdchecklist_ITEMS[i].scope) {
+      r = sdchecklist_ITEMS[i].calc(a);
+      if (r.served < worstS) { worstS = r.served; worst = i; }
+    }
+  }
+  return { ans: ans, broke: br, worst: worst, worstServed: worstS };
+}
+
+function sdchecklist_ledger() {
+  var rows = [], L, s;
+  for (L = 1; L <= 3; L++) {
+    s = sdchecklist_score(L);
+    rows.push([
+      "level " + L,
+      s.ans + " / " + sdchecklist_ITEMS.length,
+      s.broke + " / " + sdchecklist_ITEMS.length,
+      sdchecklist_ITEMS[s.worst].box,
+      sdchecklist_pc(s.worstServed / sdchecklist_PEAK)
+    ]);
+  }
+  return rows;
+}
+
+// §3's four formulas, worked once, to size the boxes the sweep then kills
+function sdchecklist_sizing() {
+  return [
+    ["actions/day ÷ 100,000",
+      sdchecklist_n(sdchecklist_ACTIONS) + " ÷ " + sdchecklist_n(sdchecklist_SECS),
+      sdchecklist_n(sdchecklist_AVG) + " avg QPS"],
+    ["× " + sdchecklist_PEAKX + " for peak",
+      sdchecklist_n(sdchecklist_AVG) + " × " + sdchecklist_PEAKX,
+      sdchecklist_n(sdchecklist_PEAK) + " peak QPS"],
+    ["peak ÷ 10,000, round up, +1 spare",
+      sdchecklist_n(sdchecklist_PEAK) + " ÷ " + sdchecklist_n(sdchecklist_CAP) + " + 1",
+      sdchecklist_SERVERS + " app servers"],
+    ["writes at peak",
+      sdchecklist_n(sdchecklist_PEAK) + " × " + sdchecklist_pc(sdchecklist_WSHARE),
+      sdchecklist_n(sdchecklist_WPEAK) + " writes/s"],
+    ["threshold: shard?",
+      sdchecklist_n(sdchecklist_WPEAK) + " vs " + sdchecklist_n(sdchecklist_SHARD_AT),
+      "one primary, do not shard"],
+    ["reads ÷ writes",
+      sdchecklist_n(sdchecklist_RPEAK) + " ÷ " + sdchecklist_n(sdchecklist_WPEAK),
+      (sdchecklist_RPEAK / sdchecklist_WPEAK).toFixed(0) + ":1 → cache"]
+  ];
+}
+
+function sdchecklist_run(level, label) {
+  var steps = [], phases = ["the design"], i, item, ans, r, out, lbl;
+  var s = sdchecklist_score(level);
+  var lv = ["boxes only", "mechanisms named", "failure semantics"][level - 1];
+
+  steps.push({
+    level: level, idx: -1, sizing: true,
+    caption: "<b>Level " + level + " — " + lv + ".</b> " +
+      "The same design in all three tabs: " + sdchecklist_SERVERS +
+      " stateless app servers, " + sdchecklist_CACHE_N + " cache nodes, one " +
+      "Postgres primary, a queue and a CDN — §5's defaults, sized by §3's " +
+      "formulas against <b>" + sdchecklist_n(sdchecklist_PEAK) +
+      " peak QPS</b>. Minute 40: stop adding boxes and start killing them. " +
+      "<b>" + s.ans + " of " + sdchecklist_ITEMS.length +
+      "</b> boxes have an answer at this depth. Press Play."
+  });
+
+  for (i = 0; i < sdchecklist_ITEMS.length; i++) {
+    item = sdchecklist_ITEMS[i];
+    ans = sdchecklist_answered(item, level);
+    r = item.calc(ans);
+    out = item.scope
+      ? (ans ? "OUT OF SCOPE" : "UNSCOPED")
+      : !ans
+        ? (r.served < sdchecklist_PEAK * 0.5 ? "BREAKS" : "LIMPS")
+        : (r.served >= sdchecklist_PEAK * 0.9 ? "HOLDS" : "DEGRADES");
+    lbl = item.tag;
+    phases.push(lbl);
+
+    steps.push({
+      level: level, idx: i, ans: ans, res: r, out: out,
+      ledger: i === sdchecklist_ITEMS.length - 1,
+      flag: out === "BREAKS" ? "bad" : out === "HOLDS" ? "ok"
+        : out === "UNSCOPED" ? "bad" : "warn",
+      caption: "<b>[ ] " + item.box + "</b> — " +
+        (ans
+          ? "the answer exists at level " + item.depth + ": <i>" + item.fix +
+            "</i> &mdash; " + r.cost + ". <b>" +
+            sdchecklist_pc(r.served / sdchecklist_PEAK) + " of peak still served</b>"
+          : "<b>no answer at level " + level + "</b>. The page's is <i>" + item.fix +
+            "</i> &mdash; it arrives at level " + item.depth + ". " + r.cost +
+            ". <b>" + sdchecklist_pc(r.served / sdchecklist_PEAK) +
+            " of peak still served</b>") +
+        (i === sdchecklist_ITEMS.length - 1
+          ? ". <br><b>Sweep complete: " + s.ans + " of " + sdchecklist_ITEMS.length +
+            " boxes answered, " + s.broke + " that break the design.</b> " +
+            (level === 3
+              ? "<i>Every box has an answer, two of them are &ldquo;this " +
+                "degrades on purpose&rdquo; and one is a scoping sentence. " +
+                "That is what §6 means by <b>level 3 is the interview</b>.</i>"
+              : "<i>The design did not change between the tabs. Only what can " +
+                "be said about it did — and " + s.broke + " boxes are still " +
+                "unanswered, which is " + s.broke + " questions you will be " +
+                "asked.</i>")
+          : "")
+    });
+  }
+
+  return { id: "l" + level, label: label, phases: phases, steps: steps };
+}
+
+function sdchecklist_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined
+    });
+  }
+  return d.pills(chips);
+}
+
+S["sdchecklist"] = {
+  title: "Kill all eight boxes, at three depths",
+  note: "One design, built from §5's defaults and sized by §3's formulas: <b>" +
+    sdchecklist_n(sdchecklist_DAU) + " DAU × " + sdchecklist_ACT +
+    " actions/day ÷ 100,000 = " + sdchecklist_n(sdchecklist_AVG) +
+    " avg QPS</b>, × " + sdchecklist_PEAKX + " = <b>" +
+    sdchecklist_n(sdchecklist_PEAK) + " peak</b>, ÷ 10,000 and rounded up plus " +
+    "one spare = <b>" + sdchecklist_SERVERS + " app servers</b> (" +
+    sdchecklist_n(sdchecklist_FLEET) + " QPS of fleet). " +
+    sdchecklist_pc(sdchecklist_WSHARE) + " of actions are writes, so <b>" +
+    sdchecklist_n(sdchecklist_WPEAK) + " writes/s</b> — under §8's " +
+    sdchecklist_n(sdchecklist_SHARD_AT) + "/s shard line, so one primary — and " +
+    "<b>" + (sdchecklist_RPEAK / sdchecklist_WPEAK).toFixed(0) +
+    ":1</b> reads to writes, over §3's 10× line, so a cache: " +
+    sdchecklist_CACHE_N + " nodes at " + sdchecklist_pc(sdchecklist_HIT) +
+    " behind a " + sdchecklist_n(sdchecklist_DBR) + " reads/s tier. A server " +
+    "holding " + sdchecklist_n(sdchecklist_CAP) + " QPS for " +
+    (sdchecklist_HOLD * 1000) + " ms has " + sdchecklist_n(sdchecklist_POOL) +
+    " threads, which is where the slow-dependency arithmetic comes from. " +
+    "<b>§7's eight boxes are then killed one at a time, each against the " +
+    "healthy design</b>, and a box <i>breaks</i> it when there is no answer " +
+    "and more than half of peak stops.",
+  interval: 1700,
+
+  scenarios: [
+    sdchecklist_run(1, "Level 1"),
+    sdchecklist_run(2, "Level 2"),
+    sdchecklist_run(3, "Level 3")
+  ],
+
+  draw: function (step, d, ctx) {
+    var i, c, item = step.idx >= 0 ? sdchecklist_ITEMS[step.idx] : null;
+    var res = step.res || null;
+    var served = res ? res.served : sdchecklist_PEAK;
+    var pct = served / sdchecklist_PEAK * 100;
+    var live = step.idx >= 0;
+    var s = sdchecklist_score(step.level);
+
+    var flag = !live ? "idle" : step.flag;
+
+    // the eight-box sweep, as the checklist it is
+    var cells = [];
+    for (i = 0; i < sdchecklist_ITEMS.length; i++) {
+      var a = sdchecklist_answered(sdchecklist_ITEMS[i], step.level);
+      cells.push({
+        label: String(i + 1),
+        flag: i > step.idx ? "idle"
+          : i === step.idx ? (a ? "ok" : "bad")
+            : (a ? "ok" : "warn"),
+        title: sdchecklist_ITEMS[i].box + " — " +
+          (a ? "answered at level " + sdchecklist_ITEMS[i].depth +
+            ": " + sdchecklist_ITEMS[i].fix
+            : "no answer until level " + sdchecklist_ITEMS[i].depth)
+      });
+    }
+
+    var board = d.node({
+      title: live ? "killing: " + item.box : "the design, nothing killed yet",
+      status: live ? step.out : "HEALTHY",
+      statusFlag: flag,
+      badge: "level " + step.level + " of 3",
+      meta: live
+        ? (step.ans ? "answer available at level " + item.depth
+          : "answer arrives at level " + item.depth)
+        : "§5 defaults, sized by §3",
+      flag: flag,
+      gauges: [{
+        label: "peak traffic still served",
+        pct: pct,
+        value: sdchecklist_n(served) + " of " + sdchecklist_n(sdchecklist_PEAK) +
+          " QPS",
+        flag: !live ? "idle" : pct >= 90 ? "ok" : pct >= 50 ? "warn" : "bad"
+      }],
+      rows: [
+        { label: "boxes answered at this depth",
+          value: s.ans + " of " + sdchecklist_ITEMS.length,
+          flag: s.ans === sdchecklist_ITEMS.length ? "ok" : s.ans > 0 ? "warn" : "bad" },
+        { label: "boxes that break the design",
+          value: s.broke + " of " + sdchecklist_ITEMS.length,
+          flag: s.broke === 0 ? "ok" : s.broke < 3 ? "warn" : "bad" },
+        { label: "the page's answer",
+          value: live ? item.fix : "not asked yet",
+          flag: !live ? "idle" : step.ans ? "ok" : "bad" }
+      ]
+    });
+
+    var head = d.cols([
+      d.stack([
+        d.big(sdchecklist_pc(served / sdchecklist_PEAK), "of peak served", flag),
+        d.big(live ? step.out : "READY", "outcome", flag),
+        d.pill(live ? "box " + (step.idx + 1) + " of " + sdchecklist_ITEMS.length
+          : "minute 40", live ? flag : "idle")
+      ]),
+      board
+    ]);
+
+    var rows = [];
+    for (i = 0; i < sdchecklist_COMPS.length; i++) {
+      c = sdchecklist_COMPS[i];
+      rows.push([
+        c.name, c.def,
+        res && res.comp && res.comp[c.key] ? res.comp[c.key] : "healthy"
+      ]);
+    }
+
+    var out = [sdchecklist_phases(d, ctx), head,
+      d.cells(cells, { label: "§7 failure sweep · eight boxes", dense: true }),
+      d.table(["component", "§5 default", "state"], rows)];
+
+    if (step.sizing) {
+      out.push(d.table(["§3 formula", "worked", "result"], sdchecklist_sizing()));
+    }
+    if (step.ledger) {
+      out.push(d.table(
+        ["depth", "answered", "breaks", "worst box", "served there"],
+        sdchecklist_ledger()));
+    }
+
+    out.push(d.note(
+      "Each box is killed against the <b>healthy</b> design, not on top of the " +
+      "last one — that is how the sweep is run in the round. <b>Green</b> is a " +
+      "box with an answer at this depth, <b>red</b> the one being killed without " +
+      "one. The served figure is arithmetic on the sizing in the note, not a " +
+      "verdict: " + sdchecklist_n(sdchecklist_FLEET) + " QPS of fleet, " +
+      sdchecklist_n(sdchecklist_DBR) + " reads/s of read tier, " +
+      sdchecklist_n(sdchecklist_POOL) + " threads a server.",
+      flag === "bad" ? "bad" : undefined));
+
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
   // ======================================================================
   // SIM · sddatabases  (databases.md)
   // Section 2 — B-tree versus LSM-tree — is the one part of this page with a
@@ -3896,6 +5771,691 @@ S["sdapidesign"] = {
       ]);
     }
   };
+
+  // ====================================================================
+// ======================================================================
+// SIM · sddesignchat  (design-chat.md)
+//
+// §4 hands over the time axis as a numbered list and calls it "the
+// correctness question":
+//     1. Alice's client sends {client_msg_id, conversation_id, text}
+//     2. Gateway -> message service
+//     3. PERSIST to the message store          <- BEFORE anything else
+//     4. ACK to Alice ("sent")                  <- she can stop retrying
+//     5. Look up Bob's gateway in the registry
+//     6. Route to that gateway -> push over Bob's socket
+//     7. Bob's client ACKs -> mark "delivered"
+//     8. Bob opens the chat -> "read"
+// So: ONE message from Alice on gateway 7 to Bob on gateway 412, walked
+// step by step, three times.
+//
+//   1. ACK FIRST — steps 3 and 4 swapped, which is the one thing the page
+//      says not to do. The store write then fails and the message is gone
+//      while the sender believes it was sent.
+//   2. PERSIST THEN ACK — the page's order, exactly.
+//   3. STALE REGISTRY — the same correct order, but step 5 returns a
+//      gateway that died inside its TTL. The send fails and falls through
+//      to the offline push path, which is why the page insists that path
+//      is the fallback for EVERY failed delivery; the duplicate that
+//      results is deduped on client_msg_id.
+//
+// The whole sim turns on one number: the difference between acking at
+// step 3 and acking at step 4 is exactly the store write, and it is
+// computed below rather than asserted.
+//
+// CONFIG — page figures used verbatim
+//   50M DAU × 40 messages/day = 2B/day        §2, and 2e9/86,400 is the
+//                                             page's "~23,000/s"
+//   peak ~70,000/s                            §2, = 3× average
+//   ~10M concurrent WebSockets                §2
+//   10k–50k connections per gateway           §2 (30k mid-point taken),
+//                                             giving the page's 200–1,000
+//   ~30 KB per connection -> ~300 GB          §2, reproduced
+//   300 B per message -> 600 GB/day,          §2, reproduced, ×3 replication
+//     ~220 TB/yr, ~660 TB/yr replicated
+//   p99 < 500 ms when both online             §1 non-functional
+//   presence: 10M × 200 contacts × 3/hour     §7, = the page's ~1.7M/s
+//   heartbeat ~30 s into Redis, 60 s TTL      §7
+//   LIMIT 50 on the history query             §5
+//   Alice on gateway 7, Bob on gateway 412    §4
+//   partition conversation_id, cluster        §5
+//     message_id DESC; Snowflake IDs
+//
+// CONFIG — declared here, because the page states no latencies
+//   WebSocket frame client<->gateway   40 ms   (half a mobile RTT)
+//   gateway -> message service          2 ms
+//   quorum write to the message store  15 ms
+//   registry lookup in Redis            1 ms
+//   pub/sub route to another gateway    3 ms
+//   APNs/FCM push, end to end       2,000 ms
+//   store write timeout               200 ms
+//   12 messages already in the conversation; reconnect backoff spread 30 s
+// ======================================================================
+
+var sddesignchat_DAU = 50000000;
+var sddesignchat_PER = 40;                  // messages per user per day
+var sddesignchat_SECDAY = 86400;
+var sddesignchat_PEAKX = 3;
+var sddesignchat_CONN = 10000000;           // concurrent WebSockets
+var sddesignchat_PERGW = 30000;             // mid of the page's 10k-50k
+var sddesignchat_KBCONN = 30;               // KB of buffers + TLS per socket
+var sddesignchat_BYTES = 300;               // bytes per stored message
+var sddesignchat_REPL = 3;
+var sddesignchat_CONTACTS = 200;
+var sddesignchat_TOGGLES = 3;               // presence changes per hour
+var sddesignchat_HEARTBEAT = 30;            // seconds
+var sddesignchat_TTL = 60;                  // seconds
+var sddesignchat_P99 = 500;                 // ms, delivery target when both online
+var sddesignchat_LIMIT = 50;                // history page size
+var sddesignchat_PRIOR = 12;                // messages already in this conversation
+var sddesignchat_BACKOFF = 30;              // seconds of jittered reconnect spread
+
+// declared latencies, ms
+var sddesignchat_WS = 40;
+var sddesignchat_HOP = 2;
+var sddesignchat_PERSIST = 15;
+var sddesignchat_REG = 1;
+var sddesignchat_ROUTE = 3;
+var sddesignchat_PUSH = 2000;
+var sddesignchat_WTIMEOUT = 200;
+
+var sddesignchat_MSGDAY = sddesignchat_DAU * sddesignchat_PER;
+var sddesignchat_AVG = sddesignchat_MSGDAY / sddesignchat_SECDAY;
+var sddesignchat_PEAK = sddesignchat_AVG * sddesignchat_PEAKX;
+var sddesignchat_GWS = Math.ceil(sddesignchat_CONN / sddesignchat_PERGW);
+var sddesignchat_RAMGB = sddesignchat_CONN * sddesignchat_KBCONN / 1000000;
+var sddesignchat_DAYGB = sddesignchat_MSGDAY * sddesignchat_BYTES / 1e9;
+var sddesignchat_YRTB = sddesignchat_DAYGB * 365 / 1000;
+var sddesignchat_PRESENCE =
+  sddesignchat_CONN * sddesignchat_TOGGLES * sddesignchat_CONTACTS / 3600;
+
+// the three end-to-end latencies, all derived from the six hops above
+var sddesignchat_ACK_EARLY = sddesignchat_WS + sddesignchat_HOP + sddesignchat_WS;
+var sddesignchat_ACK_RIGHT = sddesignchat_ACK_EARLY + sddesignchat_PERSIST;
+var sddesignchat_BOB_ONLINE = sddesignchat_WS + sddesignchat_HOP +
+  sddesignchat_PERSIST + sddesignchat_REG + sddesignchat_ROUTE + sddesignchat_WS;
+var sddesignchat_BOB_PUSH = sddesignchat_WS + sddesignchat_HOP +
+  sddesignchat_PERSIST + sddesignchat_REG + sddesignchat_ROUTE + sddesignchat_PUSH;
+
+var sddesignchat_PATH = ["Alice", "gw 7", "service", "store", "registry",
+  "gw 412", "Bob"];
+
+function sddesignchat_n(x) { return Math.round(x).toLocaleString("en-US"); }
+
+function sddesignchat_ledger() {
+  return [
+    ["ack first", sddesignchat_ACK_EARLY + " ms", "no", "never", "0", "1"],
+    ["persist then ack", sddesignchat_ACK_RIGHT + " ms", "yes",
+      sddesignchat_BOB_ONLINE + " ms", "0", "0"],
+    ["stale registry", sddesignchat_ACK_RIGHT + " ms", "yes",
+      sddesignchat_n(sddesignchat_BOB_PUSH) + " ms (push)", "1, deduped", "0"]
+  ];
+}
+
+// a frame. `at` is the index on the path lane; `failed` marks path boxes red.
+function sddesignchat_f(o) {
+  return {
+    caption: o.caption,
+    flag: o.flag,
+    t: o.t || 0,
+    at: o.at === undefined ? -1 : o.at,
+    failed: o.failed || [],
+    trace: o.trace || [],
+    stored: !!o.stored,
+    lost: !!o.lost,
+    state: o.state || "not sent",
+    aliceMs: o.aliceMs === undefined ? 0 : o.aliceMs,
+    bobMs: o.bobMs === undefined ? 0 : o.bobMs,
+    regStale: !!o.regStale,
+    dup: o.dup || 0,
+    deduped: !!o.deduped,
+    storm: !!o.storm,
+    ledger: !!o.ledger,
+    live: o.live !== false
+  };
+}
+
+// ---- one trace row per real event; `advance` is 0 for a branch that does
+// ---- not hold up the delivery path (the ack travelling back to Alice)
+function sddesignchat_tracer() {
+  var tr = [], t = 0;
+  return {
+    add: function (label, cost, advance) {
+      t += advance;
+      tr = tr.concat([[tr.length + 1, label, cost, t]]);
+      return t;
+    },
+    now: function () { return t; },
+    rows: function () { return tr; }
+  };
+}
+
+// ---- run 1: ack before persist -----------------------------------------
+function sddesignchat_runEarly() {
+  var x = sddesignchat_tracer();
+  var s = [];
+
+  s.push(sddesignchat_f({
+    live: false, at: -1,
+    caption: "Alice is on <b>gateway 7</b>, Bob on <b>gateway 412</b>, both " +
+      "holding WebSockets. The conversation has <b>" + sddesignchat_PRIOR +
+      "</b> messages in it. This run does §4's eight steps with <b>3 and 4 " +
+      "swapped</b> — ack first, persist second. Press Play."
+  }));
+
+  x.add("Alice's client sends {client_msg_id, conversation_id, text}",
+    "+" + sddesignchat_WS + " ms", sddesignchat_WS);
+  s.push(sddesignchat_f({
+    at: 1, t: x.now(), trace: x.rows(), state: "in flight", flag: "warn",
+    caption: "<b>1 · Alice's client sends.</b> It generates a <code>" +
+      "client_msg_id</code> UUID itself — that is what makes her own retry safe, " +
+      "and it is the key Bob's client would deduplicate on. The frame reaches " +
+      "gateway 7 in <b>" + sddesignchat_WS + " ms</b>."
+  }));
+
+  x.add("gateway 7 → message service", "+" + sddesignchat_HOP + " ms",
+    sddesignchat_HOP);
+  s.push(sddesignchat_f({
+    at: 2, t: x.now(), trace: x.rows(), state: "in flight", flag: "warn",
+    caption: "<b>2 · Gateway → message service.</b> The gateway holds the socket " +
+      "and nothing else; all the logic is behind it. <b>" + x.now() +
+      " ms</b> in, and the message exists only in memory on one box."
+  }));
+
+  x.add("ACK \"sent\" dispatched to Alice",
+    "+" + sddesignchat_WS + " ms to her", 0);
+  s.push(sddesignchat_f({
+    at: 2, t: x.now(), trace: x.rows(), state: "sent (claimed)",
+    aliceMs: sddesignchat_ACK_EARLY, flag: "bad",
+    caption: "<b>3 · ACK to Alice — before anything is written.</b> It leaves at " +
+      x.now() + " ms and her client shows the tick at <b>" +
+      sddesignchat_ACK_EARLY + " ms</b>, then <i>stops retrying</i>. That is the " +
+      "whole appeal: <b>" +
+      (sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) +
+      " ms</b> faster than the correct order — exactly one store write."
+  }));
+
+  s.push(sddesignchat_f({
+    at: 3, t: x.now(), trace: x.rows(), state: "sent (claimed)",
+    aliceMs: sddesignchat_ACK_EARLY, flag: "bad",
+    caption: "<b>4 · Only now does the write go to the store.</b> Partition key " +
+      "<code>conversation_id</code>, clustering key <code>message_id DESC</code>. " +
+      "Alice's tick is already on her screen, and her retry timer is already " +
+      "cancelled, while this write has not returned."
+  }));
+
+  x.add("write to the store times out", "+" + sddesignchat_WTIMEOUT + " ms",
+    sddesignchat_WTIMEOUT);
+  s.push(sddesignchat_f({
+    at: 3, t: x.now(), trace: x.rows(), failed: [3], state: "lost", lost: true,
+    aliceMs: sddesignchat_ACK_EARLY, flag: "bad",
+    caption: "<b>The write times out at " + x.now() +
+      " ms</b> — the shard is mid-failover. The service now knows the message " +
+      "does not exist, <b>" + (x.now() - sddesignchat_ACK_EARLY) +
+      " ms after telling Alice it did</b>. There is nobody left to tell: her " +
+      "client acked, cancelled its retry and moved on."
+  }));
+
+  s.push(sddesignchat_f({
+    at: 4, t: x.now(), trace: x.rows(), failed: [3], state: "lost", lost: true,
+    aliceMs: sddesignchat_ACK_EARLY, flag: "bad",
+    caption: "<b>5–6 · Steps 5 and 6 have nothing to carry.</b> There is no " +
+      "<code>message_id</code>, because ids come from the write. The registry " +
+      "lookup happens and the route is abandoned. <b>Nothing errors anywhere a " +
+      "user can see it.</b>"
+  }));
+
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), failed: [3], state: "lost", lost: true,
+    aliceMs: sddesignchat_ACK_EARLY, flag: "bad",
+    caption: "<b>Bob reconnects and syncs the conversation.</b> <code>SELECT … " +
+      "WHERE conversation_id = ? ORDER BY message_id DESC LIMIT " +
+      sddesignchat_LIMIT + "</code> returns <b>" + sddesignchat_PRIOR +
+      "</b> rows — the same " + sddesignchat_PRIOR + " as before Alice typed. " +
+      "The offline path cannot rescue it either: <b>that path replays the store, " +
+      "and the store never had it.</b>"
+  }));
+
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), failed: [3], state: "lost", lost: true,
+    aliceMs: sddesignchat_ACK_EARLY, flag: "bad", ledger: true,
+    caption: "<b>One message lost, and the hard requirement with it.</b> The " +
+      "page's non-functional list says <i>messages must NEVER be lost</i>, and " +
+      "swapping two lines broke it. What the swap bought was <b>" +
+      (sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) + " ms</b> of a <b>" +
+      sddesignchat_P99 + " ms</b> budget — <b>" +
+      ((sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) /
+        sddesignchat_P99 * 100).toFixed(1) +
+      "%</b> — which is why the ordering is worth saying out loud rather than " +
+      "assuming."
+  }));
+
+  return {
+    id: "early", label: "Ack first",
+    phases: ["at rest", "1 · send", "2 · service", "3 · ACK", "4 · persist",
+      "write fails", "nothing to route", "Bob syncs", "verdict"],
+    steps: s
+  };
+}
+
+// ---- run 2: the page's order -------------------------------------------
+function sddesignchat_runRight() {
+  var x = sddesignchat_tracer();
+  var s = [];
+
+  s.push(sddesignchat_f({
+    live: false, at: -1,
+    caption: "Same two people, same two gateways, same conversation of <b>" +
+      sddesignchat_PRIOR + "</b> messages. This run is §4's order as written, " +
+      "with <b>persist before ack</b>. Press Play."
+  }));
+
+  x.add("Alice's client sends {client_msg_id, conversation_id, text}",
+    "+" + sddesignchat_WS + " ms", sddesignchat_WS);
+  s.push(sddesignchat_f({
+    at: 1, t: x.now(), trace: x.rows(), state: "in flight", flag: "warn",
+    caption: "<b>1 · Alice's client sends</b> with its own <code>client_msg_id" +
+      "</code>. Identical to the first tab so far — the two runs diverge at " +
+      "step 3 and nowhere else."
+  }));
+
+  x.add("gateway 7 → message service", "+" + sddesignchat_HOP + " ms",
+    sddesignchat_HOP);
+  s.push(sddesignchat_f({
+    at: 2, t: x.now(), trace: x.rows(), state: "in flight", flag: "warn",
+    caption: "<b>2 · Gateway → message service.</b> <b>" + x.now() +
+      " ms</b> in, and the message still exists only in memory on one box."
+  }));
+
+  x.add("PERSIST to the message store", "+" + sddesignchat_PERSIST + " ms",
+    sddesignchat_PERSIST);
+  s.push(sddesignchat_f({
+    at: 3, t: x.now(), trace: x.rows(), stored: true, state: "persisted",
+    flag: "ok",
+    caption: "<b>3 · PERSIST — before anything else.</b> One partition write: " +
+      "<code>conversation_id</code> as the partition key, a Snowflake <code>" +
+      "message_id</code> as the clustering key, descending. The id is " +
+      "timestamp-prefixed, so it sorts correctly <i>and</i> needs no central " +
+      "allocator. <b>" + x.now() + " ms</b>, and the message now survives every " +
+      "box in this diagram."
+  }));
+
+  x.add("ACK \"sent\" dispatched to Alice",
+    "+" + sddesignchat_WS + " ms to her", 0);
+  s.push(sddesignchat_f({
+    at: 3, t: x.now(), trace: x.rows(), stored: true, state: "sent",
+    aliceMs: sddesignchat_ACK_RIGHT, flag: "ok",
+    caption: "<b>4 · ACK to Alice; her tick appears at " +
+      sddesignchat_ACK_RIGHT + " ms.</b> She can stop retrying, and the ack is " +
+      "<i>true</i> — it means &ldquo;this is durable&rdquo;, not &ldquo;I have " +
+      "seen it&rdquo;. <b>" +
+      (sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) + " ms slower than tab " +
+      "1, and that " + (sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) +
+      " ms is the entire durability guarantee.</b> The ack does not hold up the " +
+      "delivery path — that carries on in parallel."
+  }));
+
+  x.add("registry lookup: bob → gateway", "+" + sddesignchat_REG + " ms",
+    sddesignchat_REG);
+  s.push(sddesignchat_f({
+    at: 4, t: x.now(), trace: x.rows(), stored: true, state: "sent",
+    aliceMs: sddesignchat_ACK_RIGHT, flag: "ok",
+    caption: "<b>5 · Look up Bob in the connection registry.</b> Redis, <code>" +
+      "user_id → gateway_id</code>, TTL <b>" + sddesignchat_TTL +
+      " s</b> refreshed by a <b>" + sddesignchat_HEARTBEAT +
+      " s</b> heartbeat. One short string per connected user — <b>" +
+      sddesignchat_n(sddesignchat_CONN) + "</b> of them across <b>" +
+      sddesignchat_n(sddesignchat_GWS) + "</b> gateways — answered in <b>" +
+      sddesignchat_REG + " ms</b>: <code>bob → gateway 412</code>."
+  }));
+
+  x.add("route via pub/sub → gw 412 → Bob's socket",
+    "+" + (sddesignchat_ROUTE + sddesignchat_WS) + " ms",
+    sddesignchat_ROUTE + sddesignchat_WS);
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), stored: true, state: "on Bob's screen",
+    aliceMs: sddesignchat_ACK_RIGHT, bobMs: sddesignchat_BOB_ONLINE, flag: "ok",
+    caption: "<b>6 · Routed to gateway 412 and pushed down Bob's socket.</b> " +
+      "End to end <b>" + sddesignchat_BOB_ONLINE + " ms</b> against a <b>" +
+      sddesignchat_P99 + " ms</b> p99 target — <b>" +
+      (sddesignchat_BOB_ONLINE / sddesignchat_P99 * 100).toFixed(0) +
+      "%</b> of the budget, of which <b>" +
+      (sddesignchat_WS * 2 / sddesignchat_BOB_ONLINE * 100).toFixed(0) +
+      "%</b> is the two WebSocket frames. The whole server side is " +
+      (sddesignchat_BOB_ONLINE - 2 * sddesignchat_WS) + " ms."
+  }));
+
+  x.add("Bob's client ACKs → mark delivered", "+" + sddesignchat_WS + " ms",
+    sddesignchat_WS);
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), stored: true, state: "delivered",
+    aliceMs: sddesignchat_ACK_RIGHT, bobMs: sddesignchat_BOB_ONLINE, flag: "ok",
+    caption: "<b>7 · Bob's client ACKs and the row is marked delivered at " +
+      x.now() + " ms.</b> Delivery is at-least-once, so this ack can arrive " +
+      "twice; the mark is keyed by <code>client_msg_id</code>, which makes " +
+      "applying it twice harmless. <i>Two ticks.</i>"
+  }));
+
+  x.add("Bob opens the chat → mark read", "—", 0);
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), stored: true, state: "read",
+    aliceMs: sddesignchat_ACK_RIGHT, bobMs: sddesignchat_BOB_ONLINE,
+    flag: "ok", ledger: true,
+    caption: "<b>8 · Bob opens the chat — read.</b> Eight steps, <b>" +
+      sddesignchat_BOB_ONLINE + " ms</b> to his screen, one partition write and " +
+      "one Redis read. <b>The only thing that makes &ldquo;never lost&rdquo; " +
+      "true is that step 3 came before step 4</b>, and it cost " +
+      (sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) + " ms."
+  }));
+
+  return {
+    id: "right", label: "Persist then ack",
+    phases: ["at rest", "1 · send", "2 · service", "3 · persist", "4 · ACK",
+      "5 · registry", "6 · deliver", "7 · delivered", "8 · read"],
+    steps: s
+  };
+}
+
+// ---- run 3: the registry is right about a gateway that is gone ----------
+function sddesignchat_runStale() {
+  var x = sddesignchat_tracer();
+  var perGw = Math.round(sddesignchat_CONN / sddesignchat_GWS);
+  var stormRate = perGw / sddesignchat_BACKOFF;
+  var s = [];
+
+  s.push(sddesignchat_f({
+    live: false, at: -1, regStale: true,
+    caption: "<b>Gateway 412 died " + (sddesignchat_TTL / 2) +
+      " seconds ago</b>, taking its <b>" + sddesignchat_n(perGw) +
+      "</b> sockets with it. Its registry entries carry a <b>" +
+      sddesignchat_TTL + " s</b> TTL refreshed by heartbeat, so they are still " +
+      "there and still say Bob is on 412. Same correct order as tab 2. Press Play."
+  }));
+
+  x.add("Alice's client sends {client_msg_id, conversation_id, text}",
+    "+" + sddesignchat_WS + " ms", sddesignchat_WS);
+  s.push(sddesignchat_f({
+    at: 1, t: x.now(), trace: x.rows(), state: "in flight", regStale: true,
+    flag: "warn",
+    caption: "<b>1 · Alice sends.</b> Nothing on her side knows anything is " +
+      "wrong, and nothing should — she is talking to gateway 7, which is fine."
+  }));
+
+  x.add("gateway 7 → message service", "+" + sddesignchat_HOP + " ms",
+    sddesignchat_HOP);
+  s.push(sddesignchat_f({
+    at: 2, t: x.now(), trace: x.rows(), state: "in flight", regStale: true,
+    flag: "warn",
+    caption: "<b>2 · Gateway → message service.</b> <b>" + x.now() +
+      " ms</b> in. Still identical to tab 2."
+  }));
+
+  x.add("PERSIST to the message store", "+" + sddesignchat_PERSIST + " ms",
+    sddesignchat_PERSIST);
+  s.push(sddesignchat_f({
+    at: 3, t: x.now(), trace: x.rows(), stored: true, state: "persisted",
+    regStale: true, flag: "ok",
+    caption: "<b>3 · Persisted at " + x.now() +
+      " ms.</b> This is the frame that makes everything after it a <i>delay</i> " +
+      "rather than a <i>loss</i>. Every failure from here is recoverable " +
+      "because the row exists."
+  }));
+
+  x.add("ACK \"sent\" dispatched to Alice",
+    "+" + sddesignchat_WS + " ms to her", 0);
+  s.push(sddesignchat_f({
+    at: 3, t: x.now(), trace: x.rows(), stored: true, state: "sent",
+    aliceMs: sddesignchat_ACK_RIGHT, regStale: true, flag: "ok",
+    caption: "<b>4 · ACK at " + sddesignchat_ACK_RIGHT +
+      " ms</b> — identical to tab 2, because from Alice's side nothing has gone " +
+      "wrong yet. <b>She gets the same answer in the same time whether or not " +
+      "Bob is reachable</b>, which is exactly what persisting first buys: the " +
+      "send and the delivery are now separate problems."
+  }));
+
+  x.add("registry lookup: bob → gateway 412  (stale)",
+    "+" + sddesignchat_REG + " ms", sddesignchat_REG);
+  s.push(sddesignchat_f({
+    at: 4, t: x.now(), trace: x.rows(), stored: true, state: "sent",
+    aliceMs: sddesignchat_ACK_RIGHT, regStale: true, flag: "warn",
+    caption: "<b>5 · The registry answers <code>bob → gateway 412</code>, " +
+      "confidently, and it is wrong.</b> The entry can outlive the gateway by " +
+      "up to the full <b>" + sddesignchat_TTL + " s</b> TTL, because expiry is " +
+      "what removes it and expiry has not happened. <i>That is the cost of " +
+      "using a TTL instead of a disconnect event — and it is still the right " +
+      "trade, because you will not get a disconnect event when a phone loses " +
+      "signal either.</i>"
+  }));
+
+  x.add("route to gateway 412 — connection refused",
+    "+" + sddesignchat_ROUTE + " ms", sddesignchat_ROUTE);
+  s.push(sddesignchat_f({
+    at: 5, t: x.now(), trace: x.rows(), failed: [5], stored: true,
+    state: "undelivered", aliceMs: sddesignchat_ACK_RIGHT, regStale: true,
+    flag: "bad",
+    caption: "<b>6 · The route fails at " + x.now() +
+      " ms.</b> Gateway 412 is not there. Bob is not offline — he has the phone " +
+      "in his hand — but every delivery to him now fails. <b>This is why the " +
+      "offline path has to be the fallback for every failed delivery, not just " +
+      "for genuinely offline users</b>: if it only handled real absences, this " +
+      "message would sit undelivered until Bob happened to reopen the app."
+  }));
+
+  x.add("fall through to APNs / FCM push",
+    "+" + sddesignchat_n(sddesignchat_PUSH) + " ms", sddesignchat_PUSH);
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), failed: [5], stored: true,
+    state: "pushed", aliceMs: sddesignchat_ACK_RIGHT,
+    bobMs: sddesignchat_BOB_PUSH, regStale: true, storm: true, flag: "warn",
+    caption: "<b>The offline path takes it: " +
+      sddesignchat_n(sddesignchat_BOB_PUSH) + " ms</b>, <b>" +
+      (sddesignchat_BOB_PUSH / sddesignchat_P99).toFixed(1) +
+      "×</b> the p99 target — which is fine, because that target reads <i>when " +
+      "both online</i>. Meanwhile all <b>" + sddesignchat_n(perGw) +
+      "</b> of gateway 412's clients reconnect at once: jittered backoff spreads " +
+      "them over <b>" + sddesignchat_BACKOFF + " s</b>, so <b>" +
+      sddesignchat_n(stormRate) + "/s</b> instead of " +
+      sddesignchat_n(perGw) + " in one instant."
+  }));
+
+  x.add("client reconnects, syncs LIMIT " + sddesignchat_LIMIT +
+    ", dedupes on client_msg_id", "—", 0);
+  s.push(sddesignchat_f({
+    at: 6, t: x.now(), trace: x.rows(), stored: true, state: "read",
+    aliceMs: sddesignchat_ACK_RIGHT, bobMs: sddesignchat_BOB_PUSH,
+    dup: 1, deduped: true, ledger: true, flag: "ok",
+    caption: "<b>Bob's client lands on a new gateway, syncs <code>LIMIT " +
+      sddesignchat_LIMIT + "</code> from the conversation partition, and already " +
+      "holds the push payload — so it has the message twice.</b> It keeps one: " +
+      "the <code>client_msg_id</code> Alice generated in step 1 is the dedupe " +
+      "key. <b>Nothing lost, one duplicate, and the duplicate is the price of " +
+      "at-least-once delivery being the only kind you can actually build.</b>"
+  }));
+
+  return {
+    id: "stale", label: "Stale registry",
+    phases: ["412 is dead", "1 · send", "2 · service", "3 · persist", "4 · ACK",
+      "5 · stale lookup", "6 · route fails", "push + storm", "dedupe"],
+    steps: s
+  };
+}
+
+function sddesignchat_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined
+    });
+  }
+  return d.pills(chips);
+}
+
+S["sddesignchat"] = {
+  title: "One message from Alice to Bob, three ways",
+  note: "<b>" + sddesignchat_n(sddesignchat_DAU) + " DAU × " + sddesignchat_PER +
+    " messages/day = " + sddesignchat_n(sddesignchat_MSGDAY) + "/day</b>, which " +
+    "over 86,400 s is <b>" + sddesignchat_n(sddesignchat_AVG) +
+    "/s</b> and <b>" + sddesignchat_n(sddesignchat_PEAK) + "/s</b> at " +
+    sddesignchat_PEAKX + "× peak — unremarkable. The engineering is <b>" +
+    sddesignchat_n(sddesignchat_CONN) + " concurrent WebSockets</b>: at " +
+    sddesignchat_n(sddesignchat_PERGW) + " per gateway that is <b>" +
+    sddesignchat_n(sddesignchat_GWS) + " gateways</b> and, at " +
+    sddesignchat_KBCONN + " KB of buffers and TLS state each, <b>" +
+    sddesignchat_n(sddesignchat_RAMGB) + " GB of RAM just to hold sockets</b>. " +
+    "At " + sddesignchat_BYTES + " B a message the store takes <b>" +
+    sddesignchat_n(sddesignchat_DAYGB) + " GB/day</b>, <b>" +
+    sddesignchat_n(sddesignchat_YRTB) + " TB/year</b>, <b>" +
+    sddesignchat_n(sddesignchat_YRTB * sddesignchat_REPL) +
+    " TB</b> replicated ×" + sddesignchat_REPL + ". And presence, done naively, " +
+    "is <b>" + sddesignchat_n(sddesignchat_PRESENCE) + "/s</b> — " +
+    (sddesignchat_PRESENCE / sddesignchat_AVG).toFixed(0) +
+    "× the message rate — for a green dot. One message is now traced across " +
+    "that system: <b>" + sddesignchat_WS + " ms</b> per WebSocket frame, <b>" +
+    sddesignchat_HOP + " ms</b> gateway→service, <b>" + sddesignchat_PERSIST +
+    " ms</b> to persist, <b>" + sddesignchat_REG + " ms</b> in the registry, <b>" +
+    sddesignchat_ROUTE + " ms</b> to route, <b>" +
+    sddesignchat_n(sddesignchat_PUSH) + " ms</b> for a push. Every figure below " +
+    "is a sum of those six.",
+  interval: 1600,
+
+  scenarios: [
+    sddesignchat_runEarly(),
+    sddesignchat_runRight(),
+    sddesignchat_runStale()
+  ],
+
+  draw: function (step, d, ctx) {
+    var i, j, cells = [], failed = false;
+
+    for (i = 0; i < sddesignchat_PATH.length; i++) {
+      failed = false;
+      for (j = 0; j < step.failed.length; j++) if (step.failed[j] === i) failed = true;
+      cells.push({
+        label: sddesignchat_PATH[i],
+        flag: failed ? "bad"
+          : i === step.at ? "warn"
+            : i < step.at ? "ok" : "idle",
+        title: failed ? sddesignchat_PATH[i] + " — this hop failed"
+          : i === step.at ? "the message is here now"
+            : i < step.at ? "already passed" : "not reached yet"
+      });
+    }
+
+    var stFlag = step.state === "lost" ? "bad"
+      : step.state === "read" || step.state === "delivered" ? "ok"
+        : step.state === "undelivered" ? "bad"
+          : step.state === "sent (claimed)" ? "bad"
+            : !step.live ? "idle" : "warn";
+
+    var budget = step.bobMs > 0 ? step.bobMs / sddesignchat_P99 * 100 : 0;
+
+    var durable = d.node({
+      title: "durability",
+      status: step.lost ? "MESSAGE LOST"
+        : step.stored ? "IN THE STORE" : !step.live ? "NOT SENT" : "MEMORY ONLY",
+      statusFlag: step.lost ? "bad" : step.stored ? "ok" : "warn",
+      badge: "conversation " + (sddesignchat_PRIOR + (step.stored ? 1 : 0)) +
+        " rows",
+      meta: "partition conversation_id · cluster message_id DESC",
+      flag: step.lost ? "bad" : step.stored ? "ok" : !step.live ? "idle" : "warn",
+      gauges: [{
+        label: "p99 budget to Bob",
+        pct: budget,
+        value: step.bobMs > 0
+          ? sddesignchat_n(step.bobMs) + " of " + sddesignchat_P99 + " ms"
+          : "not delivered yet",
+        flag: step.bobMs === 0 ? "idle"
+          : step.bobMs <= sddesignchat_P99 ? "ok" : "warn"
+      }],
+      rows: [
+        { label: "Alice has been told \"sent\"",
+          value: step.aliceMs > 0 ? "yes, at " + step.aliceMs + " ms" : "not yet",
+          flag: step.aliceMs === 0 ? "idle"
+            : step.stored ? "ok" : "bad" },
+        { label: "safe for her to stop retrying",
+          value: step.aliceMs > 0 ? (step.stored ? "yes — it is durable"
+            : "no — nothing is written") : "she is still retrying",
+          flag: step.aliceMs === 0 ? "idle" : step.stored ? "ok" : "bad" },
+        { label: "registry says",
+          value: step.regStale
+            ? "bob → gateway 412 (gateway is gone, TTL " + sddesignchat_TTL + " s)"
+            : "bob → gateway 412",
+          flag: step.regStale ? "warn" : "ok" },
+        { label: "copies at Bob's client",
+          value: step.dup > 0
+            ? (1 + step.dup) + (step.deduped
+              ? " → 1 after dedupe on client_msg_id" : " — not deduped")
+            : (step.bobMs > 0 ? "1" : "0"),
+          flag: step.dup > 0 ? (step.deduped ? "ok" : "bad")
+            : step.bobMs > 0 ? "ok" : "idle" }
+      ]
+    });
+
+    var head = d.cols([
+      d.stack([
+        d.big(step.live ? sddesignchat_n(step.t) + " ms" : "0 ms",
+          "since Alice pressed send", step.live ? stFlag : "idle"),
+        d.big(step.state, "message state", stFlag),
+        d.pill(step.stored ? "persisted" : "not persisted",
+          step.stored ? "ok" : step.lost ? "bad" : "idle")
+      ]),
+      durable
+    ]);
+
+    var rows = [], tr = step.trace;
+    for (i = 0; i < tr.length; i++) {
+      rows.push([String(tr[i][0]), tr[i][1], tr[i][2],
+        sddesignchat_n(tr[i][3]) + " ms"]);
+    }
+    if (!rows.length) rows.push(["—", "nothing sent yet", "—", "0 ms"]);
+
+    var out = [sddesignchat_phases(d, ctx), head,
+      d.lane({ label: "path", cells: cells }),
+      d.table(["#", "step", "cost", "elapsed"], rows)];
+
+    if (step.storm) {
+      var perGw = Math.round(sddesignchat_CONN / sddesignchat_GWS);
+      out.push(d.node({
+        title: "gateway 412's clients come back",
+        status: sddesignchat_n(perGw) + " sockets",
+        statusFlag: "warn",
+        meta: "jittered exponential backoff over " + sddesignchat_BACKOFF +
+          " s, so the fleet absorbs it",
+        flag: "warn",
+        body: d.stack([
+          d.bar({ label: "all at once, no jitter", pct: 100,
+            value: sddesignchat_n(perGw) + "/s", flag: "bad" }),
+          d.bar({ label: "spread over " + sddesignchat_BACKOFF + " s",
+            pct: 100 / sddesignchat_BACKOFF,
+            value: sddesignchat_n(perGw / sddesignchat_BACKOFF) + "/s",
+            flag: "ok" })
+        ])
+      }));
+    }
+
+    if (step.ledger) {
+      out.push(d.table(
+        ["run", "Alice sees \"sent\"", "persisted first", "Bob receives",
+          "duplicates", "lost"],
+        sddesignchat_ledger()));
+    }
+
+    out.push(d.note(
+      "Every elapsed figure is a sum of the six declared hops, so the only " +
+      "difference between the first two tabs is <b>where the " +
+      sddesignchat_PERSIST + " ms store write sits</b>: before the ack it is " +
+      "the durability guarantee, after it is " +
+      (sddesignchat_ACK_RIGHT - sddesignchat_ACK_EARLY) +
+      " ms of latency and a lost message. <b>Green</b> is a hop the message " +
+      "has passed, <b>amber</b> where it is now, <b>red</b> a hop that failed.",
+      step.flag === "bad" ? "bad" : undefined));
+
+    return d.stack(out);
+  }
+};
 
   // ====================================================================
   // ======================================================================
@@ -5555,6 +8115,1639 @@ S["sdapidesign"] = {
   };
 
   // ====================================================================
+// ======================================================================
+// SIM · sddesignfilesync  (design-file-sync.md)
+//
+// TIME AXIS: one file's life. First upload, a dropped connection, the
+// resume, a one-word edit, a single byte prepended at the front, a
+// colleague uploading a byte-identical copy, and two devices editing
+// offline from the same parent version. Seven events, replayed three times
+// over the same machinery: whole-file upload, fixed 4 MB chunks,
+// content-defined chunks.
+//
+// CONFIG — the page's own figures, quoted
+//   1 GB file        §3 "prepending a single byte to a 1 GB file costs a
+//                    1 GB re-upload" — the page's headline scenario
+//   ~4 MB chunks     §3 "each ~4 MB, each keyed by SHA-256 of its bytes"
+//   SHA-256 = 32 B   §3 (hash width, used for the metadata-cost table)
+//   dedup 30-50%     §2 "typical savings: 30-50%"
+//   under 100 KB     §2 / §8 "upload only changed chunks -> often <100 KB"
+//   1 edit lost      §1 "NEVER silently lose a user's edit" is the hard
+//                    requirement; §5 rejects last-write-wins on it
+//   version vectors  §5 "both claim v3 as parent … same parent, two
+//                    children = concurrent edit, not a sequence"
+//   resume is free   §6 "an interrupted 10 GB upload never restarts from
+//                    zero"
+//
+// CONFIG — declared here, because the page states none
+//   DROP_AT 60%      where the first connection dies
+//   the one-word edit lands in chunk 120; the two offline edits land in
+//   chunk 40 (device B) and chunk 200 (device A)
+//   every committed version is retained (the page puts versioning UI out
+//   of scope but keeps history, as every product in this category does)
+//
+// THE MODEL — the real mechanism, not an assertion:
+//   the file is UNITS = 1 GB / 4 MB = 256 units of content.
+//   FIXED chunk i covers the byte range [i*4MB, (i+1)*4MB), so its key is
+//     whatever content sits at that OFFSET. With nothing prepended that is
+//     unit i. With one byte prepended every chunk straddles two units, so
+//     every key changes. The fixed-versus-content-defined argument falls
+//     out of the key function; it is not typed in.
+//   CONTENT-DEFINED boundaries are chosen by a rolling hash over the
+//     content, so a chunk's key is its unit regardless of offset. An
+//     insertion changes only the chunk containing it and the boundaries
+//     downstream re-synchronise.
+//   WHOLE-FILE does not hash at all, so nothing can be skipped, resumed
+//     or shared, and concurrency is decided by clock.
+//   Every byte count on screen is chunks-changed x 4 MB, computed.
+// ======================================================================
+var sddesignfilesync_C = {
+  FILE_B: 1024 * 1024 * 1024,      // page: 1 GB file
+  CHUNK_B: 4 * 1024 * 1024,        // page: ~4 MB chunks
+  HASH_B: 32,                      // page: SHA-256
+  DROP_AT: 0.60,                   // declared
+  EDIT_MID: 120,                   // declared
+  EDIT_A: 200,                     // declared
+  EDIT_B: 40,                      // declared
+  DEDUP_LO: 30,                    // page: typical savings 30-50%
+  DEDUP_HI: 50,
+  SMALL_DELTA_B: 100 * 1024,       // page: often under 100 KB
+  CELLS: 32,                       // display grouping only
+  ALT_CHUNKS: [4 * 1024 * 1024, 1024 * 1024, 64 * 1024]
+};
+
+var sddesignfilesync_D = {
+  UNITS: sddesignfilesync_C.FILE_B / sddesignfilesync_C.CHUNK_B,
+  DROP_N: Math.floor(
+    (sddesignfilesync_C.FILE_B / sddesignfilesync_C.CHUNK_B) *
+    sddesignfilesync_C.DROP_AT)
+};
+
+function sddesignfilesync_bytes(b) {
+  var u = ["B", "KB", "MB", "GB", "TB"], i = 0, v = b, s;
+  while (v >= 1024 && i < u.length - 1) { v = v / 1024; i++; }
+  s = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  if (s.indexOf(".") >= 0) {
+    s = s.replace(/0+$/, "");
+    s = s.replace(/\.$/, "");
+  }
+  return s + " " + u[i];
+}
+function sddesignfilesync_n(x) {
+  return String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function sddesignfilesync_p0(x) { return Math.round(x) + "%"; }
+function sddesignfilesync_x(a, b) {
+  if (!b) return "—";
+  var r = a / b;
+  return (r >= 10 ? r.toFixed(0) : r.toFixed(1)) + "×";
+}
+
+// ----------------------------------------------------------------------
+// The key function. This is the entire fixed-versus-content-defined story.
+function sddesignfilesync_key(mode, st, i) {
+  if (mode === "cdc") return "C" + st.u[i];
+  if (st.pre === 0) return "F" + st.u[i];
+  // one byte of shift: chunk i now spans the tail of unit i and the head
+  // of unit i+1, so its bytes — and therefore its hash — are new.
+  return "S" + st.pre + ":" + st.u[i] + ":" +
+    (i + 1 < st.u.length ? st.u[i + 1] : "END");
+}
+
+function sddesignfilesync_run(mode) {
+  var C = sddesignfilesync_C, D = sddesignfilesync_D;
+  var i, u = [];
+  for (i = 0; i < D.UNITS; i++) u.push(i);
+  var st = { u: u, pre: 0 };
+  var next = D.UNITS;
+  var store = {}, storeN = 0;       // the global content-addressed chunk store
+  var refs = {}, refN = 0;          // chunks referenced by a committed version
+  var sent = 0, logical = 0, lost = 0, commits = 0, ver = 0;
+  var frames = [];
+
+  function keys() {
+    var a = [], j;
+    for (j = 0; j < D.UNITS; j++) a.push(sddesignfilesync_key(mode, st, j));
+    return a;
+  }
+  // The real upload flow: ask which hashes exist, upload only the missing
+  // ones, up to the limit argument, before the connection dies.
+  function transfer(limit) {
+    var ks = keys(), t = [], up = 0, hits = 0, j;
+    for (j = 0; j < D.UNITS; j++) {
+      if (store[ks[j]]) { t.push("hit"); hits++; }
+      else if (limit === undefined || up < limit) {
+        store[ks[j]] = 1; storeN++; up++; t.push("new");
+      } else t.push("none");
+    }
+    return { t: t, up: up, hits: hits, asked: D.UNITS, bytes: up * C.CHUNK_B };
+  }
+  function commit() {
+    var ks = keys(), j;
+    for (j = 0; j < D.UNITS; j++) if (!refs[ks[j]]) { refs[ks[j]] = 1; refN++; }
+    commits++; ver++; logical += C.FILE_B;
+  }
+  // whole-file: no hashing, so nothing is addressable and nothing is skipped
+  function whole(frac, doCommit) {
+    var t = [], cut = Math.floor(D.UNITS * frac), j;
+    for (j = 0; j < D.UNITS; j++) t.push(j < cut ? "new" : "none");
+    if (doCommit) { commits++; ver++; logical += C.FILE_B; storeN++; refN++; }
+    return { t: t, up: cut, hits: 0, asked: 0, bytes: C.FILE_B * frac };
+  }
+
+  function push(ev, r, extra) {
+    sent += r.bytes;
+    var f = {
+      ev: ev, mode: mode, t: r.t, up: r.up, hits: r.hits, asked: r.asked,
+      bytes: r.bytes, sent: sent, storeN: storeN, refN: refN,
+      storedB: mode === "whole" ? storeN * C.FILE_B : storeN * C.CHUNK_B,
+      logical: logical, lost: lost, ver: ver, commits: commits, vv: null
+    };
+    if (extra) for (var k in extra) if (extra.hasOwnProperty(k)) f[k] = extra[k];
+    frames.push(f);
+    return f;
+  }
+
+  // -- 1. first upload, connection dies at DROP_AT ----------------------
+  if (mode === "whole") push("first upload", whole(C.DROP_AT, false));
+  else push("first upload", transfer(D.DROP_N));
+
+  // -- 2. resume --------------------------------------------------------
+  if (mode === "whole") push("resume", whole(1, true));
+  else { var r2 = transfer(); commit(); push("resume", r2); }
+
+  // -- 3. one word changes in the middle of the file --------------------
+  st.u[C.EDIT_MID] = next++;
+  if (mode === "whole") push("one-word edit", whole(1, true));
+  else { var r3 = transfer(); commit(); push("one-word edit", r3); }
+
+  // -- 4. one byte prepended at the very front --------------------------
+  st.pre = 1;
+  st.u[0] = next++;                 // chunk 0's content genuinely changed
+  if (mode === "whole") push("prepend 1 byte", whole(1, true));
+  else { var r4 = transfer(); commit(); push("prepend 1 byte", r4); }
+
+  // -- 5. a colleague uploads a byte-identical copy ---------------------
+  if (mode === "whole") push("colleague copy", whole(1, true));
+  else { var r5 = transfer(); commit(); push("colleague copy", r5); }
+
+  // -- 6. two devices edit offline from the same parent -----------------
+  var parent = ver, f6;
+  if (mode === "whole") {
+    // no parent pointer exists, so the tie is broken by clock: LWW
+    var a = whole(1, true), b = whole(1, false);
+    lost = 1;
+    var merged = { t: a.t, up: a.up, hits: 0, asked: 0, bytes: a.bytes + b.bytes };
+    f6 = push("offline conflict", merged, {
+      vv: [
+        { label: "device A v" + (parent + 1), value: "no parent recorded", flag: "warn" },
+        { label: "device B v" + (parent + 1), value: "no parent recorded", flag: "warn" },
+        { label: "resolved by", value: "newest timestamp", flag: "bad" },
+        { label: "device B's edit", value: "overwritten", flag: "bad" }
+      ]
+    });
+    f6.lost = 1;
+  } else {
+    st.u[C.EDIT_A] = next++;        // device A's child
+    var ra = transfer(); commit();
+    var upA = ra.up, hitA = ra.hits, tA = ra.t;
+    st.u[C.EDIT_A] = next - 1;      // keep A's content
+    st.u[C.EDIT_B] = next++;        // device B's child, same parent version
+    var rb = transfer(); commit();
+    var t6 = [], j6;
+    for (j6 = 0; j6 < D.UNITS; j6++) {
+      t6.push(tA[j6] === "new" || rb.t[j6] === "new" ? "new"
+        : tA[j6] === "hit" || rb.t[j6] === "hit" ? "hit" : "none");
+    }
+    f6 = push("offline conflict", {
+      t: t6, up: upA + rb.up, hits: Math.min(hitA, rb.hits),
+      asked: D.UNITS * 2, bytes: (upA + rb.up) * C.CHUNK_B
+    }, {
+      vv: [
+        { label: "device A", value: "v" + parent + " → v" + (parent + 1) +
+          " (parent v" + parent + ")", flag: "ok" },
+        { label: "device B", value: "v" + parent + " → v" + (parent + 1) +
+          "' (parent v" + parent + ")", flag: "ok" },
+        { label: "same parent, two children", value: "CONCURRENT", flag: "warn" },
+        { label: "resolution", value: "keep both, rename one", flag: "ok" }
+      ],
+      shared: D.UNITS - rb.up
+    });
+  }
+
+  // -- 7. totals ---------------------------------------------------------
+  var last = frames[frames.length - 1];
+  frames.push({
+    ev: "totals", mode: mode, t: last.t, up: 0, hits: 0, asked: 0, bytes: 0,
+    sent: sent, storeN: last.storeN, refN: last.refN, storedB: last.storedB,
+    logical: logical, lost: lost, ver: ver, commits: commits, vv: last.vv,
+    shared: last.shared, final: true
+  });
+  return frames;
+}
+
+sddesignfilesync_D.RUN = {
+  whole: sddesignfilesync_run("whole"),
+  fixed: sddesignfilesync_run("fixed"),
+  cdc: sddesignfilesync_run("cdc")
+};
+
+// ----------------------------------------------------------------------
+function sddesignfilesync_strip(d, t, label) {
+  var C = sddesignfilesync_C, D = sddesignfilesync_D;
+  var per = D.UNITS / C.CELLS, cells = [], g, i, nw, nh, nn, lab;
+  for (g = 0; g < C.CELLS; g++) {
+    nw = 0; nh = 0; nn = 0;
+    for (i = g * per; i < (g + 1) * per; i++) {
+      if (t[i] === "new") nw++; else if (t[i] === "hit") nh++; else nn++;
+    }
+    lab = nw > 0 && nw < per ? String(nw) : "";
+    cells.push({
+      label: lab,
+      flag: nw > 0 ? "bad" : nh > 0 ? "ok" : "idle",
+      title: "chunks " + (g * per) + "–" + ((g + 1) * per - 1) + " · " +
+        nw + " uploaded, " + nh + " already on the server, " + nn + " not present"
+    });
+  }
+  return d.cells(cells, { label: label, dense: true });
+}
+
+function sddesignfilesync_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [], chips = [], i;
+  if (!names.length) return "";
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined
+    });
+  }
+  return d.pills(chips);
+}
+
+function sddesignfilesync_caption(mode, i, f) {
+  var C = sddesignfilesync_C, D = sddesignfilesync_D;
+  var by = sddesignfilesync_bytes, n = sddesignfilesync_n;
+  var R = sddesignfilesync_D.RUN;
+  var W = R.whole, F = R.fixed, X = R.cdc;
+
+  if (mode === "whole") {
+    if (i === 0) return "<b>First upload, and the connection dies at " +
+      sddesignfilesync_p0(C.DROP_AT * 100) + ".</b> No chunking and no hashing, " +
+      "so the file is one opaque <code>PUT</code> of " + by(C.FILE_B) + ". <b>" +
+      by(f.bytes) + " crossed the wire</b> and then the socket closed. Nothing is " +
+      "committed, because a partial file is not a file — the server has no name " +
+      "for what it holds and no way to tell you about it.";
+    if (i === 1) return "<b>Resume means restart from byte zero.</b> There is " +
+      "nothing addressable to resume <i>from</i>, so the client sends the whole " +
+      by(C.FILE_B) + " again. <b>" + by(f.sent) + " on the wire for a " +
+      by(C.FILE_B) + " file</b> — " + sddesignfilesync_x(f.sent, C.FILE_B) +
+      " the file size, and the overhead is pure loss.";
+    if (i === 2) return "<b>The user changes one word.</b> The client cannot say " +
+      "<i>which</i> bytes changed, because it has never described the file to the " +
+      "server in pieces. So it sends the file: <b>" + by(f.bytes) + " for a few " +
+      "bytes of text</b>. This is the page's naive bandwidth line — re-upload on " +
+      "every save — where a delta would have been the page's <b>under " +
+      by(C.SMALL_DELTA_B) + "</b>, some " +
+      sddesignfilesync_n(C.FILE_B / C.SMALL_DELTA_B) + " times smaller.";
+    if (i === 3) return "<b>One byte is prepended at the front.</b> " +
+      by(f.bytes) + " again. Whole-file upload is at least <i>consistent</i>: it is " +
+      "equally expensive for every edit, so the insertion case that destroys fixed " +
+      "chunking costs it nothing extra. <b>That is the only compliment available.</b>";
+    if (i === 4) return "<b>A colleague uploads a byte-identical copy.</b> Another " +
+      by(f.bytes) + " over the wire and <b>a second full copy on disk</b>. Storage " +
+      "is now " + by(f.storedB) + " of distinct bytes for " + by(f.logical) +
+      " of logical file — <b>" + sddesignfilesync_p0(0) + " deduplication</b>, " +
+      "against the page's typical " + C.DEDUP_LO + "–" + C.DEDUP_HI + "%.";
+    if (i === 5) return "<b>Two devices edit the same file offline, and one edit " +
+      "disappears.</b> No version is recorded as derived from another, so the " +
+      "server has nothing structural to compare and falls back on <b>timestamps</b>. " +
+      "Newest wins; device B's work is overwritten with no copy kept and no prompt. " +
+      "<i>The scope line says NEVER silently lose a user's edit</i> — this is the " +
+      "single frame where that requirement is testable, and this design fails it.";
+    return "<b>" + by(f.sent) + " on the wire, " + by(f.storedB) + " on disk, <b>" +
+      f.lost + " edit destroyed</b>.</b> Every number here is the same number: " +
+      by(C.FILE_B) + ". The design has one operation and applies it to every " +
+      "event, which is why it needs no chunk store, no hash index and no version " +
+      "vectors — and why it cannot dedupe, delta, resume or detect a conflict. " +
+      "<i>Content addressing is one decision that buys all four.</i>";
+  }
+
+  if (mode === "fixed") {
+    if (i === 0) return "<b>The file is " + n(D.UNITS) + " chunks, and the client " +
+      "asks before it sends.</b> " + by(C.FILE_B) + " ÷ " + by(C.CHUNK_B) +
+      " = <b>" + n(D.UNITS) + " hashes</b>, offered to the server: it has none of " +
+      "them. <b>" + n(f.up) + " chunks land</b> (" + by(f.bytes) + ") before the " +
+      "socket drops. Each one is committed <i>on arrival</i>, because a chunk is " +
+      "immutable and named by its own hash — there is no half-written state.";
+    if (i === 1) return "<b>Resume is free, and it is free for a structural " +
+      "reason.</b> The client re-asks the same " + n(f.asked) + " hashes: <b>" +
+      n(f.hits) + " already present</b>, " + n(f.up) + " missing. It uploads " +
+      by(f.bytes) + " and the two attempts total <b>exactly " + by(f.sent) +
+      "</b> for a " + by(C.FILE_B) + " file. The page's line about a 10 GB upload " +
+      "never restarting from zero is this frame.";
+    if (i === 2) return "<b>One word changes: " + n(f.hits) + " hits, " + n(f.up) +
+      " upload.</b> The client re-chunks, re-hashes and asks again; every hash but " +
+      "one is already on the server. <b>" + by(f.bytes) + " instead of " +
+      by(C.FILE_B) + "</b> — a " + sddesignfilesync_x(C.FILE_B, f.bytes) +
+      " reduction. <i>This is the frame where fixed and content-defined chunking " +
+      "look identical, which is exactly why the wrong one is easy to pick.</i>";
+    if (i === 3) return "<b>One byte at the front, and every hash changes.</b> " +
+      "Fixed chunk <i>i</i> is the bytes at offset [<i>i</i>·4 MB, (<i>i</i>+1)·4 MB). " +
+      "Shift the file by one byte and every boundary lands one byte late, so every " +
+      "chunk now straddles two old ones: <b>" + n(f.hits) + " dedup hits, " +
+      n(f.up) + " uploads, " + by(f.bytes) + "</b>. The page's sentence, reproduced " +
+      "by arithmetic rather than asserted: <i>prepending a single byte to a " +
+      by(C.FILE_B) + " file costs a " + by(C.FILE_B) + " re-upload.</i>";
+    if (i === 4) return "<b>A colleague uploads a byte-identical copy: " +
+      n(f.asked) + " hashes asked, " + n(f.hits) + " present, <b>" + by(f.bytes) +
+      " sent</b>.</b> Near-instant, and the bytes never cross the wire from any " +
+      "user. Content addressing makes sharing and cross-user dedup the same " +
+      "mechanism — the second user's metadata simply points at hashes that exist.";
+    if (i === 5) return "<b>Two devices edit offline. Both children record <code>v" +
+      (f.ver - 2) + "</code> as their parent, so the server knows the edits were " +
+      "concurrent without consulting a clock.</b> Keep both. The cost of the " +
+      "conflicted copy is only what differs: <b>" + n(f.up) + " chunks, " +
+      by(f.bytes) + "</b>. Note it is " + n(f.up) + " and not 2 — the file is still " +
+      "one byte out of alignment from the prepend, so each single-chunk edit dirties " +
+      "<i>two</i> fixed chunks. <b>That misalignment is permanent.</b>";
+    return "<b>" + by(f.sent) + " on the wire and " + by(f.storedB) + " on disk — " +
+      "<i>" + sddesignfilesync_x(f.storedB, X[6].storedB) + " the content-defined " +
+      "store for the identical seven events</i>.</b> " + n(f.storeN) +
+      " distinct chunks for " + by(f.logical) + " of logical file, " +
+      sddesignfilesync_p0((1 - f.storedB / f.logical) * 100) + " deduplicated. " +
+      "One prepended byte forced a second full generation of " + n(D.UNITS) +
+      " hashes into the store, and every edit after it costs double. <b>Fixed " +
+      "chunking is not a cheaper approximation of content-defined chunking; it is " +
+      "a different system that collapses on insertions</b> — though it does keep " +
+      "both sides of the conflict, so " + f.lost + " edits were lost. Content " +
+      "addressing earned that, not the boundary rule.";
+  }
+
+  if (i === 0) return "<b>Same start: " + n(D.UNITS) + " chunks, " + n(f.up) +
+    " land before the drop.</b> Boundaries here are not at fixed offsets. A rolling " +
+    "hash runs over a sliding window and a boundary is cut wherever it hits the " +
+    "agreed pattern, so <b>a chunk's identity comes from its content, not its " +
+    "position</b>. On this untouched file that produces the same " + n(D.UNITS) +
+    " chunks, which is the point: the schemes only diverge under insertion.";
+  if (i === 1) return "<b>Resume: " + n(f.hits) + " present, " + n(f.up) +
+    " missing, " + by(f.bytes) + " sent.</b> Identical to fixed chunking, and for " +
+    "the identical reason — resumability comes from <i>content addressing</i>, not " +
+    "from how the boundaries were chosen. " + by(f.sent) + " total for a " +
+    by(C.FILE_B) + " file.";
+  if (i === 2) return "<b>One word changes: " + n(f.up) + " chunk, " + by(f.bytes) +
+    ".</b> Still indistinguishable from fixed chunking. <i>An interviewer who stops " +
+    "here cannot tell the two designs apart, which is why the next frame is the " +
+    "whole answer.</i>";
+  if (i === 3) return "<b>One byte at the front, and <i>one</i> chunk changes.</b> " +
+    "The insertion alters the content of the first chunk, so its hash changes. " +
+    "Every boundary after it is still chosen by the same rolling hash over the same " +
+    "bytes, so it falls in the same place and <b>the chunks downstream " +
+    "re-synchronise</b>: " + n(f.hits) + " hits, " + n(f.up) + " upload, <b>" +
+    by(f.bytes) + " against fixed chunking's " + by(F[3].bytes) + "</b> — " +
+    sddesignfilesync_x(F[3].bytes, f.bytes) + " less, from one decision taken at " +
+    "the start of the design.";
+  if (i === 4) return "<b>The colleague's copy: " + n(f.hits) + " of " + n(f.asked) +
+    " hashes present, " + by(f.bytes) + " sent.</b> And because the chunks are " +
+    "immutable blobs keyed by hash, both users' metadata points at the same " +
+    n(D.UNITS) + " entries. <b>Sharing costs nothing in storage</b> — it is an ACL " +
+    "row in the metadata service, which is also the thing that decides who may " +
+    "resolve a hash. Knowing a hash is not authorisation.";
+  if (i === 5) return "<b>Two devices, same parent <code>v" + (f.ver - 2) +
+    "</code>, two children — concurrent, and no clock was consulted.</b> Keep both: " +
+    "<code>report.docx</code> and <code>report (Device B's conflicted copy).docx</code>. " +
+    "The second file costs <b>" + n(f.up) + " chunks, " + by(f.bytes) + "</b>, " +
+    "because it shares <b>" + n(f.shared) + " of " + n(D.UNITS) + "</b> with the " +
+    "first. <i>The inelegant answer is affordable precisely because of the elegant " +
+    "one.</i>";
+  return "<b>" + by(f.sent) + " on the wire, " + by(f.storedB) + " on disk, " +
+    f.lost + " edits lost.</b> Against whole-file's " + by(W[6].sent) + " and " +
+    "fixed chunking's " + by(F[6].sent) + ". " + n(f.storeN) + " distinct chunks " +
+    "hold " + by(f.logical) + " of logical file across " + f.commits +
+    " committed versions and two users — " +
+    sddesignfilesync_p0((1 - f.storedB / f.logical) * 100) + " deduplicated, " +
+    "though that figure flatters itself: these are versions of <i>one</i> file, " +
+    "and the page's " + C.DEDUP_LO + "–" + C.DEDUP_HI + "% is across a whole " +
+    "population. <b>Dedup, delta sync, integrity and free resume are not four " +
+    "features. They are one decision.</b>";
+}
+
+function sddesignfilesync_scenario(id, label, mode, blurb) {
+  var R = sddesignfilesync_D.RUN[mode];
+  var steps = [{ mode: mode, idle: true, caption: blurb, flag: "idle" }];
+  var i, f;
+  for (i = 0; i < R.length; i++) {
+    f = R[i];
+    f.caption = sddesignfilesync_caption(mode, i, f);
+    f.flag = f.lost > 0 ? "bad"
+      : f.bytes >= sddesignfilesync_C.FILE_B ? "bad"
+      : f.bytes === 0 && i === 4 ? "ok"
+      : f.up > 0 && f.up <= 4 ? "ok" : "warn";
+    steps.push(f);
+  }
+  return {
+    id: id, label: label, steps: steps,
+    phases: ["on disk", "upload drops", "resume", "one word", "prepend 1 B",
+      "colleague copy", "conflict", "totals"]
+  };
+}
+
+// ======================================================================
+S["sddesignfilesync"] = {
+  title: "Sync one file seven ways, three times over",
+  note: (function () {
+    var C = sddesignfilesync_C, D = sddesignfilesync_D;
+    var by = sddesignfilesync_bytes, n = sddesignfilesync_n;
+    return "The page's own scenario, run end to end. A <b>" + by(C.FILE_B) +
+      "</b> file in <b>" + by(C.CHUNK_B) + "</b> chunks keyed by SHA-256 is <b>" +
+      n(D.UNITS) + " chunks</b> exactly, and every byte figure on screen is " +
+      "chunks-changed × " + by(C.CHUNK_B) + ". Seven events in order: the " +
+      "first upload dies at <b>" + sddesignfilesync_p0(C.DROP_AT * 100) +
+      "</b> (declared), it resumes, one word changes in chunk " + C.EDIT_MID +
+      ", <b>one byte is prepended at the front</b> (the page's headline case), a " +
+      "colleague uploads a byte-identical copy, and two devices edit offline from " +
+      "the same parent version. Fixed chunk <i>i</i> is the bytes at offset " +
+      "[<i>i</i>·" + by(C.CHUNK_B) + ", (<i>i</i>+1)·" + by(C.CHUNK_B) +
+      "), so a one-byte shift changes every key; a content-defined boundary is cut " +
+      "where a rolling hash over the content hits its pattern, so a key is " +
+      "offset-independent. <b>That difference is the whole sim</b> — the " +
+      by(C.FILE_B) + " re-upload in one tab and the " + by(C.CHUNK_B) +
+      " in another are computed from those two key functions, not typed in. " +
+      "Versions are retained; the page's " + C.DEDUP_LO + "–" + C.DEDUP_HI +
+      "% dedup figure and its <b>never silently lose an edit</b> requirement are " +
+      "both scored at the end.";
+  })(),
+  interval: 1600,
+
+  scenarios: [
+    sddesignfilesync_scenario("whole", "Whole-file upload", "whole",
+      "<b>Whole-file upload.</b> No chunking, no hashing: every save is one " +
+      "<code>PUT</code> of the entire file, and concurrency is settled by " +
+      "timestamp. The build everybody writes first. Press Play."),
+    sddesignfilesync_scenario("fixed", "Fixed 4 MB chunks", "fixed",
+      "<b>Fixed-size chunks.</b> Split every " +
+      sddesignfilesync_bytes(sddesignfilesync_C.CHUNK_B) + " by offset, hash each " +
+      "chunk, upload only the hashes the server lacks. Content-addressed storage " +
+      "with the obvious boundary rule. Same seven events."),
+    sddesignfilesync_scenario("cdc", "Content-defined chunks", "cdc",
+      "<b>Content-defined chunks.</b> The same content-addressed store, but " +
+      "boundaries are cut where a rolling hash over a sliding window hits a " +
+      "pattern — chosen by content, not by offset. Same seven events again.")
+  ],
+
+  draw: function (step, d, ctx) {
+    var C = sddesignfilesync_C, D = sddesignfilesync_D;
+    var by = sddesignfilesync_bytes, n = sddesignfilesync_n;
+    var R = sddesignfilesync_D.RUN;
+    var mode = step && step.mode ? step.mode : "whole";
+    var name = mode === "whole" ? "whole-file upload"
+      : mode === "fixed" ? "fixed " + by(C.CHUNK_B) + " chunks"
+      : "content-defined chunks";
+    var phases = sddesignfilesync_phases(d, ctx);
+
+    if (step && step.idle) {
+      var idleCells = [], q;
+      for (q = 0; q < C.CELLS; q++) {
+        idleCells.push({
+          label: "", flag: "idle",
+          title: "chunks " + (q * (D.UNITS / C.CELLS)) + "–" +
+            ((q + 1) * (D.UNITS / C.CELLS) - 1) + " · nothing uploaded yet"
+        });
+      }
+      return d.stack([
+        phases,
+        d.cols([
+          d.big(by(C.FILE_B), "one file, on disk", "idle"),
+          d.stat({ label: "chunks", value: mode === "whole" ? "1 blob" : n(D.UNITS),
+            sub: mode === "whole" ? "not addressable" : by(C.CHUNK_B) + " each",
+            flag: "idle" }),
+          d.stat({ label: "on the wire", value: by(0), sub: "nothing sent",
+            flag: "idle" })
+        ]),
+        d.cells(idleCells, { label: "the file, " + (mode === "whole" ? "as one opaque blob"
+          : n(D.UNITS) + " chunks"), dense: true }),
+        d.node({
+          title: "what this build can and cannot do",
+          status: "IDLE", statusFlag: "idle", flag: "idle", badge: name,
+          body: d.table(["capability", "comes from", mode === "whole" ? "no" : "yes"], [
+            ["deduplication", "identical chunks share a hash",
+              mode === "whole" ? "—" : "free"],
+            ["delta sync", "upload only hashes that changed",
+              mode === "whole" ? "—" : "free"],
+            ["integrity", "the hash verifies the bytes",
+              mode === "whole" ? "—" : "free"],
+            ["resume", "re-ask which hashes exist",
+              mode === "whole" ? "—" : "free"],
+            ["conflict detection", "parent-version pointer",
+              mode === "whole" ? "clock" : "structural"]
+          ])
+        }),
+        d.note("Four of those five come from <b>one</b> decision: name a chunk by " +
+          "the hash of its contents. The fifth is separate, and it is what decides " +
+          "whether an edit can be lost.")
+      ]);
+    }
+
+    var f = step;
+    var wireFlag = f.bytes >= C.FILE_B ? "bad" : f.bytes === 0 ? "ok"
+      : f.bytes <= C.CHUNK_B * 4 ? "ok" : "warn";
+
+    var head = d.cols([
+      d.big(by(f.sent), "on the wire so far", f.sent > C.FILE_B * 2 ? "bad" : "ok"),
+      d.stat({
+        label: "this event",
+        value: by(f.bytes),
+        sub: mode === "whole" ? "whole file, every time"
+          : n(f.up) + " of " + n(D.UNITS) + " chunks",
+        flag: wireFlag
+      }),
+      d.stat({
+        label: "stored",
+        value: by(f.storedB),
+        sub: mode === "whole" ? f.commits + " full copies"
+          : n(f.storeN) + " distinct chunks",
+        flag: f.logical > 0 && f.storedB >= f.logical ? "bad"
+          : f.storedB > f.logical * 0.5 ? "warn" : "ok"
+      })
+    ]);
+
+    var wireRows = [];
+    if (mode === "whole") {
+      wireRows.push({ label: "hashes offered first", value: "none — no hashing",
+        flag: "bad" });
+      wireRows.push({ label: "chunks skipped", value: "0", flag: "bad" });
+      wireRows.push({ label: "bytes sent", value: by(f.bytes), flag: wireFlag });
+    } else {
+      wireRows.push({ label: "hashes offered", value: n(f.asked) });
+      wireRows.push({ label: "server already has", value: n(f.hits),
+        flag: f.hits > 0 ? "ok" : "bad" });
+      wireRows.push({ label: "uploaded", value: n(f.up) + " × " + by(C.CHUNK_B) +
+        " = " + by(f.bytes), flag: wireFlag });
+    }
+    wireRows.push({ label: "versus whole-file", value: f.bytes >= C.FILE_B
+      ? "no saving" : sddesignfilesync_x(C.FILE_B, f.bytes || C.FILE_B) + " less",
+      flag: f.bytes >= C.FILE_B ? "bad" : "ok" });
+
+    var wire = d.node({
+      title: "the wire · " + f.ev,
+      status: f.bytes === 0 ? "NO BYTES SENT"
+        : f.bytes >= C.FILE_B ? "FULL RE-UPLOAD" : "DELTA",
+      statusFlag: wireFlag, flag: wireFlag,
+      badge: name,
+      gauges: [{
+        label: "this event as a fraction of the file",
+        pct: Math.min(100, (f.bytes / C.FILE_B) * 100),
+        value: by(f.bytes) + " of " + by(C.FILE_B),
+        flag: wireFlag
+      }],
+      rows: wireRows
+    });
+
+    var storeRows = [
+      { label: "committed versions", value: String(f.commits) },
+      { label: "logical file bytes", value: by(f.logical) },
+      { label: "actually stored", value: by(f.storedB),
+        flag: f.logical > 0 && f.storedB >= f.logical ? "bad" : "ok" },
+      { label: "deduplicated", value: f.logical > 0
+        ? sddesignfilesync_p0((1 - f.storedB / f.logical) * 100) : "—",
+        flag: f.logical > 0 && f.storedB >= f.logical ? "bad"
+          : f.logical > 0 && (1 - f.storedB / f.logical) * 100 >= C.DEDUP_LO
+            ? "ok" : "warn" },
+      { label: "edits silently lost", value: String(f.lost),
+        flag: f.lost > 0 ? "bad" : "ok" }
+    ];
+    var storeNode = d.node({
+      title: f.vv ? "version vectors · the conflict" : "the store",
+      status: f.lost > 0 ? "EDIT DESTROYED" : f.vv ? "BOTH KEPT" : "GROWING",
+      statusFlag: f.lost > 0 ? "bad" : f.vv ? "ok" : "warn",
+      flag: f.lost > 0 ? "bad" : "ok",
+      meta: mode === "whole" ? "one opaque blob per version per user"
+        : n(f.refN) + " chunks referenced by a live version",
+      rows: f.vv ? f.vv.concat(storeRows.slice(3)) : storeRows
+    });
+
+    var out = [
+      phases,
+      head,
+      sddesignfilesync_strip(d, f.t,
+        "red = bytes crossed the wire · green = the server already had it · " +
+        "grey = not present"),
+      d.cols([wire, storeNode])
+    ];
+
+    if (f.final) {
+      var rows = [], modes = ["whole", "fixed", "cdc"];
+      var labels = { whole: "whole-file", fixed: "fixed " + by(C.CHUNK_B),
+        cdc: "content-defined" };
+      var m2, g2;
+      for (m2 = 0; m2 < modes.length; m2++) {
+        g2 = R[modes[m2]][R[modes[m2]].length - 1];
+        rows.push([
+          labels[modes[m2]] + (modes[m2] === mode ? " ◀" : ""),
+          by(g2.sent), by(R[modes[m2]][3].bytes), by(g2.storedB), String(g2.lost)
+        ]);
+      }
+      out.push(d.table(["strategy", "wire total", "prepend 1 byte", "stored",
+        "edits lost"], rows));
+
+      var csz = [], z, sz;
+      for (z = 0; z < C.ALT_CHUNKS.length; z++) {
+        sz = C.ALT_CHUNKS[z];
+        csz.push([
+          by(sz),
+          sddesignfilesync_n(C.FILE_B / sz),
+          by(sz),
+          by((C.FILE_B / sz) * C.HASH_B)
+        ]);
+      }
+      out.push(d.table(["chunk size", "chunks in " + by(C.FILE_B),
+        "cost of a one-word edit", "hash list"], csz));
+      out.push(d.note("<b>The honest footnote.</b> The page quotes <i>~" +
+        by(C.CHUNK_B) + " chunks</i> and <i>often under " + by(C.SMALL_DELTA_B) +
+        "</i> for a one-word edit, and those are different chunk sizes: at " +
+        by(C.CHUNK_B) + " a changed chunk <i>is</i> " + by(C.CHUNK_B) + ". " +
+        "Reaching " + by(C.SMALL_DELTA_B) + " means the bottom row — and the bottom " +
+        "row is " + sddesignfilesync_n(C.FILE_B / C.ALT_CHUNKS[2]) +
+        " hashes of metadata per file instead of " +
+        sddesignfilesync_n(D.UNITS) + ". <b>Chunk size is the trade between delta " +
+        "granularity and metadata cost</b>, and it is the same trade in every " +
+        "content-addressed system.", "warn"));
+    } else {
+      out.push(d.note(mode === "whole"
+        ? "Nothing on this strip can be skipped, because nothing on it has a name. " +
+          "<b>The chunk store and the hash index are not optimisations layered on " +
+          "later</b> — without them there is no vocabulary for saying what changed."
+        : "The strip is the file, " + sddesignfilesync_n(D.UNITS) + " chunks in " +
+          C.CELLS + " groups of " + (D.UNITS / C.CELLS) + ". Hover a group for its " +
+          "range. <b>Green is the whole trick</b>: the client offers hashes, the " +
+          "server answers which it lacks, and only those bytes move."));
+    }
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sddesignkeyvaluest  (design-key-value-store.md)
+//
+// TIME AXIS: one cluster's operational week. Steady state, a node dies,
+// the node returns, an eleventh node is added, a rack partitions, the
+// partition heals, and then a hot key. Seven events, replayed three times
+// over the same machinery with only the PARTITIONING SCHEME changed:
+// hash(key) % N, consistent hashing with one ring position per node, and
+// consistent hashing with the page's 150 virtual nodes each.
+//
+// Nothing here is a diagram of a ring. It is a ring: node positions are
+// the real FNV-1a hash of the node names (with a murmur3 avalanche, so
+// short similar names do not cluster), arcs are the real gaps between
+// sorted positions, and a key's replicas are the next N DISTINCT physical
+// nodes clockwise. Every load figure is a sum over those arcs. The load
+// imbalance you see is the imbalance those hashes actually produce.
+//
+// CONFIG — the page's own figures, quoted
+//   1B keys x 1 KB    §2 "1B keys x 1 KB average = 1 TB of data"
+//   RF 3 -> 3 TB      §2 "x replication factor 3 = 3 TB stored"
+//   10 nodes          §2 "~10 nodes minimum for capacity and headroom"
+//   1 TB SSD, 64 GB   §2 commodity node
+//   100k ops/s        §2 "100k ops/s target"
+//   ~50k per node     §2 "a single node handles ~50k"
+//   N=3 W=2 R=2       §4 "the standard. Survives one node down"
+//   150 vnodes        §3 "~150 positions per physical node"
+//   ~11%              §3 "losing one of ten nodes raises everyone else by
+//                     about 11%" — reproduced as 1/(NODES-1)
+//   ~1/N moves        §3 "N changes -> only ~1/N of keys move"
+//   p99 read < 10 ms  §1
+//   values < 10 KB    §1
+//   10% hot           §2 "if 10% is hot, 100 GB across the cluster"
+//   key 'user:42'     §3 mermaid — used verbatim as the hot key
+//   vector clocks     §4 "A: {node1: 2}  B: {node2: 1} … CONCURRENT" and
+//                     "A: {node1: 2}  B: {node1: 3} … SEQUENTIAL"
+//
+// CONFIG — declared here, because the page states none
+//   READ_FRAC 0.5     half the 100k ops are reads
+//   BASE_MS 3         uncontended read: one hop, bloom filter, index
+//                     block, one SSD seek. Queueing is base/(1-utilisation)
+//   LINK 125 MB/s     1 Gb/s per node, for migration and rebuild time
+//   OUTAGE 60 s, PARTITION 60 s
+//   HINT_LOSS 2%      hints the holder itself loses, leaving real drift
+//   MERKLE leaf = 1024 keys, hash = 32 B (SHA-256)
+//   MINORITY_CLIENTS 10%   share of clients stranded on the small side
+//   HOT 40%           of reads land on the single key 'user:42'
+//   CACHE_HIT 95%     what a client-side cache absorbs, in the last frame
+//
+// THE LOAD MODEL, stated because every number depends on it:
+//   a write is sent to all N replicas; a read is answered by R of the
+//   live replicas. So per node, ops = WRITES*repShare + READS*repShare*R/N,
+//   and summing over nodes gives WRITES*N + READS*R exactly. A dead
+//   replica's write is held as a HINT by the next live node clockwise that
+//   is not already a replica — hinted handoff, and it is charged for.
+// ======================================================================
+var sddesignkeyvaluest_C = {
+  KEYS: 1e9, VAL_B: 1000, RF: 3, W: 2, R: 2,
+  NODES: 10, NODE_SSD_B: 1e12, NODE_RAM_B: 64e9,
+  OPS: 100000, NODE_OPS: 50000,
+  VNODES: 150, P99_MS: 10, MAX_VAL_B: 10000, HOT_SET: 0.10,
+  READ_FRAC: 0.5, BASE_MS: 3, LINK_BPS: 125e6,
+  OUTAGE_S: 60, PARTITION_S: 60, HINT_LOSS: 0.02,
+  MERKLE_LEAF: 1000, HASH_B: 32,
+  MINORITY_CLIENTS: 0.10, HOT: 0.40, CACHE_HIT: 0.95,
+  HOT_KEY: "user:42"
+};
+var sddesignkeyvaluest_D = {
+  DATA_B: sddesignkeyvaluest_C.KEYS * sddesignkeyvaluest_C.VAL_B,
+  STORED_B: sddesignkeyvaluest_C.KEYS * sddesignkeyvaluest_C.VAL_B *
+    sddesignkeyvaluest_C.RF,
+  WRITES: sddesignkeyvaluest_C.OPS * (1 - sddesignkeyvaluest_C.READ_FRAC),
+  READS: sddesignkeyvaluest_C.OPS * sddesignkeyvaluest_C.READ_FRAC,
+  HOT_SET_B: sddesignkeyvaluest_C.KEYS * sddesignkeyvaluest_C.VAL_B *
+    sddesignkeyvaluest_C.HOT_SET,
+  SPREAD: 1 / (sddesignkeyvaluest_C.NODES - 1)   // the page's ~11%
+};
+var sddesignkeyvaluest_TWO32 = 4294967296;
+
+// ---- formatting ------------------------------------------------------
+function sddesignkeyvaluest_n(x) {
+  return String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function sddesignkeyvaluest_by(b) {
+  var u = ["B", "KB", "MB", "GB", "TB", "PB"], i = 0, v = b, s;
+  while (v >= 1000 && i < u.length - 1) { v = v / 1000; i++; }
+  s = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  if (s.indexOf(".") >= 0) { s = s.replace(/0+$/, ""); s = s.replace(/\.$/, ""); }
+  return s + " " + u[i];
+}
+function sddesignkeyvaluest_p1(x) { return x.toFixed(1) + "%"; }
+function sddesignkeyvaluest_ms(x) {
+  return !isFinite(x) ? "saturated" : (x >= 100 ? x.toFixed(0) : x.toFixed(1)) + " ms";
+}
+function sddesignkeyvaluest_secs(s) {
+  if (s < 90) return Math.round(s) + " s";
+  if (s < 5400) return (s / 60).toFixed(1) + " min";
+  return (s / 3600).toFixed(1) + " h";
+}
+function sddesignkeyvaluest_x(a, b) {
+  if (!b) return "—";
+  var r = a / b;
+  return (r >= 100 ? sddesignkeyvaluest_n(r) : r >= 10 ? r.toFixed(0) : r.toFixed(2)) + "×";
+}
+
+// ---- the ring --------------------------------------------------------
+function sddesignkeyvaluest_h32(s) {
+  var h = 2166136261, i;
+  for (i = 0; i < s.length; i++) {
+    h = (h ^ s.charCodeAt(i)) >>> 0;
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  h = (h ^ (h >>> 16)) >>> 0;
+  h = Math.imul(h, 2246822507) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 3266489909) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+function sddesignkeyvaluest_ring(names, vn, uniform) {
+  var pos = [], i, v;
+  if (uniform) {
+    for (i = 0; i < names.length; i++) {
+      pos.push({ p: Math.floor((i + 1) * sddesignkeyvaluest_TWO32 / names.length) - 1,
+        n: names[i] });
+    }
+    return pos;
+  }
+  for (i = 0; i < names.length; i++) {
+    for (v = 0; v < vn; v++) {
+      pos.push({ p: sddesignkeyvaluest_h32(names[i] + "#" + v), n: names[i] });
+    }
+  }
+  pos.sort(function (a, b) { return a.p - b.p; });
+  return pos;
+}
+function sddesignkeyvaluest_arcs(pos, RF) {
+  var M = pos.length, out = [], j, k, reps, seen, prev, size, nm;
+  for (j = 0; j < M; j++) {
+    prev = j === 0 ? pos[M - 1].p - sddesignkeyvaluest_TWO32 : pos[j - 1].p;
+    size = pos[j].p - prev;
+    reps = []; seen = {};
+    for (k = 0; k < M && reps.length < RF; k++) {
+      nm = pos[(j + k) % M].n;
+      if (!seen[nm]) { seen[nm] = 1; reps.push(nm); }
+    }
+    out.push({ s: size / sddesignkeyvaluest_TWO32, reps: reps, own: pos[j].n, idx: j });
+  }
+  return out;
+}
+function sddesignkeyvaluest_ownerAt(pos, p) {
+  var j;
+  for (j = 0; j < pos.length; j++) if (p <= pos[j].p) return pos[j].n;
+  return pos[0].n;
+}
+function sddesignkeyvaluest_arcAt(A, pos, p) {
+  var j;
+  for (j = 0; j < pos.length; j++) if (p <= pos[j].p) return A[j];
+  return A[0];
+}
+
+// ---- the load model --------------------------------------------------
+function sddesignkeyvaluest_load(A, names, dead, extra) {
+  var C = sddesignkeyvaluest_C, D = sddesignkeyvaluest_D;
+  var ops = {}, own = {}, rep = {}, hints = {}, i, k, a, alive, r, miss, t, kk, g, c;
+  for (i = 0; i < names.length; i++) { ops[names[i]] = 0; own[names[i]] = 0; rep[names[i]] = 0; hints[names[i]] = 0; }
+  var iso = 0, underW = 0, served = 0;
+  for (i = 0; i < A.length; i++) {
+    a = A[i]; alive = [];
+    own[a.own] += a.s;
+    for (k = 0; k < a.reps.length; k++) {
+      rep[a.reps[k]] += a.s;
+      if (!dead[a.reps[k]]) alive.push(a.reps[k]);
+    }
+    if (!alive.length) { iso += a.s; continue; }
+    served += a.s;
+    if (alive.length < C.W) underW += a.s;
+    r = Math.min(C.R, alive.length);
+    for (k = 0; k < alive.length; k++) {
+      ops[alive[k]] += D.WRITES * a.s + D.READS * a.s * r / alive.length;
+    }
+    miss = a.reps.length - alive.length;
+    if (miss > 0) {
+      t = 0; kk = a.idx; g = 0;
+      while (t < miss && g < A.length * 2) {
+        c = A[kk % A.length].own;
+        if (!dead[c] && a.reps.indexOf(c) < 0) {
+          ops[c] += D.WRITES * a.s; hints[c] += D.WRITES * a.s; t++;
+        }
+        kk++; g++;
+      }
+    }
+  }
+  if (extra) for (k = 0; k < extra.on.length; k++) ops[extra.on[k]] += extra.ops;
+  var live = [], mx = null, mn = null, ownMx = null, ownMn = null;
+  for (i = 0; i < names.length; i++) {
+    if (dead[names[i]]) continue;
+    live.push(names[i]);
+    if (mx === null || ops[names[i]] > ops[mx]) mx = names[i];
+    if (mn === null || ops[names[i]] < ops[mn]) mn = names[i];
+    if (ownMx === null || own[names[i]] > own[ownMx]) ownMx = names[i];
+    if (ownMn === null || own[names[i]] < own[ownMn]) ownMn = names[i];
+  }
+  var util = ops[mx] / C.NODE_OPS;
+  return {
+    ops: ops, own: own, rep: rep, hints: hints, live: live,
+    iso: iso, underW: underW, served: served,
+    mx: mx, mn: mn, ownMx: ownMx, ownMn: ownMn,
+    util: util, p99: util >= 1 ? Infinity : C.BASE_MS / (1 - util),
+    head: C.NODE_OPS / ops[mx],
+    over: 0
+  };
+}
+// the worst rack: the N-node set that is the FULL replica set of the most keys
+function sddesignkeyvaluest_worstRack(A) {
+  var g = {}, i, k, best = 0, bk = "";
+  for (i = 0; i < A.length; i++) {
+    k = A[i].reps.slice().sort().join("+");
+    g[k] = (g[k] || 0) + A[i].s;
+    if (g[k] > best) { best = g[k]; bk = k; }
+  }
+  return { f: best, set: bk.split("+") };
+}
+function sddesignkeyvaluest_moved(oldPos, newPos) {
+  var pts = [], i, prev = -1, m = 0, srcs = {}, nsrc = 0, seg, a, b;
+  for (i = 0; i < oldPos.length; i++) pts.push(oldPos[i].p);
+  for (i = 0; i < newPos.length; i++) pts.push(newPos[i].p);
+  pts.sort(function (x, y) { return x - y; });
+  for (i = 0; i < pts.length; i++) {
+    if (pts[i] === prev) continue;
+    seg = pts[i] - (prev < 0 ? pts[pts.length - 1] - sddesignkeyvaluest_TWO32 : prev);
+    a = sddesignkeyvaluest_ownerAt(oldPos, pts[i]);
+    b = sddesignkeyvaluest_ownerAt(newPos, pts[i]);
+    if (a !== b) { m += seg; if (!srcs[a]) { srcs[a] = 1; nsrc++; } }
+    prev = pts[i];
+  }
+  return { f: m / sddesignkeyvaluest_TWO32, src: nsrc };
+}
+// modulo's move fraction, counted over lcm(N, N+1) rather than asserted
+function sddesignkeyvaluest_modMoved(N) {
+  var h, c = 0, L = N * (N + 1);
+  for (h = 0; h < L; h++) if (h % N !== h % (N + 1)) c++;
+  return c / L;
+}
+
+// ======================================================================
+function sddesignkeyvaluest_build(sch) {
+  var C = sddesignkeyvaluest_C, D = sddesignkeyvaluest_D;
+  var names10 = [], names11 = [], i;
+  for (i = 0; i < C.NODES; i++) names10.push("node-" + i);
+  names11 = names10.concat(["node-" + C.NODES]);
+
+  var pos10 = sddesignkeyvaluest_ring(names10, sch.vn, sch.uniform);
+  var A10 = sddesignkeyvaluest_arcs(pos10, C.RF);
+  var none = {};
+  var F = [];
+
+  // -- 1. steady state --------------------------------------------------
+  var L1 = sddesignkeyvaluest_load(A10, names10, none);
+  F.push({ ev: "steady", names: names10, L: L1, dead: none, nodes: C.NODES });
+
+  // -- 2. the busiest node dies; ring unchanged, replicas drop to 2 -----
+  var victim = L1.mx;
+  var dead2 = {}; dead2[victim] = 1;
+  var L2 = sddesignkeyvaluest_load(A10, names10, dead2);
+  var hintOps = 0, hintNodes = 0;
+  for (i = 0; i < names10.length; i++) {
+    if (L2.hints[names10[i]] > 0) { hintOps += L2.hints[names10[i]]; hintNodes++; }
+  }
+  F.push({
+    ev: "node down", names: names10, L: L2, dead: dead2, nodes: C.NODES,
+    victim: victim, victimRep: L1.rep[victim],
+    hintOps: hintOps, hintNodes: hintNodes,
+    hintsHeld: hintOps * C.OUTAGE_S,
+    hintBytes: hintOps * C.OUTAGE_S * C.VAL_B,
+    spare: C.NODE_OPS - L1.ops[victim]
+  });
+
+  // -- 3. it returns: hints replay, read repair, anti-entropy -----------
+  var missed = hintOps * C.OUTAGE_S;
+  var replayS = missed / Math.max(1, C.NODE_OPS - L1.ops[victim]);
+  var drift = missed * C.HINT_LOSS;
+  var keysOn = C.KEYS * L1.rep[victim];
+  var leaves = Math.ceil(keysOn / C.MERKLE_LEAF);
+  var depth = Math.ceil(Math.log(leaves) / Math.LN2);
+  var visited = drift > 0 && drift < leaves
+    ? 2 * drift * (2 + Math.log(leaves / drift) / Math.LN2)
+    : 2 * leaves - 1;
+  var merkleB = visited * C.HASH_B;
+  var shipB = keysOn * C.VAL_B;
+  // if it never comes back: re-replicate its ranges. Sources and sinks are
+  // however many distinct nodes hold those ranges.
+  var srcs = {}, nsrc = 0;
+  for (i = 0; i < A10.length; i++) {
+    if (A10[i].reps.indexOf(victim) >= 0) {
+      var q;
+      for (q = 0; q < A10[i].reps.length; q++) {
+        if (A10[i].reps[q] !== victim && !srcs[A10[i].reps[q]]) {
+          srcs[A10[i].reps[q]] = 1; nsrc++;
+        }
+      }
+    }
+  }
+  var rebuildB = L1.rep[victim] * D.DATA_B;
+  var par = sch.vn === 1 || sch.uniform ? 1 : Math.max(1, nsrc);
+  F.push({
+    ev: "it returns", names: names10, L: L1, dead: none, nodes: C.NODES,
+    victim: victim, missed: missed, replayS: replayS, drift: drift,
+    keysOn: keysOn, leaves: leaves, depth: depth, visited: visited,
+    merkleB: merkleB, shipB: shipB,
+    rebuildB: rebuildB, nsrc: nsrc, par: par,
+    rebuildS: rebuildB / (par * C.LINK_BPS)
+  });
+
+  // -- 4. add an eleventh node ------------------------------------------
+  var pos11 = sddesignkeyvaluest_ring(names11, sch.vn, sch.uniform);
+  var A11 = sddesignkeyvaluest_arcs(pos11, C.RF);
+  var mv = sch.uniform
+    ? { f: sddesignkeyvaluest_modMoved(C.NODES), src: C.NODES }
+    : sddesignkeyvaluest_moved(pos10, pos11);
+  var L4 = sddesignkeyvaluest_load(A11, names11, none);
+  var movedB = mv.f * D.STORED_B;
+  var movePar = sch.uniform ? C.NODES + 1 : 1;
+  F.push({
+    ev: "scale out", names: names11, L: L4, dead: none, nodes: C.NODES + 1,
+    movedF: mv.f, movedB: movedB, src: mv.src, movePar: movePar,
+    moveS: movedB / (movePar * C.LINK_BPS),
+    newShare: L4.own["node-" + C.NODES],
+    ideal: 1 / (C.NODES + 1)
+  });
+
+  // -- 5. a rack partitions ---------------------------------------------
+  var wr = sddesignkeyvaluest_worstRack(A11);
+  var dead5 = {};
+  for (i = 0; i < wr.set.length; i++) dead5[wr.set[i]] = 1;
+  var L5 = sddesignkeyvaluest_load(A11, names11, dead5);
+  F.push({
+    ev: "rack partition", names: names11, L: L5, dead: dead5, nodes: C.NODES + 1,
+    rack: wr.set, isoF: wr.f, isoKeys: wr.f * C.KEYS
+  });
+
+  // -- 6. the partition heals -------------------------------------------
+  var wMaj = D.WRITES * (1 - C.MINORITY_CLIENTS) * C.PARTITION_S;
+  var wMin = D.WRITES * C.MINORITY_CLIENTS * C.PARTITION_S;
+  var both = wMaj * wMin / C.KEYS;       // uniform keys: the birthday estimate
+  F.push({
+    ev: "heal", names: names11, L: L4, dead: none, nodes: C.NODES + 1,
+    wMaj: wMaj, wMin: wMin, both: both, lwwB: both * C.VAL_B,
+    repaired: wMaj + wMin - both
+  });
+
+  // -- 7. a hot key -------------------------------------------------------
+  var hp = sddesignkeyvaluest_h32(C.HOT_KEY);
+  var hotArc = sddesignkeyvaluest_arcAt(A11, pos11, hp);
+  var perRep = D.READS * C.HOT * C.R / C.RF;
+  var L7 = sddesignkeyvaluest_load(A11, names11, none,
+    { on: hotArc.reps, ops: perRep });
+  var L7c = sddesignkeyvaluest_load(A11, names11, none,
+    { on: hotArc.reps, ops: perRep * (1 - C.CACHE_HIT) });
+  var hw = hotArc.reps[0], q2;
+  for (q2 = 1; q2 < hotArc.reps.length; q2++) {
+    if (L7.ops[hotArc.reps[q2]] > L7.ops[hw]) hw = hotArc.reps[q2];
+  }
+  var hu = L7.ops[hw] / C.NODE_OPS, hb = L4.ops[hw] / C.NODE_OPS;
+  var hc = L7c.ops[hw] / C.NODE_OPS;
+  F.push({
+    ev: "hot key", names: names11, L: L7, dead: none, nodes: C.NODES + 1,
+    hotReps: hotArc.reps, perRep: perRep, hotPos: hp, base: L4, cached: L7c,
+    hw: hw,
+    hUtil: hu, hP99: hu >= 1 ? Infinity : C.BASE_MS / (1 - hu),
+    hBase: hb, hBaseP99: hb >= 1 ? Infinity : C.BASE_MS / (1 - hb),
+    hCache: hc, hCacheP99: hc >= 1 ? Infinity : C.BASE_MS / (1 - hc)
+  });
+
+  return { F: F, A10: A10, A11: A11, L1: L1 };
+}
+
+var sddesignkeyvaluest_SCHEMES = [
+  { id: "mod", label: "hash(key) % N", vn: 0, uniform: true,
+    name: "modulo" },
+  { id: "ch1", label: "Ring, 1 position/node", vn: 1, uniform: false,
+    name: "consistent hashing, one position per node" },
+  { id: "vn", label: "Ring + 150 vnodes", vn: sddesignkeyvaluest_C.VNODES,
+    uniform: false, name: "consistent hashing with " +
+      sddesignkeyvaluest_C.VNODES + " vnodes per node" }
+];
+var sddesignkeyvaluest_R = {};
+(function () {
+  var i;
+  for (i = 0; i < sddesignkeyvaluest_SCHEMES.length; i++) {
+    sddesignkeyvaluest_R[sddesignkeyvaluest_SCHEMES[i].id] =
+      sddesignkeyvaluest_build(sddesignkeyvaluest_SCHEMES[i]);
+  }
+})();
+
+// ======================================================================
+function sddesignkeyvaluest_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [], chips = [], i;
+  if (!names.length) return "";
+  for (i = 0; i < names.length; i++) {
+    chips.push({ label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+  }
+  return d.pills(chips);
+}
+
+function sddesignkeyvaluest_lanes(d, f) {
+  var C = sddesignkeyvaluest_C;
+  var oc = [], uc = [], i, nm, sh, op, ut, ideal = 1 / f.nodes;
+  for (i = 0; i < f.names.length; i++) {
+    nm = f.names[i];
+    sh = f.L.own[nm] || 0;
+    op = f.L.ops[nm] || 0;
+    ut = op / C.NODE_OPS;
+    if (f.dead[nm]) {
+      oc.push({ label: "×", flag: "bad", title: nm + " · unreachable" });
+      uc.push({ label: "×", flag: "bad", title: nm + " · unreachable" });
+    } else {
+      oc.push({
+        label: String(Math.round(sh * 100)),
+        flag: sh > ideal * 1.5 ? "bad" : sh < ideal * 0.5 ? "warn" : "ok",
+        title: nm + " · owns " + sddesignkeyvaluest_p1(sh * 100) +
+          " of the ring (even share " + sddesignkeyvaluest_p1(ideal * 100) + ")"
+      });
+      uc.push({
+        label: String(Math.round(ut * 100)),
+        flag: ut >= 1 ? "bad" : ut > 0.8 ? "bad" : ut > 0.66 ? "warn" : "ok",
+        title: nm + " · " + sddesignkeyvaluest_n(op) + " replica ops/s of " +
+          sddesignkeyvaluest_n(C.NODE_OPS) + " (" +
+          sddesignkeyvaluest_p1(ut * 100) + ")"
+      });
+    }
+  }
+  return d.stack([
+    d.lane({ label: "ring share %", cells: oc }),
+    d.lane({ label: "node load %", cells: uc })
+  ]);
+}
+
+function sddesignkeyvaluest_caption(sid, i, f) {
+  var C = sddesignkeyvaluest_C, D = sddesignkeyvaluest_D;
+  var n = sddesignkeyvaluest_n, by = sddesignkeyvaluest_by;
+  var p1 = sddesignkeyvaluest_p1, ms = sddesignkeyvaluest_ms;
+  var secs = sddesignkeyvaluest_secs, xx = sddesignkeyvaluest_x;
+  var R = sddesignkeyvaluest_R;
+  var L = f.L, ok = f.L.p99 <= C.P99_MS;
+
+  if (i === 0) {
+    if (sid === "mod") return "<b>" + n(C.NODES) + " nodes, and modulo balances " +
+      "perfectly.</b> Every node owns exactly " + p1(100 / C.NODES) + " of the " +
+      "keyspace, carries " + n(L.ops[L.mx]) + " replica ops/s of its " +
+      n(C.NODE_OPS) + " ceiling, and answers in <b>" + ms(L.p99) + "</b> against " +
+      "the " + C.P99_MS + " ms budget. <i>This is the strongest frame modulo will " +
+      "ever have, and it is worth admitting: as a load balancer it is unbeatable. " +
+      "It fails on the next thing that happens, not on this one.</i>";
+    if (sid === "ch1") return "<b>Same " + n(C.NODES) + " nodes on a ring, one " +
+      "position each — and the arcs are not equal.</b> These are the real hashed " +
+      "positions of the node names: the largest arc is <b>" +
+      p1(L.own[L.ownMx] * 100) + "</b> and the smallest <b>" +
+      p1(L.own[L.ownMn] * 100) + "</b>, a <b>" +
+      xx(L.own[L.ownMx], L.own[L.ownMn]) + "</b> spread where the even share is " +
+      p1(100 / C.NODES) + ". The busiest node is at <b>" + p1(L.util * 100) +
+      "</b> and its p99 is <b>" + ms(L.p99) + "</b> — <i>already past the " +
+      C.P99_MS + " ms budget, with nothing broken.</i> The page's \"sizes vary " +
+      "wildly\" is not a caveat; it is the steady state.";
+    return "<b>The same ring, with " + C.VNODES + " positions per node.</b> Each " +
+      "node's " + C.VNODES + " small arcs sum to between <b>" +
+      p1(L.own[L.ownMn] * 100) + "</b> and <b>" + p1(L.own[L.ownMx] * 100) +
+      "</b> — a " + xx(L.own[L.ownMx], L.own[L.ownMn]) + " spread where one " +
+      "position per node gave " +
+      xx(R.ch1.F[0].L.own[R.ch1.F[0].L.ownMx], R.ch1.F[0].L.own[R.ch1.F[0].L.ownMn]) +
+      ". Busiest node <b>" + p1(L.util * 100) + "</b>, p99 <b>" + ms(L.p99) +
+      "</b>, inside the " + C.P99_MS + " ms budget. <i>Averaging many small arcs " +
+      "is the entire mechanism — there is nothing clever in it, which is why " +
+      "leaving it out is the commonest omission.</i>";
+  }
+
+  if (i === 1) {
+    var base = "<b>" + f.victim + " dies.</b> ";
+    var common = "N=" + C.RF + " with W=" + C.W + " survives exactly one replica " +
+      "loss, so <b>not one write is rejected</b>: two acks still satisfy the " +
+      "quorum and the third is held as a <b>hint</b> by the next live node " +
+      "clockwise. " + n(f.hintOps) + " hints/s accumulate across " + f.hintNodes +
+      " peers — " + n(f.hintsHeld) + " writes, " + by(f.hintBytes) + ", after " +
+      C.OUTAGE_S + " seconds. ";
+    if (sid === "mod") return base + common + "Its load lands on the two other " +
+      "replicas of its keys, evenly: busiest node <b>" + p1(L.util * 100) +
+      "</b>, p99 <b>" + ms(L.p99) + "</b>. <i>The page's " +
+      p1(D.SPREAD * 100) + " — one of " + C.NODES + " gone means everyone " +
+      "else carries 1/" + (C.NODES - 1) + " more — but only while N stays " +
+      C.NODES + ". Recompute N and every key moves.</i>";
+    if (sid === "ch1") return base + common + "The busiest node was the one that " +
+      "died, which is not a coincidence: it was at " +
+      p1(R.ch1.F[0].L.util * 100) + ". Busiest survivor now <b>" +
+      p1(L.util * 100) + "</b>, p99 <b>" + ms(L.p99) + "</b> against a " +
+      C.P99_MS + " ms budget. <i>Its arc goes to its single successor. That is " +
+      "the page's cascade argument, and the reason it does not fire here is that " +
+      "replication had already spread two thirds of the work — the cascade needs " +
+      "the rebuild, which is the next frame.</i>";
+    return base + common + "Its " + C.VNODES + " arcs each fall to their own " +
+      "successor, so the loss lands on <b>every</b> survivor rather than one: " +
+      "busiest node <b>" + p1(L.util * 100) + "</b>, p99 <b>" + ms(L.p99) +
+      "</b>. <i>The page's figure exactly — losing one of " + C.NODES +
+      " raises everyone else by 1/" + (C.NODES - 1) + ", about " +
+      Math.round(D.SPREAD * 100) + "%.</i>";
+  }
+
+  if (i === 2) {
+    var head = "<b>" + f.victim + " comes back after " + C.OUTAGE_S +
+      " s, and three mechanisms converge it.</b> <b>Hinted handoff</b> replays " +
+      n(f.missed) + " buffered writes into its spare " +
+      n(C.NODE_OPS - R[sid].L1.ops[f.victim]) + " ops/s of headroom: <b>" +
+      secs(f.replayS) + "</b>. <b>Read repair</b> fixes whatever a client " +
+      "happens to read. <b>Anti-entropy</b> catches the residue — the " +
+      p1(C.HINT_LOSS * 100) + " of hints whose holder also restarted, <b>" +
+      n(f.drift) + " keys</b>. ";
+    var merkle = "That node holds " + n(f.keysOn) + " keys, so its Merkle tree " +
+      "has " + n(f.leaves) + " leaves and is " + f.depth + " levels deep. " +
+      "Finding " + n(f.drift) + " differing leaves costs about " + n(f.visited) +
+      " hash comparisons at " + C.HASH_B + " B each: <b>" + by(f.merkleB) +
+      "</b> exchanged, against <b>" + by(f.shipB) + "</b> to compare the data " +
+      "itself. " + xx(f.shipB, f.merkleB) + " less, and that ratio is the only " +
+      "reason background repair is affordable. ";
+    var rebuild = sid === "vn"
+      ? "<i>And if it never came back:</i> " + by(f.rebuildB) + " to re-replicate, " +
+        "held across <b>" + f.nsrc + " surviving nodes</b>, so " + f.par +
+        " transfers run at once — <b>" + secs(f.rebuildS) + "</b>."
+      : "<i>And if it never came back:</i> " + by(f.rebuildB) + " to re-replicate " +
+        "onto one replacement machine, bottlenecked on <b>" + f.par + " link</b> " +
+        "at " + by(C.LINK_BPS) + "/s — <b>" + secs(f.rebuildS) + "</b>, during " +
+        "which the cluster is under-replicated. Vnodes turn this into " +
+        secs(R.vn.F[2].rebuildS) + " by making it parallel.";
+    return head + merkle + rebuild;
+  }
+
+  if (i === 3) {
+    var pre = "<b>An eleventh node is added.</b> ";
+    if (sid === "mod") return pre + "N goes from " + C.NODES + " to " +
+      (C.NODES + 1) + ", so a key's home is <code>h % " + (C.NODES + 1) +
+      "</code> instead of <code>h % " + C.NODES + "</code>. Counting over the " +
+      C.NODES * (C.NODES + 1) + " residues, <b>" + p1(f.movedF * 100) +
+      " of keys move</b> — " + by(f.movedB) + ", every node shipping to every " +
+      "other, " + secs(f.moveS) + " at " + by(C.LINK_BPS) + "/s each. <i>The " +
+      "elapsed time is not the problem — it is parallel, and it is shorter than " +
+      "the ring's " + secs(R.vn.F[3].moveS) + ". The problem is the " +
+      p1(f.movedF * 100) + ": for that whole window, that share of every read goes " +
+      "to a node that no longer owns the key, the cluster runs a near-total cache " +
+      "miss, and all " + (C.NODES + 1) + " machines are at line rate while still " +
+      "serving " + n(C.OPS) + " ops/s. The only keys that stay are the 1-in-" +
+      (C.NODES + 1) + " where the two residues agree. You cannot resize this " +
+      "cluster during business hours.</i>";
+    if (sid === "ch1") return pre + "The new node hashes to one ring position and " +
+      "splits whatever arc it lands in. It landed in a small one: <b>" +
+      p1(f.movedF * 100) + " of keys move</b> (" + by(f.movedB) + ", " +
+      secs(f.moveS) + ") from <b>" + f.src + " source node</b>. That sounds like " +
+      "a triumph next to modulo's " + p1(R.mod.F[3].movedF * 100) +
+      " — until you notice what the new machine now owns: <b>" +
+      p1(f.newShare * 100) + "</b>, where an even share is " +
+      p1(f.ideal * 100) + ". <i>You bought a node and it took " +
+      xx(f.ideal, f.newShare) + " less than its share. Consistent hashing moves " +
+      "~1/N <b>in expectation</b>; with one position per node the variance is the " +
+      "whole story.</i>";
+    return pre + "Its " + C.VNODES + " positions land all over the ring, taking a " +
+      "slice from <b>" + f.src + " different nodes</b>: <b>" + p1(f.movedF * 100) +
+      " of keys move</b>, against the ideal 1/" + (C.NODES + 1) + " = " +
+      p1(f.ideal * 100) + ". " + by(f.movedB) + " in " + secs(f.moveS) +
+      ". And the new node ends up owning <b>" + p1(f.newShare * 100) +
+      "</b> — it is actually carrying its share. <i>Many positions is what makes " +
+      "the average the outcome rather than the expectation.</i>";
+  }
+
+  if (i === 4) {
+    var r = "<b>A rack loses its uplink: " + f.rack.join(", ") +
+      " are unreachable.</b> These three are the worst set this scheme has — the " +
+      "complete replica set for more keys than any other trio. ";
+    var num = "<b>" + p1(f.isoF * 100) + " of the keyspace (" +
+      n(f.isoKeys / 1e6) + "M keys) now has zero reachable replicas</b>, and " +
+      p1(f.L.underW * 100) + " more is down to a single replica, below W=" +
+      C.W + " — those writes only complete because a sloppy quorum parks them on " +
+      "a node that does not own them. The survivors carry " +
+      p1(f.L.util * 100) + ", p99 <b>" + ms(f.L.p99) + "</b>. ";
+    if (sid === "vn") return r + num + "<i>" + p1(f.isoF * 100) + " is small " +
+      "because a key's three replicas are three physical nodes chosen from all " +
+      f.nodes + " — with " + C.VNODES + " positions each, no trio is the whole " +
+      "replica set for very much. One position per node made it " +
+      p1(R.ch1.F[4].isoF * 100) + ".</i>";
+    if (sid === "ch1") return r + num + "<i>All three replicas of a key are the " +
+      "next three nodes clockwise, so three adjacent nodes are the entire replica " +
+      "set for one whole arc — and the arcs are uneven, so the worst one is huge. " +
+      p1(f.isoF * 100) + " of the data is simply gone from this side of the " +
+      "partition. Vnodes bring it to " + p1(R.vn.F[4].isoF * 100) + ".</i>";
+    return r + num + "<i>Replicas are (h%N, +1, +2), so three consecutive nodes " +
+      "own one full partition between them: exactly 1/" + f.nodes + " of the " +
+      "keyspace, unreachable. Even balance does not help here — it guarantees the " +
+      "loss is exactly " + p1(f.isoF * 100) + " rather than " + "possibly less.</i>";
+  }
+
+  if (i === 5) return "<b>The partition heals, and now somebody has to decide what " +
+    "the value is.</b> Both sides accepted writes for " + C.PARTITION_S +
+    " s — that is the availability the design chose. " + n(f.wMaj) + " on the " +
+    "majority side, " + n(f.wMin) + " on the minority (" +
+    p1(C.MINORITY_CLIENTS * 100) + " of clients). With uniform keys the expected " +
+    "number written on <i>both</i> sides is " + n(f.wMaj) + "·" + n(f.wMin) +
+    "/" + n(C.KEYS) + " = <b>" + n(f.both) + " keys</b>. Everything else — <b>" +
+    n(f.repaired) + " writes</b> — is sequential and merges without a decision. " +
+    "<b>Vector clocks tell the two apart structurally:</b> A {node1:2} versus " +
+    "B {node2:1}, neither dominates, so concurrent and the client sees both; " +
+    "A {node1:2} versus B {node1:3}, B dominates, so B simply wins. " +
+    "<i>Last-write-wins would discard one version of each of those " + n(f.both) +
+    " keys — " + by(f.lwwB) + " of accepted, acknowledged writes deleted by a " +
+    "clock comparison, with no error anywhere. The number is small. That is what " +
+    "makes it dangerous.</i>";
+
+  var hot = "<b>One key, <code>" + C.HOT_KEY + "</code>, takes " +
+    Math.round(C.HOT * 100) + "% of all reads.</b> It hashes to one arc, so it has " +
+    "exactly " + C.RF + " replicas: " + f.hotReps.join(", ") + ". Each absorbs " +
+    n(f.perRep) + " extra reads/s (R=" + C.R + " of N=" + C.RF + "), which takes " +
+    f.hw + " from <b>" + p1(f.hBase * 100) + " to " + p1(f.hUtil * 100) +
+    "</b> and its p99 from " + ms(f.hBaseP99) + " to <b>" + ms(f.hP99) +
+    "</b> against the " + C.P99_MS + " ms budget. ";
+  return hot + "<b>Every tab absorbs the same " + n(f.perRep) +
+    " ops/s, and the p99 it buys — " + ms(R.mod.F[6].hP99) + ", " +
+    ms(R.ch1.F[6].hP99) + " and " + ms(R.vn.F[6].hP99) +
+    " — differs only by where that node already was.</b> " +
+    "No partitioning scheme can split one key across machines. More vnodes do not help; more nodes do not help; the " +
+    "ring is not involved. <i>The fixes are outside it:</i> a client-side cache " +
+    "absorbing " + Math.round(C.CACHE_HIT * 100) + "% of those reads brings " +
+    f.hw + " back to " + p1(f.hCache * 100) + " and <b>" + ms(f.hCacheP99) +
+    "</b>, or you split the value across sub-keys and merge on read. <b>Say this " +
+    "one out loud before being asked</b>: partitioning solves distribution, not " +
+    "skew, and this is the one figure in the sim that three different rings " +
+    "cannot move.";
+}
+
+function sddesignkeyvaluest_scenario(sch) {
+  var B = sddesignkeyvaluest_R[sch.id];
+  var C = sddesignkeyvaluest_C;
+  var blurb = sch.id === "mod"
+    ? "<b><code>node = hash(key) % N</code>.</b> Perfectly even, trivially " +
+      "correct, and the page's first rejection. Seven events on " + C.NODES +
+      " nodes. Press Play."
+    : sch.id === "ch1"
+    ? "<b>Consistent hashing, one ring position per node.</b> Keys and nodes " +
+      "hash onto the same 32-bit ring; a key belongs to the first node clockwise. " +
+      "The same seven events."
+    : "<b>Consistent hashing with " + C.VNODES + " virtual nodes per machine.</b> " +
+      "Identical ring, identical quorums — each physical node just occupies " +
+      C.VNODES + " positions instead of one. The same seven events again.";
+  var steps = [{ sid: sch.id, idle: true, caption: blurb, flag: "idle" }];
+  var i, f;
+  for (i = 0; i < B.F.length; i++) {
+    f = B.F[i];
+    f.sid = sch.id;
+    f.caption = sddesignkeyvaluest_caption(sch.id, i, f);
+    var pp = f.ev === "hot key" ? f.hP99 : f.L.p99;
+    f.flag = pp > C.P99_MS || f.isoF > 0.05 ? "bad"
+      : pp > C.P99_MS * 0.85 || f.both > 0 ? "warn" : "ok";
+    steps.push(f);
+  }
+  return {
+    id: sch.id, label: sch.label, steps: steps,
+    phases: ["provisioned", "steady", "node down", "it returns", "scale out",
+      "rack partition", "heal", "hot key"]
+  };
+}
+
+// ======================================================================
+S["sddesignkeyvaluest"] = {
+  title: "Run one cluster's bad week three ways",
+  note: (function () {
+    var C = sddesignkeyvaluest_C, D = sddesignkeyvaluest_D;
+    var n = sddesignkeyvaluest_n, by = sddesignkeyvaluest_by;
+    return "The page's cluster, operated for a week. <b>" + n(C.KEYS / 1e9) +
+      "B keys × " + by(C.VAL_B) + " = " + by(D.DATA_B) + "</b>, replication " +
+      "factor <b>" + C.RF + "</b> so " + by(D.STORED_B) + " stored, on <b>" +
+      C.NODES + " nodes</b> of " + by(C.NODE_SSD_B) + " and " + by(C.NODE_RAM_B) +
+      ", serving <b>" + n(C.OPS) + " ops/s</b> against a per-node ceiling of " +
+      n(C.NODE_OPS) + " — all the page's figures, with <b>N=" + C.RF + " W=" +
+      C.W + " R=" + C.R + "</b>. Declared here: half the ops are reads, an " +
+      "uncontended read costs " + C.BASE_MS + " ms and queues as base ÷ " +
+      "(1 − utilisation), and each node has a " + by(C.LINK_BPS) +
+      "/s link. A write goes to all " + C.RF + " replicas and a read is answered " +
+      "by " + C.R + " of the live ones, so per-node load is the sum over the arcs " +
+      "that node replicates. <b>The ring is real</b>: positions are the FNV-1a " +
+      "hashes of the node names, arcs are the gaps between them, and a key's " +
+      "replicas are the next " + C.RF + " distinct machines clockwise — the load " +
+      "imbalance on screen is the imbalance those hashes produce, not an " +
+      "illustration. Seven events: steady state, a node dies, it returns, an " +
+      "eleventh is added, a rack partitions, the partition heals, and one key " +
+      "takes " + Math.round(C.HOT * 100) + "% of reads. Scored against the page's " +
+      "<b>p99 read under " + C.P99_MS + " ms</b>.";
+  })(),
+  interval: 1700,
+
+  scenarios: [
+    sddesignkeyvaluest_scenario(sddesignkeyvaluest_SCHEMES[0]),
+    sddesignkeyvaluest_scenario(sddesignkeyvaluest_SCHEMES[1]),
+    sddesignkeyvaluest_scenario(sddesignkeyvaluest_SCHEMES[2])
+  ],
+
+  draw: function (step, d, ctx) {
+    var C = sddesignkeyvaluest_C, D = sddesignkeyvaluest_D;
+    var n = sddesignkeyvaluest_n, by = sddesignkeyvaluest_by;
+    var p1 = sddesignkeyvaluest_p1, ms = sddesignkeyvaluest_ms;
+    var secs = sddesignkeyvaluest_secs, xx = sddesignkeyvaluest_x;
+    var R = sddesignkeyvaluest_R;
+    var sid = step && step.sid ? step.sid : "mod";
+    var sch = sddesignkeyvaluest_SCHEMES[sid === "mod" ? 0 : sid === "ch1" ? 1 : 2];
+    var phases = sddesignkeyvaluest_phases(d, ctx);
+
+    if (step && step.idle) {
+      return d.stack([
+        phases,
+        d.cols([
+          d.big(by(D.STORED_B), "stored, " + C.RF + " replicas", "idle"),
+          d.stat({ label: "cluster", value: C.NODES + " nodes",
+            sub: by(C.NODE_SSD_B) + " SSD each", flag: "idle" }),
+          d.stat({ label: "target", value: n(C.OPS) + " ops/s",
+            sub: "p99 read under " + C.P99_MS + " ms", flag: "idle" })
+        ]),
+        d.node({
+          title: "the estimation, before a key is placed",
+          status: "IDLE", statusFlag: "idle", flag: "idle", badge: sch.name,
+          body: d.table(["quantity", "derivation", "value"], [
+            ["data", n(C.KEYS / 1e9) + "B keys × " + by(C.VAL_B), by(D.DATA_B)],
+            ["stored", by(D.DATA_B) + " × RF " + C.RF, by(D.STORED_B)],
+            ["nodes needed", by(D.STORED_B) + " ÷ " + by(C.NODE_SSD_B),
+              Math.ceil(D.STORED_B / C.NODE_SSD_B) + ", so " + C.NODES +
+              " with headroom"],
+            ["replica writes/s", n(D.WRITES) + " × N " + C.RF,
+              n(D.WRITES * C.RF)],
+            ["replica reads/s", n(D.READS) + " × R " + C.R,
+              n(D.READS * C.R)],
+            ["per node", n(D.WRITES * C.RF + D.READS * C.R) + " ÷ " + C.NODES,
+              n((D.WRITES * C.RF + D.READS * C.R) / C.NODES) + " of " +
+              n(C.NODE_OPS)],
+            ["hot working set", by(D.DATA_B) + " × " +
+              Math.round(C.HOT_SET * 100) + "%", by(D.HOT_SET_B)],
+            ["W + R", C.W + " + " + C.R + " against N " + C.RF,
+              C.W + C.R > C.RF ? "overlaps" : "does not overlap"]
+          ])
+        }),
+        d.note("<b>W + " + C.R + " &gt; " + C.RF + "</b>, so any read set and any " +
+          "write set share at least one node — pigeonhole, not magic, and not " +
+          "linearizability either. What follows tests the <i>other</i> half: where " +
+          "the keys sit.")
+      ]);
+    }
+
+    var f = step, L = f.L;
+    var shownP99 = f.ev === "hot key" ? f.hP99 : L.p99;
+    var shownUtil = f.ev === "hot key" ? f.hUtil : L.util;
+    var shownNode = f.ev === "hot key" ? f.hw : L.mx;
+    var overBudget = shownP99 > C.P99_MS;
+
+    var head = d.cols([
+      d.big(ms(shownP99), "p99, budget " + C.P99_MS + " ms",
+        overBudget ? "bad" : "ok"),
+      d.stat({
+        label: f.ev === "hot key" ? "the hot key's node" : "busiest node",
+        value: p1(shownUtil * 100),
+        sub: n(L.ops[shownNode]) + " of " + n(C.NODE_OPS) + " ops/s",
+        flag: shownUtil > 0.8 ? "bad" : shownUtil > 0.66 ? "warn" : "ok"
+      }),
+      d.stat({
+        label: f.isoF !== undefined ? "unreachable keys" : "headroom",
+        value: f.isoF !== undefined ? p1(f.isoF * 100) : xx(C.NODE_OPS, L.ops[L.mx]),
+        sub: f.isoF !== undefined ? "zero live replicas"
+          : "before the first node saturates",
+        flag: f.isoF !== undefined ? (f.isoF > 0.05 ? "bad" : "warn")
+          : (L.head < 1.5 ? "bad" : L.head < 2 ? "warn" : "ok")
+      })
+    ]);
+
+    var ringRows = [
+      { label: "nodes live", value: n(L.live.length) + " of " + n(f.nodes),
+        flag: L.live.length < f.nodes ? "bad" : "ok" },
+      { label: "ring positions", value: sch.uniform ? n(f.nodes) + " (fixed, even)"
+        : n(f.nodes * (sch.vn || 1)) + " (" + (sch.vn || 1) + " per node)" },
+      { label: "widest ring share", value: p1(L.own[L.ownMx] * 100) +
+        " vs even " + p1(100 / f.nodes),
+        flag: L.own[L.ownMx] > 1.5 / f.nodes ? "bad" : "ok" },
+      { label: "share spread", value: xx(L.own[L.ownMx], L.own[L.ownMn]),
+        flag: L.own[L.ownMx] / L.own[L.ownMn] > 3 ? "bad"
+          : L.own[L.ownMx] / L.own[L.ownMn] > 1.5 ? "warn" : "ok" },
+      { label: "keys below W=" + C.W, value: p1(L.underW * 100),
+        flag: L.underW > 0 ? "warn" : "ok" },
+      { label: "keys with no live replica", value: p1(L.iso * 100),
+        flag: L.iso > 0 ? "bad" : "ok" }
+    ];
+
+    var eventRows;
+    if (f.ev === "steady") {
+      eventRows = [
+        { label: "replica ops/s total",
+          value: n(D.WRITES * C.RF + D.READS * C.R) },
+        { label: "quietest node", value: n(L.ops[L.mn]) + " ops/s",
+          flag: "ok" },
+        { label: "busiest node", value: n(L.ops[L.mx]) + " ops/s",
+          flag: L.util > 0.8 ? "bad" : "ok" },
+        { label: "p99 at " + p1(L.util * 100), value: ms(L.p99),
+          flag: overBudget ? "bad" : "ok" },
+        { label: "load before saturation", value: xx(C.NODE_OPS, L.ops[L.mx]),
+          flag: L.head < 1.5 ? "bad" : "ok" }
+      ];
+    } else if (f.ev === "node down") {
+      eventRows = [
+        { label: "node lost", value: f.victim + ", replicated " +
+          p1(f.victimRep * 100) + " of keys", flag: "bad" },
+        { label: "writes rejected", value: "0 · W=" + C.W + " of N=" + C.RF +
+          " still met", flag: "ok" },
+        { label: "hints/s held by peers", value: n(f.hintOps) + " across " +
+          f.hintNodes + " nodes", flag: "warn" },
+        { label: "after " + C.OUTAGE_S + " s", value: n(f.hintsHeld) +
+          " writes, " + by(f.hintBytes), flag: "warn" },
+        { label: "if W were " + C.RF, value: "every write to " +
+          p1(f.victimRep * 100) + " of keys fails", flag: "bad" }
+      ];
+    } else if (f.ev === "it returns") {
+      eventRows = [
+        { label: "hinted handoff replays", value: n(f.missed) + " writes in " +
+          secs(f.replayS), flag: "ok" },
+        { label: "hints lost by their holder", value: n(f.drift) + " keys (" +
+          p1(C.HINT_LOSS * 100) + ")", flag: "warn" },
+        { label: "Merkle tree", value: n(f.leaves) + " leaves, " + f.depth +
+          " levels" },
+        { label: "hashes exchanged", value: n(f.visited) + " × " + C.HASH_B +
+          " B = " + by(f.merkleB), flag: "ok" },
+        { label: "shipping the data instead", value: by(f.shipB) + "  ·  " +
+          xx(f.shipB, f.merkleB) + " more", flag: "bad" },
+        { label: "rebuild if it never returns", value: by(f.rebuildB) + " from " +
+          f.par + " source" + (f.par === 1 ? "" : "s") + " = " + secs(f.rebuildS),
+          flag: f.par === 1 ? "bad" : "ok" }
+      ];
+    } else if (f.ev === "scale out") {
+      eventRows = [
+        { label: "cluster", value: C.NODES + " nodes → " + (C.NODES + 1) },
+        { label: "keys that move", value: p1(f.movedF * 100) + "  ·  ideal 1/" +
+          (C.NODES + 1) + " = " + p1(f.ideal * 100),
+          flag: f.movedF > 0.5 ? "bad" : f.movedF < f.ideal * 0.5 ? "warn" : "ok" },
+        { label: "bytes across the network", value: by(f.movedB),
+          flag: f.movedB > D.STORED_B * 0.5 ? "bad" : "ok" },
+        { label: "source nodes", value: String(f.src) },
+        { label: "transfers in parallel", value: String(f.movePar),
+          flag: f.movePar > 1 ? "ok" : "warn" },
+        { label: "time at " + by(C.LINK_BPS) + "/s each", value: secs(f.moveS),
+          flag: f.moveS > 3600 ? "bad" : "ok" },
+        { label: "reads hitting the wrong node meanwhile",
+          value: p1(f.movedF * 100),
+          flag: f.movedF > 0.5 ? "bad" : f.movedF > 0.2 ? "warn" : "ok" },
+        { label: "new node ends up owning", value: p1(f.newShare * 100),
+          flag: f.newShare < f.ideal * 0.5 ? "bad" : "ok" }
+      ];
+    } else if (f.ev === "rack partition") {
+      eventRows = [
+        { label: "unreachable", value: f.rack.join(", "), flag: "bad" },
+        { label: "keys with all " + C.RF + " replicas inside",
+          value: p1(f.isoF * 100) + "  ·  " + n(f.isoKeys / 1e6) + "M keys",
+          flag: f.isoF > 0.05 ? "bad" : "warn" },
+        { label: "keys down to one replica", value: p1(L.underW * 100) +
+          " · sloppy quorum", flag: "warn" },
+        { label: "both sides accept writes", value: "yes · available by design",
+          flag: "ok" },
+        { label: "survivors at", value: p1(L.util * 100) + ", p99 " + ms(L.p99),
+          flag: overBudget ? "bad" : "ok" }
+      ];
+    } else if (f.ev === "heal") {
+      eventRows = [
+        { label: "writes, majority side", value: n(f.wMaj) + " in " +
+          C.PARTITION_S + " s" },
+        { label: "writes, minority side", value: n(f.wMin) + "  ·  " +
+          Math.round(C.MINORITY_CLIENTS * 100) + "% of clients" },
+        { label: "A {node1:2} vs B {node2:1}", value: "CONCURRENT · keep both",
+          flag: "warn" },
+        { label: "A {node1:2} vs B {node1:3}", value: "SEQUENTIAL · B wins",
+          flag: "ok" },
+        { label: "keys written on both sides", value: n(f.both) +
+          "  ·  surfaced to the client", flag: "warn" },
+        { label: "last-write-wins would delete", value: by(f.lwwB) +
+          " of acked writes", flag: "bad" }
+      ];
+    } else {
+      eventRows = [
+        { label: "hot key", value: C.HOT_KEY + " · " +
+          Math.round(C.HOT * 100) + "% of reads", flag: "bad" },
+        { label: "its replicas", value: f.hotReps.join(", ") },
+        { label: "extra load each", value: n(f.perRep) + " reads/s (R=" + C.R +
+          " of N=" + C.RF + ")", flag: "bad" },
+        { label: f.hw + " before the hot key",
+          value: p1(f.hBase * 100) + " · p99 " + ms(f.hBaseP99), flag: "ok" },
+        { label: f.hw + " after",
+          value: p1(f.hUtil * 100) + " · p99 " + ms(f.hP99),
+          flag: f.hP99 > C.P99_MS ? "bad" : "ok" },
+        { label: "more nodes or more vnodes", value: "no · it is one key",
+          flag: "bad" },
+        { label: "client cache at " + Math.round(C.CACHE_HIT * 100) + "%",
+          value: p1(f.hCache * 100) + " · p99 " + ms(f.hCacheP99),
+          flag: f.hCacheP99 <= C.P99_MS ? "ok" : "warn" }
+      ];
+    }
+
+    var out = [
+      phases,
+      head,
+      sddesignkeyvaluest_lanes(d, f),
+      d.cols([
+        d.node({
+          title: "the ring · " + sch.name,
+          status: L.iso > 0 ? "KEYS UNREACHABLE"
+            : L.own[L.ownMx] > 1.5 / f.nodes ? "SKEWED" : "BALANCED",
+          statusFlag: L.iso > 0 ? "bad"
+            : L.own[L.ownMx] > 1.5 / f.nodes ? "bad" : "ok",
+          flag: L.iso > 0 ? "bad" : "ok",
+          badge: "N=" + C.RF + " W=" + C.W + " R=" + C.R,
+          rows: ringRows
+        }),
+        d.node({
+          title: f.ev,
+          status: overBudget ? "OVER BUDGET" : "IN BUDGET",
+          statusFlag: overBudget ? "bad" : "ok",
+          flag: overBudget ? "bad" : "ok",
+          gauges: [{
+            label: "p99 against the " + C.P99_MS + " ms budget",
+            pct: Math.min(100, (isFinite(shownP99) ? shownP99 : C.P99_MS * 4) /
+              (C.P99_MS * 4) * 100),
+            value: ms(shownP99),
+            flag: overBudget ? "bad" : "ok"
+          }],
+          rows: eventRows
+        })
+      ])
+    ];
+
+    if (f.ev === "hot key") {
+      out.push(d.table(["scheme", "steady p99", "after a loss", "adding a node",
+        "rack loses", "hot key"], [
+        ["modulo", ms(R.mod.F[0].L.p99), ms(R.mod.F[1].L.p99),
+          p1(R.mod.F[3].movedF * 100), p1(R.mod.F[4].isoF * 100),
+          ms(R.mod.F[6].hP99)],
+        ["1 position/node", ms(R.ch1.F[0].L.p99), ms(R.ch1.F[1].L.p99),
+          p1(R.ch1.F[3].movedF * 100), p1(R.ch1.F[4].isoF * 100),
+          ms(R.ch1.F[6].hP99)],
+        [C.VNODES + " vnodes", ms(R.vn.F[0].L.p99), ms(R.vn.F[1].L.p99),
+          p1(R.vn.F[3].movedF * 100), p1(R.vn.F[4].isoF * 100),
+          ms(R.vn.F[6].hP99)]
+      ]));
+      out.push(d.note("<b>Modulo wins the first column and loses the third by " +
+        xx(R.mod.F[3].movedF, R.vn.F[3].movedF) + ".</b> One position per node " +
+        "fixes the third column and breaks the first two. Only the last row is in " +
+        "budget everywhere — and none of the three does anything at all about the " +
+        "column that is not there, which is one key taking " +
+        Math.round(C.HOT * 100) + "% of the reads.", "warn"));
+    } else {
+      out.push(d.note("Top lane: each node's share of the ring, as a percent " +
+        "(even share is " + p1(100 / f.nodes) + "). Bottom lane: that node's " +
+        "replica ops as a percent of its " + n(C.NODE_OPS) +
+        "/s ceiling. Hover any cell. <b>Green is inside budget, amber is the " +
+        "warning band, red is over.</b>", overBudget ? "bad" : undefined));
+    }
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
   // ======================================================================
   // SIM · sddesignloggingmon  (design-logging-monitoring.md)
   //
@@ -7208,6 +11401,4499 @@ S["sdapidesign"] = {
   };
 
   // ====================================================================
+// ======================================================================
+// SIM · sddesignnotificati  (design-notifications.md)
+//
+// TIME AXIS: one broadcast draining, with an OTP trying to get through it.
+// The page's own headline follow-up — "One OTP versus a 100M broadcast" —
+// run as a real queue simulation over eight hours of wall clock at 10 s
+// ticks, sampled at seven moments. Three builds, same providers, same
+// worker budget, same audience:
+//   1. one queue and one worker pool
+//   2. a queue and a pool per channel      (the page's central decision)
+//   3. + priority queues, dedupe, a circuit breaker and a secondary
+//
+// THE MODEL, because every number depends on it:
+//   A worker holds its slot for the provider's latency L. With ONE FIFO
+//   queue the share of picks going to channel c is c's share of the queue,
+//   so total occupancy is T * SUM(share_c * L_c) = W, and therefore
+//       T = W / SUM(share_c * L_c)
+//   That single line is the whole bulkhead argument: a channel whose
+//   provider slows down raises the denominator for EVERYONE. With a pool
+//   per channel the same arithmetic runs per pool and cannot leak:
+//       T_c = min(rate_c, W_c / L_c)
+//   Pool sizes are not chosen, they are derived: W_c = rate_c * L_c, which
+//   is exactly enough workers to keep that provider at its limit.
+//
+// CONFIG — the page's own figures, quoted
+//   100M users           §1 scope, and §5 "Send to all 100M users"
+//   10M/day, ~120/s      §2 "10M/day = ~120/s average"
+//   50M spike, 14,000/s  §2 "Spike 50M in an hour = ~14,000/s"
+//   ~2 hours to drain    §2 "at 14,000/s that is ~2 hours to drain"
+//   SMS 100-1,000/s      §2 "often 100-1,000/s per short code"
+//   transactional p99    §1 "transactional (OTP, password reset): p99 < 5s"
+//     under 5 s, MUST arrive
+//   promotional          §1 "minutes are fine, best effort"
+//   never a perceived    §1, and §4 dedupe
+//     duplicate
+//   opt-out absolute     §1 "respect opt-out ABSOLUTELY"
+//   preference order     §4, all five levels in the page's order, with
+//                        quiet hours DEFERRING rather than dropping
+//   retry policy         §4 table: push 3x, SMS 2x then stop, email over
+//                        hours, hard bounces NEVER, invalid tokens pruned
+//   15s -> no: the page's own numbers stop there, so everything below is
+//   declared.
+//
+// CONFIG — declared here, because the page states none
+//   provider rates, set below the providers' caps as the page says a
+//   limiter should be:  push 12,000/s, email 1,200/s, SMS 700/s — which
+//   sum to 13,900/s, the page's 14,000/s spike figure
+//   provider latency:   push 50 ms, email 150 ms, SMS 200 ms
+//   degraded SMS:       100/s (the bottom of the page's own band) and a
+//                       10 s timeout, from t=900 s to t=1,800 s
+//   secondary SMS:      300/s, 400 ms, transactional only
+//   campaign mix        70% push / 25% email / 5% SMS
+//   baseline mix        50% SMS / 40% push / 10% email of the page's 120/s
+//   preference funnel   2% global, 8% channel, 15% category, 20% quiet
+//                       hours (deferred), 5% frequency cap
+//   duplicate rate      3% of enqueues, from producer retries and
+//                       at-least-once delivery
+//   failure classes     push 4% invalid token + 2% transient; SMS 1%
+//                       transient; email 3% hard bounce + 5% soft
+//   batch paging        20,000/s for the builds that page the audience
+// ======================================================================
+var sddesignnotificati_C = {
+  USERS: 100e6, DAILY: 10e6, AVG_QPS: 120, SPIKE_QPS: 14000,
+  TXN_SLA_S: 5,
+  RATE: { push: 12000, email: 1200, sms: 700 },
+  LAT: { push: 0.05, email: 0.15, sms: 0.20 },
+  DEG_RATE: 100, DEG_LAT: 10, DEG_FROM: 900, DEG_TO: 1800,
+  SEC_RATE: 300, SEC_LAT: 0.4,
+  MIX: { push: 0.70, email: 0.25, sms: 0.05 },
+  TXN_MIX: { sms: 0.50, push: 0.40, email: 0.10 },
+  PREF: [
+    { label: "global opt-out", f: 0.02, drop: true },
+    { label: "channel opt-out", f: 0.08, drop: true },
+    { label: "category opt-out", f: 0.15, drop: true },
+    { label: "quiet hours", f: 0.20, drop: false },
+    { label: "frequency cap", f: 0.05, drop: true }
+  ],
+  DUP: 0.03,
+  FAIL: {
+    push: { perm: 0.04, trans: 0.02 },
+    email: { perm: 0.03, trans: 0.05 },
+    sms: { perm: 0.00, trans: 0.01 }
+  },
+  RETRY_NAIVE: 3,
+  RETRY_CH: { push: 3, email: 3, sms: 2 },
+  PAGE_RATE: 20000,
+  DT: 10, CAP_S: 8 * 3600,
+  SAMPLE: [10, 60, 300, 1200, 2400, 7200]
+};
+var sddesignnotificati_CH = ["push", "email", "sms"];
+
+var sddesignnotificati_D = (function () {
+  var C = sddesignnotificati_C, D = {}, i, c;
+  D.TOTAL_RATE = 0; D.W = 0; D.WC = {};
+  for (i = 0; i < sddesignnotificati_CH.length; i++) {
+    c = sddesignnotificati_CH[i];
+    D.TOTAL_RATE += C.RATE[c];
+    D.WC[c] = Math.round(C.RATE[c] * C.LAT[c]);   // derived, not chosen
+    D.W += D.WC[c];
+  }
+  // the preference funnel, evaluated in the page's order
+  var left = C.USERS, dropped = 0, deferred = 0;
+  D.FUNNEL = [];
+  for (i = 0; i < C.PREF.length; i++) {
+    var hit = left * C.PREF[i].f;
+    left -= hit;
+    if (C.PREF[i].drop) dropped += hit; else deferred += hit;
+    D.FUNNEL.push({ label: C.PREF[i].label, hit: hit, left: left,
+      drop: C.PREF[i].drop });
+  }
+  D.AUDIENCE = left; D.DROPPED = dropped; D.DEFERRED = deferred;
+  D.PAGE_DRAIN_S = C.USERS / C.SPIKE_QPS;        // the page's ~2 hours
+  return D;
+})();
+
+// ---- formatting ------------------------------------------------------
+function sddesignnotificati_n(x) {
+  return String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function sddesignnotificati_m(x) {
+  if (x >= 1e6) return (x / 1e6).toFixed(x >= 1e7 ? 0 : 1) + "M";
+  if (x >= 1e3) return (x / 1e3).toFixed(x >= 1e4 ? 0 : 1) + "k";
+  return String(Math.round(x));
+}
+function sddesignnotificati_t(s) {
+  if (!isFinite(s)) return "never";
+  if (s < 1) return (s * 1000).toFixed(0) + " ms";
+  if (s < 90) return s < 10 ? s.toFixed(1) + " s" : Math.round(s) + " s";
+  if (s < 5400) return (s / 60).toFixed(1) + " min";
+  return (s / 3600).toFixed(1) + " h";
+}
+function sddesignnotificati_p1(x) { return x.toFixed(1) + "%"; }
+function sddesignnotificati_frac(a, b) {
+  if (!b) return "0%";
+  var x = 100 * a / b;
+  if (a > 0 && x < 0.05) return "under 0.1%";
+  if (a < b && x > 99.95) return "over 99.9%";
+  return x.toFixed(1) + "%";
+}
+function sddesignnotificati_p0(x) { return Math.round(x) + "%"; }
+
+// ---- the simulation --------------------------------------------------
+function sddesignnotificati_run(mode) {
+  var C = sddesignnotificati_C, D = sddesignnotificati_D, CH = sddesignnotificati_CH;
+  var shared = mode === "one";
+  var prio = mode === "full";
+  var dedupe = mode === "full";
+  var breaker = mode === "full";
+  var byClass = mode === "full";
+
+  var q = { push: { hi: 0, lo: 0, camp: 0 }, email: { hi: 0, lo: 0, camp: 0 },
+    sms: { hi: 0, lo: 0, camp: 0 } };
+  var pending = {}, i, c, t;
+  for (i = 0; i < CH.length; i++) pending[CH[i]] = D.AUDIENCE * C.MIX[CH[i]];
+
+  var sent = { push: 0, email: 0, sms: 0 };
+  var attempts = 0, dupSent = 0, dupKilled = 0, campDone = 0;
+  var wasted = 0, repHits = 0, pruned = 0, secSent = 0;
+  var otpWorst = 0, otpMissed = 0, otpTotal = 0;
+  var frames = [], sIdx = 0, doneAt = Infinity;
+
+  function depth(ch) { return q[ch].hi + q[ch].lo; }
+  function totalQ() { return depth("push") + depth("email") + depth("sms"); }
+
+  for (t = 0; t <= C.CAP_S; t += C.DT) {
+    var deg = t >= C.DEG_FROM && t < C.DEG_TO;
+    var rate = { push: C.RATE.push, email: C.RATE.email, sms: C.RATE.sms };
+    var lat = { push: C.LAT.push, email: C.LAT.email, sms: C.LAT.sms };
+    if (deg) { rate.sms = C.DEG_RATE; lat.sms = C.DEG_LAT; }
+    var broke = deg && breaker;                 // the breaker fails fast
+    if (broke) lat.sms = C.LAT.sms;             // no worker is held on a 10 s call
+
+    // 1. the campaign enters the queues
+    var paged = 0;
+    for (i = 0; i < CH.length; i++) {
+      c = CH[i];
+      var want = shared ? pending[c]             // one enqueue, all of it
+        : Math.min(pending[c], C.PAGE_RATE * C.DT * C.MIX[c]);
+      pending[c] -= want; q[c].lo += want; q[c].camp += want; paged += want;
+    }
+    // 2. the ordinary traffic the page measures at 120/s, OTPs among it
+    var base = C.AVG_QPS * C.DT, baseCh = {};
+    for (i = 0; i < CH.length; i++) {
+      c = CH[i]; baseCh[c] = base * C.TXN_MIX[c];
+      if (prio) q[c].hi += baseCh[c]; else q[c].lo += baseCh[c];
+    }
+    // 3. duplicates from producer retries and at-least-once delivery
+    var dup = (paged + base) * C.DUP;
+    if (dedupe) dupKilled += dup;
+    else {
+      dupSent += dup;
+      for (i = 0; i < CH.length; i++) { c = CH[i]; q[c].lo += dup * C.MIX[c]; }
+    }
+
+    // 4. throughput
+    var thr = {}, T = 0, denom = 0, tq = totalQ();
+    if (shared) {
+      for (i = 0; i < CH.length; i++) {
+        c = CH[i]; denom += (tq > 0 ? depth(c) / tq : 1 / CH.length) * lat[c];
+      }
+      T = denom > 0 ? D.W / denom : 0;
+      for (i = 0; i < CH.length; i++) {
+        c = CH[i];
+        thr[c] = Math.min(rate[c], T * (tq > 0 ? depth(c) / tq : 1 / CH.length));
+      }
+    } else {
+      for (i = 0; i < CH.length; i++) {
+        c = CH[i];
+        thr[c] = broke && c === "sms" ? 0 : Math.min(rate[c], D.WC[c] / lat[c]);
+      }
+      T = thr.push + thr.email + thr.sms;
+    }
+    // the breaker keeps the transactional tier alive on a secondary
+    var secThr = broke ? C.SEC_RATE : 0;
+
+    // 5. drain: high priority first where there is a high priority
+    var delivered = { push: 0, email: 0, sms: 0 };
+    for (i = 0; i < CH.length; i++) {
+      c = CH[i];
+      var budget = thr[c] * C.DT + (c === "sms" ? secThr * C.DT : 0);
+      var takeHi = Math.min(q[c].hi, budget);
+      q[c].hi -= takeHi; budget -= takeHi;
+      var takeLo = Math.min(q[c].lo, budget);
+      var campPart = q[c].lo > 0 ? takeLo * (q[c].camp / q[c].lo) : 0;
+      q[c].lo -= takeLo; q[c].camp -= campPart; campDone += campPart;
+      delivered[c] = takeHi + takeLo;
+      sent[c] += delivered[c]; attempts += delivered[c];
+      if (c === "sms" && broke) secSent += Math.min(delivered[c], secThr * C.DT);
+    }
+
+    // 6. failures, and what each build does about them
+    for (i = 0; i < CH.length; i++) {
+      c = CH[i];
+      var perm = delivered[c] * C.FAIL[c].perm;
+      var trans = delivered[c] * C.FAIL[c].trans;
+      if (deg && c === "sms") { trans += delivered[c] * 0.5; }   // 429s
+      var rPerm, rTrans;
+      if (byClass) { rPerm = 0; rTrans = C.RETRY_CH[c]; }
+      else if (shared) { rPerm = C.RETRY_NAIVE; rTrans = C.RETRY_NAIVE; }
+      else { rPerm = C.RETRY_CH[c]; rTrans = C.RETRY_CH[c]; }
+      q[c].lo += perm * rPerm + trans * rTrans;
+      wasted += perm * rPerm;
+      if (c === "email") repHits += perm * rPerm;
+      if (c === "push" && byClass) pruned += perm;
+    }
+
+    // 7. how long an OTP enqueued right now waits
+    var otp;
+    if (shared) otp = T > 0 ? totalQ() / T + lat.sms : Infinity;
+    else if (prio) {
+      var hiRate = broke ? secThr : thr.sms;
+      otp = hiRate > 0 ? q.sms.hi / hiRate + (broke ? C.SEC_LAT : lat.sms) : Infinity;
+    } else otp = thr.sms > 0 ? depth("sms") / thr.sms + lat.sms : Infinity;
+    otpTotal++;
+    if (!(otp <= C.TXN_SLA_S)) otpMissed++;
+    if (otp > otpWorst) otpWorst = otp;
+
+    if (doneAt === Infinity && pending.push + pending.email + pending.sms < 1 &&
+        q.push.camp + q.email.camp + q.sms.camp < 1) doneAt = t;
+
+    if (sIdx < C.SAMPLE.length && t >= C.SAMPLE[sIdx]) {
+      frames.push({
+        t: t, deg: deg, broke: broke, mode: mode,
+        q: { push: { hi: q.push.hi, lo: q.push.lo, camp: q.push.camp },
+             email: { hi: q.email.hi, lo: q.email.lo, camp: q.email.camp },
+             sms: { hi: q.sms.hi, lo: q.sms.lo, camp: q.sms.camp } },
+        thr: { push: thr.push, email: thr.email, sms: thr.sms },
+        T: T, secThr: secThr, otp: otp,
+        sent: { push: sent.push, email: sent.email, sms: sent.sms },
+        attempts: attempts, dupSent: dupSent, dupKilled: dupKilled,
+        campDone: campDone,
+        wasted: wasted, repHits: repHits, pruned: pruned, secSent: secSent,
+        pending: pending.push + pending.email + pending.sms,
+        otpWorst: otpWorst, otpMissed: otpMissed, otpTotal: otpTotal,
+        denom: denom
+      });
+      sIdx++;
+    }
+    if (doneAt < Infinity && t > doneAt + C.DT) break;
+  }
+  var last = frames[frames.length - 1];
+  frames.push({
+    t: isFinite(doneAt) ? doneAt : C.CAP_S, deg: false, broke: false, mode: mode,
+    q: { push: { hi: q.push.hi, lo: q.push.lo, camp: q.push.camp },
+         email: { hi: q.email.hi, lo: q.email.lo, camp: q.email.camp },
+         sms: { hi: q.sms.hi, lo: q.sms.lo, camp: q.sms.camp } },
+    thr: last.thr, T: last.T, secThr: 0, otp: last.otp,
+    sent: { push: sent.push, email: sent.email, sms: sent.sms },
+    attempts: attempts, dupSent: dupSent, dupKilled: dupKilled,
+    campDone: campDone,
+    wasted: wasted, repHits: repHits, pruned: pruned, secSent: secSent,
+    pending: pending.push + pending.email + pending.sms,
+    otpWorst: otpWorst, otpMissed: otpMissed, otpTotal: otpTotal,
+    denom: last.denom, done: true, doneAt: doneAt
+  });
+  return frames;
+}
+
+var sddesignnotificati_R = {
+  one: sddesignnotificati_run("one"),
+  chan: sddesignnotificati_run("chan"),
+  full: sddesignnotificati_run("full")
+};
+
+// ======================================================================
+function sddesignnotificati_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [], chips = [], i;
+  if (!names.length) return "";
+  for (i = 0; i < names.length; i++) {
+    chips.push({ label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+  }
+  return d.pills(chips);
+}
+
+function sddesignnotificati_caption(mode, i, f) {
+  var C = sddesignnotificati_C, D = sddesignnotificati_D;
+  var n = sddesignnotificati_n, m = sddesignnotificati_m;
+  var tt = sddesignnotificati_t, p1 = sddesignnotificati_p1;
+  var fr = sddesignnotificati_frac;
+  var R = sddesignnotificati_R;
+  var okOtp = f.otp <= C.TXN_SLA_S;
+
+  if (i === 0) {
+    var common = "<b>The campaign is launched.</b> " + m(C.USERS) + " users go " +
+      "through the preference check <i>before</i> a template is rendered: " +
+      m(D.DROPPED) + " suppressed, " + m(D.DEFERRED) + " deferred to after quiet " +
+      "hours, <b>" + m(D.AUDIENCE) + " to send now</b>. ";
+    if (mode === "one") return common + "All of it goes into <b>one queue</b>, in " +
+      "one enqueue, ahead of everything else in the system. " + n(D.W) +
+      " workers share it. <i>The page's sentence for this frame: feeding " +
+      m(C.USERS) + " messages into a queue at once starves every transactional " +
+      "notification behind them.</i> Watch what that costs.";
+    if (mode === "chan") return common + "It is a <b>batch job</b>, paging the " +
+      "audience at " + n(C.PAGE_RATE) + "/s into <b>three</b> queues — " +
+      "push, email and SMS — each with its own pool: " + n(D.WC.push) + ", " +
+      n(D.WC.email) + " and " + n(D.WC.sms) + " workers, sized as " +
+      "rate × latency so each pool is exactly enough to hold its provider at " +
+      "its limit. Same " + n(D.W) + " workers in total.";
+    return common + "Same three queues and the same " + n(D.W) + " workers, but " +
+      "each channel now has a <b>high-priority lane</b> drained first, and the " +
+      "API deduplicates on <code>hash(user, template, entity, bucket)</code> with " +
+      "<code>SETNX</code> before anything is enqueued. <b>" + m(f.dupKilled) +
+      "</b> duplicates suppressed already.";
+  }
+
+  if (i === 1) {
+    var thr = "Push <b>" + n(f.thr.push) + "/s</b>, email <b>" + n(f.thr.email) +
+      "/s</b>, SMS <b>" + n(f.thr.sms) + "/s</b>. ";
+    if (mode === "one") return "<b>t+" + f.t + " s. One FIFO, and the maths of a " +
+      "shared pool.</b> A worker holds its slot for the provider's latency, so " +
+      "with " + p1(100 * f.q.push.lo / (f.q.push.lo + f.q.email.lo + f.q.sms.lo)) +
+      " of the queue going to push at " + (C.LAT.push * 1000) + " ms, " +
+      "the pool's throughput is " + n(D.W) + " ÷ " + f.denom.toFixed(3) +
+      " s = <b>" + n(f.T) + "/s</b> total. " + thr + "<i>SMS gets " +
+      p1(100 * f.thr.sms / C.RATE.sms) + " of the " + n(C.RATE.sms) +
+      "/s its provider would allow, because picks are allocated by queue " +
+      "composition and SMS is only " + p1(100 * C.MIX.sms) + " of the campaign. " +
+      "Nobody configured that.</i>";
+    if (mode === "chan") return "<b>t+" + f.t + " s. Three pools, three " +
+      "providers, each at its limit.</b> " + thr + "That is <b>" + n(f.T) +
+      "/s</b> in total against the page's " + n(C.SPIKE_QPS) + "/s spike " +
+      "figure — the same " + n(D.W) + " workers, arranged so that each pool is " +
+      "sized to its own provider rather than competing for the same slots. " +
+      "<i>Email carries " + p1(C.MIX.email * 100) + " of the volume on " +
+      p1(100 * C.RATE.email / D.TOTAL_RATE) + " of the capacity, which is " +
+      "already the thing that will decide when this finishes.</i>";
+    return "<b>t+" + f.t + " s. Identical throughput — " + n(f.T) + "/s — because " +
+      "priority does not create capacity.</b> " + thr + "What it changes is " +
+      "<i>order</i>: the page's " + n(C.AVG_QPS) + "/s of ordinary traffic goes " +
+      "into a high-priority lane drained before the campaign lane, so it never " +
+      "builds a backlog — depth <b>" +
+      n(f.q.push.hi + f.q.email.hi + f.q.sms.hi) + "</b> against <b>" +
+      m(f.q.push.lo + f.q.email.lo + f.q.sms.lo) + "</b> waiting behind it. And " +
+      "the campaign is <b>pausable</b>: only " +
+      m(D.AUDIENCE - f.pending) + " of " + m(D.AUDIENCE) + " has been committed " +
+      "to a queue at all.";
+  }
+
+  if (i === 2) {
+    var head = "<b>t+" + tt(f.t) + ". A password reset is requested. The code " +
+      "goes to SMS.</b> ";
+    if (mode === "one") return head + "It joins the back of the single queue, " +
+      "behind <b>" + m(f.q.push.lo + f.q.email.lo + f.q.sms.lo) +
+      " promotional messages</b>. At " + n(f.T) + "/s that is <b>" + tt(f.otp) +
+      "</b>. The requirement is <b>under " + C.TXN_SLA_S + " s</b>. <i>FIFO does " +
+      "not know what an OTP is. The user requests another one, and that one " +
+      "queues behind this one.</i>";
+    if (mode === "chan") return head + "Bulkheads worked — a slow email provider " +
+      "cannot touch it — but it still joins the back of the <b>SMS</b> queue, " +
+      "behind <b>" + m(f.q.sms.lo) + " campaign messages</b> draining at " +
+      n(f.thr.sms) + "/s: <b>" + tt(f.otp) + "</b> against a " + C.TXN_SLA_S +
+      " s requirement. <i>This is the frame that matters. Per-channel queues are " +
+      "the right answer to the wrong question — they isolate channels from each " +
+      "other, and do nothing about a marketing blast sitting in front of a " +
+      "security code in the same channel.</i>";
+    return head + "It goes into the SMS <b>high-priority lane</b>, drained " +
+      "before the campaign lane and therefore carrying no backlog to sit behind " +
+      "— depth " + n(f.q.sms.hi) + ": <b>" + tt(f.otp) + "</b>, against a " + C.TXN_SLA_S + " s requirement and against " +
+      tt(R.chan[2].otp) + " with per-channel queues alone. <i>The two-tier split " +
+      "named in scoping is not a framing device; it is this lane. " + m(f.q.sms.lo) +
+      " campaign messages are sitting right next to it and they wait.</i>";
+  }
+
+  if (i === 3) {
+    var deg = "<b>t+" + tt(f.t) + ". The SMS provider degrades</b> — " +
+      n(C.DEG_RATE) + "/s instead of " + n(C.RATE.sms) + "/s, and calls that used " +
+      "to return in " + (C.LAT.sms * 1000) + " ms now time out after " +
+      C.DEG_LAT + " s. ";
+    if (mode === "one") return deg + "<b>Look at push.</b> The shared pool's " +
+      "throughput is " + n(D.W) + " ÷ SUM(share × latency), and SMS just " +
+      "multiplied its term by " + (C.DEG_LAT / C.LAT.sms) + ": the denominator " +
+      "goes to " + f.denom.toFixed(3) + " s and total throughput collapses to <b>" +
+      n(f.T) + "/s</b>. Push is delivering <b>" + n(f.thr.push) + "/s</b>, down " +
+      "from " + n(R.one[1].thr.push) + "/s, and it has nothing to do with Apple or " +
+      "Google. <i>One shared pool means the slowest provider sets everyone's " +
+      "latency — and the mechanism is that workers are held, not that the queue " +
+      "is long.</i> An OTP now takes " + tt(f.otp) + ".";
+    if (mode === "chan") return deg + "<b>The bulkhead holds.</b> Push is still at " +
+      n(f.thr.push) + "/s and email at " + n(f.thr.email) + "/s — unchanged, " +
+      "because their workers are in different pools. SMS is at <b>" +
+      n(f.thr.sms) + "/s</b>: its " + n(D.WC.sms) + " workers each hold a slot for " +
+      C.DEG_LAT + " s, so the pool can only manage " + n(D.WC.sms) + " ÷ " +
+      C.DEG_LAT + ". <i>That is the whole value of the decision, in one frame. " +
+      "But there is no breaker, so those workers sit on timing-out calls, and the " +
+      "OTP is now " + tt(f.otp) + ".</i>";
+    return deg + "<b>The breaker opens.</b> Failures crossed the threshold, so the " +
+      "SMS pool stops calling the primary and fails fast instead of holding " +
+      n(D.WC.sms) + " workers on " + C.DEG_LAT + " s timeouts. The campaign's SMS " +
+      "lane parks — nothing is lost, it is a queue — and <b>transactional SMS " +
+      "fails over to a secondary at " + n(C.SEC_RATE) + "/s</b>. The OTP: <b>" +
+      tt(f.otp) + "</b>. <i>Per-channel queues isolate the blast radius; the " +
+      "breaker stops you paying for the outage in worker-seconds; the secondary " +
+      "is what keeps the tier that must not fail from failing.</i>";
+  }
+
+  if (i === 4) {
+    var rec = "<b>t+" + tt(f.t) + ". The provider recovers, and the bill for the " +
+      "last twenty minutes arrives.</b> ";
+    if (mode === "full") return rec + "<b>" + m(f.dupKilled) + " duplicates " +
+      "suppressed</b> by the dedupe key so far — " + p1(C.DUP * 100) + " of " +
+      "enqueues, which is what at-least-once queues and producer retries produce " +
+      "whether or not you plan for them. Failures are classified before anything " +
+      "is retried: <b>" + m(f.pruned) + " invalid push tokens pruned</b> rather " +
+      "than retried, hard email bounces <b>never</b> retried, and only the " +
+      "transient ones backed off. <b>" + n(f.repHits) + " reputation-damaging " +
+      "retries.</b> <i>A 400 and a 503 need opposite responses, and the cost of " +
+      "conflating them is a permanently full dead-letter queue.</i>";
+    if (mode === "chan") return rec + "Retry policy is per channel — push " +
+      C.RETRY_CH.push + "×, SMS " + C.RETRY_CH.sms + "×, email over " +
+      "hours — which is the right axis and not the only one. It is not per " +
+      "<i>failure class</i>, so an invalid push token is retried " +
+      C.RETRY_CH.push + " times before being dropped and a <b>hard email bounce " +
+      "is retried " + C.RETRY_CH.email + " times</b>: <b>" + m(f.wasted) +
+      " attempts on addresses that will never accept mail</b>, of which " +
+      m(f.repHits) + " are the bounces that damage sender reputation. And <b>" +
+      m(C.DUP * 100) + "% of everything enqueued is a duplicate</b>, with nothing " +
+      "in front of the queue to catch it.";
+    return rec + "Every failure is retried <b>" + C.RETRY_NAIVE + "×</b> " +
+      "regardless of what it was: <b>" + m(f.wasted) + " wasted attempts</b> on " +
+      "permanent failures, " + m(f.repHits) + " of them hard email bounces " +
+      "hammered three times each. Those retries re-enter the same queue everything " +
+      "else is in, so they push the OTP further back — <b>" + tt(f.otp) +
+      "</b> now. <i>And no dedupe: " + p1(C.DUP * 100) + " of enqueues are " +
+      "duplicates and every one of them will be delivered.</i>";
+  }
+
+  if (i === 5) {
+    var two = "<b>t+" + tt(f.t) + " — the page's “~2 hours to drain” " +
+      "mark.</b> ";
+    var done = f.campDone;
+    if (mode === "one") return two + m(done) + " of the campaign's " +
+      m(D.AUDIENCE) + " delivered (<b>" + p1(100 * done / D.AUDIENCE) +
+      "</b>) on " + m(f.attempts) + " provider calls, " + m(f.q.push.lo +
+      f.q.email.lo + f.q.sms.lo) + " still queued. <i>The page's two hours assumed " +
+      n(C.SPIKE_QPS) + "/s sustained; this pool has averaged less than that " +
+      "because its throughput is set by whatever mix happens to be at the head of " +
+      "the queue.</i> An OTP requested right now: <b>" + tt(f.otp) + "</b>. " +
+      "Worst so far <b>" + tt(f.otpWorst) + "</b>, and <b>" +
+      fr(f.otpMissed, f.otpTotal) + " of the run</b> has been outside the " +
+      C.TXN_SLA_S + " s requirement.";
+    if (mode === "chan") return two + m(done) + " delivered (<b>" +
+      p1(100 * done / D.AUDIENCE) + "</b>). Push finished long ago; <b>email is " +
+      "the bottleneck</b> and always was — " + p1(C.MIX.email * 100) +
+      " of the volume on " + p1(100 * C.RATE.email / D.TOTAL_RATE) +
+      " of the capacity, " + m(f.q.email.lo) + " still waiting at " +
+      n(f.thr.email) + "/s. <i>Parallel channels do not help when one channel " +
+      "is the constraint; that is a provider-capacity problem, and the honest " +
+      "answer is a second sending domain or a smaller audience, not more " +
+      "workers.</i> OTP right now: <b>" + tt(f.otp) + "</b>.";
+    return two + m(done) + " delivered (<b>" + p1(100 * done / D.AUDIENCE) +
+      "</b>), the same email bottleneck — <b>" + m(f.q.email.lo) + " left at " +
+      n(f.thr.email) + "/s</b> — and it does not matter, because promotional is " +
+      "the tier where minutes are fine. <b>Worst OTP of the whole run so far: " +
+      tt(f.otpWorst) + "</b>, against " + tt(R.one[5].otpWorst) + " with one " +
+      "queue and " + tt(R.chan[5].otpWorst) + " with per-channel queues alone. " +
+      "<i>The campaign being slow is a capacity fact. The OTP being slow would " +
+      "have been a design choice.</i>";
+  }
+
+  var tot = f.campDone;
+  var endLine = "<b>" + m(tot) + " campaign messages delivered in " +
+    tt(f.doneAt) + ", on " + m(f.attempts) + " provider calls.</b> ";
+  if (mode === "one") return endLine + "Worst OTP <b>" + tt(f.otpWorst) +
+    "</b> against a " + C.TXN_SLA_S + " s requirement, breached for <b>" +
+    fr(f.otpMissed, f.otpTotal) + " of the run</b>; <b>" + m(f.dupSent) +
+    " perceived duplicates</b> delivered; " + m(f.wasted) + " retries of " +
+    "permanent failures, " + m(f.repHits) + " of them hard bounces. <i>Every one " +
+    "of those is a separate product failure, and they all come from the same two " +
+    "decisions: one queue, and no check before the work.</i> The throughput " +
+    "formula is the thing to remember — " + n(D.W) +
+    " ÷ SUM(share × latency) — because it is why the slowest provider " +
+    "owns the whole system.";
+  if (mode === "chan") return endLine + "Bulkheads did their job: a degraded SMS " +
+    "provider cost SMS <b>" + tt(C.DEG_TO - C.DEG_FROM) + "</b> and cost push and " +
+    "email nothing. But the worst OTP was <b>" + tt(f.otpWorst) + "</b>, the " +
+    "requirement was breached for <b>" + fr(f.otpMissed, f.otpTotal) +
+    "</b> of the run, and <b>" + m(f.dupSent) + " duplicates</b> went out. " +
+    "<i>Isolating channels from each other is the page's central decision and it " +
+    "is only half the answer: an OTP does not queue behind another channel, it " +
+    "queues behind a marketing blast in its own.</i>";
+  return endLine + "Worst OTP of the entire run: <b>" + tt(f.otpWorst) +
+    "</b>, inside the " + C.TXN_SLA_S + " s requirement for <b>" +
+    fr(f.otpTotal - f.otpMissed, f.otpTotal) + "</b> of it, through a " +
+    tt(C.DEG_TO - C.DEG_FROM) + " provider outage. <b>" + m(f.dupKilled) +
+    " duplicates suppressed, " + m(f.pruned) + " dead tokens pruned, " +
+    n(f.repHits) + " reputation-damaging retries.</b> Against one queue: " +
+    tt(R.one[6].otpWorst) + " worst OTP and " + m(R.one[6].dupSent) +
+    " duplicates. <i>Throughput was never the problem — all three builds moved " +
+    "the same volume through the same providers, and this one needed " +
+    m(R.one[6].attempts - f.attempts) + " fewer provider calls to do it. What " +
+    "separates them is ordering, classification, and the check you do before the " +
+    "work.</i>";
+}
+
+function sddesignnotificati_scenario(id, label, mode, blurb) {
+  var F = sddesignnotificati_R[mode];
+  var C = sddesignnotificati_C;
+  var steps = [{ mode: mode, idle: true, caption: blurb, flag: "idle" }];
+  var i, f;
+  for (i = 0; i < F.length; i++) {
+    f = F[i];
+    f.caption = sddesignnotificati_caption(mode, i, f);
+    f.flag = f.otp > C.TXN_SLA_S ? "bad" : f.deg ? "warn" : "ok";
+    steps.push(f);
+  }
+  return {
+    id: id, label: label, steps: steps,
+    phases: ["providers", "launch", "steady", "an OTP", "SMS degrades",
+      "recovery", "2 hours", "drained"]
+  };
+}
+
+// ======================================================================
+S["sddesignnotificati"] = {
+  title: "Push one OTP through a 100M broadcast",
+  note: (function () {
+    var C = sddesignnotificati_C, D = sddesignnotificati_D;
+    var n = sddesignnotificati_n, m = sddesignnotificati_m;
+    var tt = sddesignnotificati_t;
+    return "The page's own headline follow-up, run as a queue. A campaign to <b>" +
+      m(C.USERS) + " users</b> goes through the five-level preference check, " +
+      "leaving <b>" + m(D.AUDIENCE) + "</b> to send now and " + m(D.DEFERRED) +
+      " deferred past quiet hours; the page's <b>" + n(C.AVG_QPS) +
+      "/s</b> of ordinary traffic keeps flowing, and an OTP is requested in every " +
+      "frame. <b>Declared providers</b>, each set below its cap as the page says a " +
+      "limiter should be: push " + n(C.RATE.push) + "/s at " +
+      (C.LAT.push * 1000) + " ms, email " + n(C.RATE.email) + "/s at " +
+      (C.LAT.email * 1000) + " ms, SMS " + n(C.RATE.sms) + "/s at " +
+      (C.LAT.sms * 1000) + " ms — summing to " + n(D.TOTAL_RATE) +
+      "/s, which is the page's " + n(C.SPIKE_QPS) + "/s spike figure. Workers are " +
+      "not chosen: <b>W = rate × latency</b> gives " + n(D.WC.push) + " + " +
+      n(D.WC.email) + " + " + n(D.WC.sms) + " = <b>" + n(D.W) +
+      "</b>, and all three builds get exactly that many. A worker holds its slot " +
+      "for the provider's latency, so one shared FIFO runs at <b>" + n(D.W) +
+      " ÷ SUM(share × latency)</b> and a pool per channel runs at " +
+      "min(rate, W₁/latency) — <i>that one difference is the whole bulkhead " +
+      "argument, and every figure here follows from it</i>. From t=" +
+      C.DEG_FROM + " s to t=" + C.DEG_TO + " s the SMS provider drops to " +
+      n(C.DEG_RATE) + "/s (the bottom of the page's own 100–1,000 band) with a " +
+      C.DEG_LAT + " s timeout. Scored against <b>p99 under " + C.TXN_SLA_S +
+      " s for transactional</b>, zero perceived duplicates, and never retrying a " +
+      "hard bounce.";
+  })(),
+  interval: 1700,
+
+  scenarios: [
+    sddesignnotificati_scenario("one", "One queue, one pool", "one",
+      "<b>One queue, one worker pool.</b> Every notification, every channel, " +
+      "every priority, in the order it arrived. Retry anything that fails, three " +
+      "times. The version that works fine until the first campaign. Press Play."),
+    sddesignnotificati_scenario("chan", "Queue per channel", "chan",
+      "<b>A queue and a worker pool per channel.</b> The page's central " +
+      "decision — bulkheading, so a degraded SMS provider cannot delay push. " +
+      "Retry policy per channel. Same audience, same providers, same " +
+      sddesignnotificati_n(sddesignnotificati_D.W) + " workers."),
+    sddesignnotificati_scenario("full", "Priority + dedupe + breaker", "full",
+      "<b>The same three pools, plus the rest of the page.</b> A high-priority " +
+      "lane inside each channel, a dedupe key claimed with <code>SETNX</code> " +
+      "before enqueue, a circuit breaker with a secondary SMS provider, and " +
+      "retries classified by failure type rather than just by channel.")
+  ],
+
+  draw: function (step, d, ctx) {
+    var C = sddesignnotificati_C, D = sddesignnotificati_D;
+    var CH = sddesignnotificati_CH;
+    var n = sddesignnotificati_n, m = sddesignnotificati_m;
+    var tt = sddesignnotificati_t, p1 = sddesignnotificati_p1;
+    var R = sddesignnotificati_R;
+    var mode = step && step.mode ? step.mode : "one";
+    var name = mode === "one" ? "one queue, one pool"
+      : mode === "chan" ? "a queue and a pool per channel"
+      : "priority lanes, dedupe, breaker";
+    var phases = sddesignnotificati_phases(d, ctx);
+
+    if (step && step.idle) {
+      var fr = [], i2;
+      for (i2 = 0; i2 < D.FUNNEL.length; i2++) {
+        fr.push([D.FUNNEL[i2].label,
+          (C.PREF[i2].f * 100).toFixed(0) + "%",
+          (D.FUNNEL[i2].drop ? "−" : "defer ") + m(D.FUNNEL[i2].hit),
+          m(D.FUNNEL[i2].left)]);
+      }
+      return d.stack([
+        phases,
+        d.cols([
+          d.big(n(D.TOTAL_RATE) + "/s", "all three providers", "idle"),
+          d.stat({ label: "workers", value: n(D.W),
+            sub: "rate × latency, per channel", flag: "idle" }),
+          d.stat({ label: "audience", value: m(D.AUDIENCE),
+            sub: "of " + m(C.USERS) + " after preferences", flag: "idle" })
+        ]),
+        d.node({
+          title: "the constraint is not our compute",
+          status: "IDLE", statusFlag: "idle", flag: "idle", badge: name,
+          body: d.table(["channel", "provider limit", "latency", "workers",
+            "campaign share"], [
+            ["push", n(C.RATE.push) + "/s", (C.LAT.push * 1000) + " ms",
+              n(D.WC.push), p1(C.MIX.push * 100)],
+            ["email", n(C.RATE.email) + "/s", (C.LAT.email * 1000) + " ms",
+              n(D.WC.email), p1(C.MIX.email * 100)],
+            ["SMS", n(C.RATE.sms) + "/s", (C.LAT.sms * 1000) + " ms",
+              n(D.WC.sms), p1(C.MIX.sms * 100)]
+          ])
+        }),
+        d.node({
+          title: "preferences, evaluated in the page's order",
+          status: "BEFORE ANY WORK", statusFlag: "ok", flag: "ok",
+          meta: "most specific wins · quiet hours defers, it does not drop",
+          body: d.table(["rule", "hit", "effect", "remaining"], fr)
+        }),
+        d.note("<b>Email carries " + p1(C.MIX.email * 100) + " of the volume on " +
+          p1(100 * C.RATE.email / D.TOTAL_RATE) + " of the capacity.</b> That " +
+          "imbalance decides when the campaign finishes in all three builds. What " +
+          "differs is what happens to the <i>OTP</i> while it does.")
+      ]);
+    }
+
+    var f = step;
+    var okOtp = f.otp <= C.TXN_SLA_S;
+    var totQ = f.q.push.hi + f.q.push.lo + f.q.email.hi + f.q.email.lo +
+      f.q.sms.hi + f.q.sms.lo;
+    var deliveredAll = f.campDone;
+    var frac = sddesignnotificati_frac;
+
+    var head = d.cols([
+      d.big(tt(f.otp), "OTP now, budget " + C.TXN_SLA_S + " s",
+        okOtp ? "ok" : "bad"),
+      d.stat({
+        label: "throughput",
+        value: n(f.T) + "/s",
+        sub: mode === "one" ? n(D.W) + " ÷ " + f.denom.toFixed(3) + " s"
+          : "three pools, independent",
+        flag: f.T < D.TOTAL_RATE * 0.5 ? "bad"
+          : f.T < D.TOTAL_RATE * 0.9 ? "warn" : "ok"
+      }),
+      d.stat({
+        label: "campaign delivered",
+        value: m(deliveredAll),
+        sub: p1(100 * deliveredAll / D.AUDIENCE) + " of " + m(D.AUDIENCE) +
+          " · " + m(f.attempts) + " calls",
+        flag: "ok"
+      })
+    ]);
+
+    // the three channels, as bars of queue depth and throughput
+    var bars = [], k, c, lim;
+    for (k = 0; k < CH.length; k++) {
+      c = CH[k];
+      lim = c === "sms" && f.deg ? C.DEG_RATE : C.RATE[c];
+      bars.push(d.bar({
+        label: c + " · " + n(f.thr[c]) + "/s of " + n(lim) + "/s allowed" +
+          (c === "sms" && f.secThr > 0 ? " + " + n(f.secThr) + "/s secondary" : ""),
+        pct: Math.min(100, 100 * f.thr[c] / C.RATE[c]),
+        value: p1(100 * f.thr[c] / C.RATE[c]),
+        flag: f.thr[c] >= C.RATE[c] * 0.95 ? "ok"
+          : f.thr[c] >= C.RATE[c] * 0.5 ? "warn" : "bad"
+      }));
+    }
+
+    var qRows = [];
+    for (k = 0; k < CH.length; k++) {
+      c = CH[k];
+      qRows.push([
+        c,
+        mode === "full" ? n(f.q[c].hi) : "—",
+        m(f.q[c].lo),
+        m(f.sent[c]),
+        f.thr[c] > 0 ? tt((f.q[c].hi + f.q[c].lo) / f.thr[c]) : "stalled"
+      ]);
+    }
+
+    var qNode = d.node({
+      title: mode === "one" ? "one queue, " + m(totQ) + " deep"
+        : "three queues" + (mode === "full" ? ", two lanes each" : ""),
+      status: f.broke ? "BREAKER OPEN" : f.deg ? "SMS DEGRADED"
+        : f.done ? "DRAINED" : "DRAINING",
+      statusFlag: f.broke ? "warn" : f.deg ? "bad" : f.done ? "ok" : "ok",
+      flag: f.deg && !f.broke ? "bad" : "ok",
+      badge: name,
+      meta: mode === "one"
+        ? "FIFO · picks allocated by queue composition"
+        : n(D.WC.push) + " / " + n(D.WC.email) + " / " + n(D.WC.sms) + " workers",
+      body: d.table(["channel", "priority", "campaign", "sent", "drain"], qRows)
+    });
+
+    var sRows = [
+      { label: "OTP enqueued now", value: tt(f.otp) + " · budget " +
+        C.TXN_SLA_S + " s", flag: okOtp ? "ok" : "bad" },
+      { label: "worst OTP so far", value: tt(f.otpWorst),
+        flag: f.otpWorst <= C.TXN_SLA_S ? "ok" : "bad" },
+      { label: "time outside the requirement",
+        value: frac(f.otpMissed, f.otpTotal),
+        flag: f.otpMissed === 0 ? "ok" : "bad" },
+      { label: "duplicates", value: mode === "full"
+        ? m(f.dupKilled) + " suppressed"
+        : m(f.dupSent) + " delivered · no dedupe key",
+        flag: mode === "full" ? "ok" : "bad" },
+      { label: "retries of permanent failures",
+        value: f.wasted > 0 ? m(f.wasted) : "0 · classified first",
+        flag: f.wasted > 0 ? "bad" : "ok" },
+      { label: "hard bounces retried", value: f.repHits > 0
+        ? m(f.repHits) + " · sender reputation" : "0 · never",
+        flag: f.repHits > 0 ? "bad" : "ok" }
+    ];
+    if (mode === "full") {
+      sRows.push({ label: "dead push tokens pruned", value: m(f.pruned),
+        flag: "ok" });
+      if (f.secSent > 0) sRows.push({ label: "sent via the secondary",
+        value: m(f.secSent), flag: "ok" });
+    }
+    if (mode !== "one") {
+      sRows.push({ label: "campaign committed to a queue",
+        value: m(D.AUDIENCE - f.pending) + " of " + m(D.AUDIENCE) +
+          " · pausable", flag: "ok" });
+    } else {
+      sRows.push({ label: "campaign committed to a queue",
+        value: m(D.AUDIENCE) + " · not pausable", flag: "bad" });
+    }
+
+    var sNode = d.node({
+      title: "the two tiers",
+      status: okOtp ? "TRANSACTIONAL OK" : "TRANSACTIONAL BREACHED",
+      statusFlag: okOtp ? "ok" : "bad",
+      flag: okOtp ? "ok" : "bad",
+      gauges: [{
+        label: "OTP against the " + C.TXN_SLA_S + " s requirement",
+        pct: Math.min(100, 100 * (isFinite(f.otp) ? f.otp : C.TXN_SLA_S * 4) /
+          (C.TXN_SLA_S * 4)),
+        value: tt(f.otp),
+        flag: okOtp ? "ok" : "bad"
+      }],
+      rows: sRows
+    });
+
+    var out = [phases, head, d.stack(bars), d.cols([qNode, sNode])];
+
+    if (f.done) {
+      out.push(d.table(["build", "drained in", "provider calls", "worst OTP",
+        "breached", "duplicates sent"], [
+        ["one queue", tt(R.one[6].doneAt), m(R.one[6].attempts),
+          tt(R.one[6].otpWorst), frac(R.one[6].otpMissed, R.one[6].otpTotal),
+          m(R.one[6].dupSent)],
+        ["per channel", tt(R.chan[6].doneAt), m(R.chan[6].attempts),
+          tt(R.chan[6].otpWorst), frac(R.chan[6].otpMissed, R.chan[6].otpTotal),
+          m(R.chan[6].dupSent)],
+        ["+ priority", tt(R.full[6].doneAt), m(R.full[6].attempts),
+          tt(R.full[6].otpWorst), frac(R.full[6].otpMissed, R.full[6].otpTotal),
+          m(R.full[6].dupSent)]
+      ]));
+      out.push(d.note("<b>The three builds moved comparable volume through " +
+        "identical providers with identical worker budgets.</b> The differences " +
+        "are entirely in ordering, classification and the checks done before the " +
+        "work — which is why the answer to “how do you scale " +
+        "notifications?” is not about scale.", "warn"));
+    } else {
+      out.push(d.note(mode === "one"
+        ? "<b>One queue means one number:</b> " + n(D.W) + " workers ÷ " +
+          f.denom.toFixed(3) + " s of average held time = " + n(f.T) + "/s, split " +
+          "between channels by whatever happens to be at the head. Nobody chose " +
+          "that split, and no channel can be protected from another."
+        : "<b>Three pools, sized rate × latency</b> — " + n(D.WC.push) + ", " +
+          n(D.WC.email) + " and " + n(D.WC.sms) + " workers, each exactly enough " +
+          "to hold its own provider at its limit. A slow provider spends its own " +
+          "pool and nobody else's.",
+        f.deg && mode === "one" ? "bad" : undefined));
+    }
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sddesignridesharin  (design-ride-sharing.md)
+//
+// TIME AXIS: the page's numbered matching loop (§5), executed once on one
+// concrete request, three ways. Seven steps in the page's own order:
+// compute the cell, query it, filter, rank, offer with a conditional
+// update, wait out the 15 s accept window, create the trip.
+//
+//   1. Scan every driver        the page's first rejected approach
+//   2. Geohash, one cell        fast, and it cannot see the best driver
+//   3. Cell + 8 neighbours      with ETA ranking and a conditional update
+//
+// THE GEOHASH IS REAL. Base-32 geohashes are encoded here from latitude
+// and longitude by the actual algorithm, and the cell boundaries come from
+// decoding them. The rider stands at Union Square, San Francisco, whose
+// geohash is 9q8yyx — and 9q8yy is the page's own worked prefix. The
+// precision table the sim prints is computed from the bit counts and
+// reproduces all seven of the page's rows. Which drivers share the rider's
+// cell is therefore DISCOVERED, not asserted: the nearest driver is 177 m
+// away and in a different cell because the rider happens to be standing
+// 58 m from the southern boundary, which is exactly the case the page
+// tells you to raise before you are asked.
+//
+// CONFIG — the page's own figures, quoted
+//   10M drivers, 1M online at peak      §1 / §2
+//   1 location update every 4 s         §1 / §2
+//   250,000 writes/s                    §2, and it is 1M / 4 recomputed
+//   ~800 ride requests/s                §2, from 1M trips at 20 min
+//   1M x ~100 B = 100 MB live           §2
+//   4M trips/day x 1 KB = 1.5 TB/year   §2
+//   matching latency < 5 s              §1
+//   TTL ~30 s on every location         §4 / §6
+//   15 s for a driver to accept         §5 step 6
+//   geohash precision table             §3, all seven rows, reproduced
+//   1.41x diagonal neighbour            §3, the hexagon argument
+//   a driver must NEVER be matched      §1, scored at the end
+//     to two rides
+//   cell + 8 neighbours                 §5 step 2
+//   rank by ETA, not distance           §5, "across a river"
+//
+// CONFIG — declared here, because the page states none
+//   rider at 37.7880, -122.4075 (Union Square)
+//   eight drivers at declared metre offsets — a deliberately small,
+//     fully enumerated field, so every filter decision is visible
+//   search radius 2 km, vehicle class "standard"
+//   22 km/h average urban speed, 1.3x road factor, 30 s pickup overhead
+//   a water barrier south-west of the rider: crossing it means a 3.2 km
+//     detour to the nearest bridge — the page's "across a river"
+//   scan cost 0.8 us per driver; a sorted-set prefix scan is 0.4 ms of
+//     round trip plus 0.01 ms per record returned
+//   three riders request simultaneously; one JVM pauses 12 s, longer than
+//     the 10 s lock TTL
+// ======================================================================
+var sddesignridesharin_C = {
+  DRIVERS: 10e6, ONLINE: 1e6, UPD_S: 4, REQ_S: 800,
+  LOC_B: 100, TRIP_B: 1000, TRIPS_DAY: 4e6,
+  MATCH_BUDGET_S: 5, TTL_S: 30, ACCEPT_S: 15,
+  RIDER_LAT: 37.7880, RIDER_LON: -122.4075,
+  PREC: 6, RADIUS_M: 2000, CLASS: "standard",
+  SPEED_KMH: 22, ROAD_F: 1.3, PICKUP_S: 30, DETOUR_M: 3200,
+  SCAN_US: 0.8, RTT_MS: 0.4, PER_REC_MS: 0.01,
+  RIDERS: 3, LOCK_TTL_S: 10, GC_PAUSE_S: 12,
+  PAGE_PREC: ["5000 km", "1250 km", "156 km", "39 km", "5 km", "1 km", "150 m"]
+};
+var sddesignridesharin_D = {
+  WRITES_S: sddesignridesharin_C.ONLINE / sddesignridesharin_C.UPD_S,
+  LIVE_B: sddesignridesharin_C.ONLINE * sddesignridesharin_C.LOC_B,
+  TRIP_DAY_B: sddesignridesharin_C.TRIPS_DAY * sddesignridesharin_C.TRIP_B,
+  SPEED_MS: sddesignridesharin_C.SPEED_KMH * 1000 / 3600
+};
+sddesignridesharin_D.TRIP_YEAR_B = sddesignridesharin_D.TRIP_DAY_B * 365;
+sddesignridesharin_D.LOC_BPS = sddesignridesharin_D.WRITES_S * sddesignridesharin_C.LOC_B;
+
+// the driver field: id, metres north, metres east, state, class, seconds
+// since its last location publish, whether it is across the water
+var sddesignridesharin_FIELD = [
+  { id: "D1", n: -170, e: 50, state: "AVAILABLE", cls: "standard", age: 2, water: false },
+  { id: "D2", n: 20, e: -150, state: "AVAILABLE", cls: "standard", age: 3, water: true },
+  { id: "D3", n: 400, e: 700, state: "AVAILABLE", cls: "standard", age: 1, water: false },
+  { id: "D4", n: 300, e: 740, state: "ON_TRIP", cls: "standard", age: 2, water: false },
+  { id: "D5", n: 200, e: 600, state: "AVAILABLE", cls: "xl", age: 4, water: false },
+  { id: "D6", n: 1100, e: 1700, state: "AVAILABLE", cls: "standard", age: 2, water: false },
+  { id: "D7", n: -200, e: -150, state: "AVAILABLE", cls: "standard", age: 34, water: false },
+  { id: "D8", n: 560, e: -220, state: "AVAILABLE", cls: "standard", age: 5, water: false }
+];
+
+// ---- geohash, the real algorithm -------------------------------------
+var sddesignridesharin_B32 = "0123456789bcdefghjkmnpqrstuvwxyz";
+function sddesignridesharin_enc(lat, lon, prec) {
+  var la0 = -90, la1 = 90, lo0 = -180, lo1 = 180;
+  var out = "", even = true, bit = 0, ch = 0, mid;
+  while (out.length < prec) {
+    if (even) {
+      mid = (lo0 + lo1) / 2;
+      if (lon >= mid) { ch = ch * 2 + 1; lo0 = mid; } else { ch = ch * 2; lo1 = mid; }
+    } else {
+      mid = (la0 + la1) / 2;
+      if (lat >= mid) { ch = ch * 2 + 1; la0 = mid; } else { ch = ch * 2; la1 = mid; }
+    }
+    even = !even;
+    bit++;
+    if (bit === 5) { out += sddesignridesharin_B32.charAt(ch); bit = 0; ch = 0; }
+  }
+  return out;
+}
+function sddesignridesharin_box(lat, lon, prec) {
+  var la0 = -90, la1 = 90, lo0 = -180, lo1 = 180;
+  var even = true, n = 0, mid;
+  while (n < prec * 5) {
+    if (even) {
+      mid = (lo0 + lo1) / 2;
+      if (lon >= mid) lo0 = mid; else lo1 = mid;
+    } else {
+      mid = (la0 + la1) / 2;
+      if (lat >= mid) la0 = mid; else la1 = mid;
+    }
+    even = !even; n++;
+  }
+  return { la0: la0, la1: la1, lo0: lo0, lo1: lo1 };
+}
+
+// ---- geometry ---------------------------------------------------------
+var sddesignridesharin_MLAT = 111320;
+var sddesignridesharin_MLON = 111320 *
+  Math.cos(sddesignridesharin_C.RIDER_LAT * Math.PI / 180);
+function sddesignridesharin_pos(dr) {
+  return {
+    lat: sddesignridesharin_C.RIDER_LAT + dr.n / sddesignridesharin_MLAT,
+    lon: sddesignridesharin_C.RIDER_LON + dr.e / sddesignridesharin_MLON
+  };
+}
+
+// ---- formatting -------------------------------------------------------
+function sddesignridesharin_n(x) {
+  return String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function sddesignridesharin_km(m) {
+  return m >= 1000 ? (m / 1000).toFixed(2) + " km" : Math.round(m) + " m";
+}
+function sddesignridesharin_ms(x) {
+  if (x >= 1000) return (x / 1000).toFixed(2) + " s";
+  if (x >= 1) return x.toFixed(1) + " ms";
+  return (x * 1000).toFixed(0) + " µs";
+}
+function sddesignridesharin_mins(s) {
+  return s < 90 ? Math.round(s) + " s" : (s / 60).toFixed(1) + " min";
+}
+function sddesignridesharin_by(b) {
+  var u = ["B", "KB", "MB", "GB", "TB", "PB"], i = 0, v = b, s;
+  while (v >= 1000 && i < u.length - 1) { v = v / 1000; i++; }
+  s = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  if (s.indexOf(".") >= 0) { s = s.replace(/0+$/, ""); s = s.replace(/\.$/, ""); }
+  return s + " " + u[i];
+}
+function sddesignridesharin_x(a, b) {
+  if (!b) return "—";
+  var r = a / b;
+  return (r >= 100 ? sddesignridesharin_n(r) : r >= 10 ? r.toFixed(0) : r.toFixed(2)) +
+    "×";
+}
+
+// ---- the world, computed once -----------------------------------------
+var sddesignridesharin_W = (function () {
+  var C = sddesignridesharin_C, D = sddesignridesharin_D;
+  var W = {}, i, p;
+
+  W.cell = sddesignridesharin_enc(C.RIDER_LAT, C.RIDER_LON, C.PREC);
+  W.box = sddesignridesharin_box(C.RIDER_LAT, C.RIDER_LON, C.PREC);
+  W.prefixes = [];
+  W.precTable = [];
+  for (p = 1; p <= 7; p++) {
+    var b = sddesignridesharin_box(C.RIDER_LAT, C.RIDER_LON, p);
+    var latKm = (b.la1 - b.la0) * 111.32;
+    var lonKmEq = (b.lo1 - b.lo0) * 111.32;
+    W.prefixes.push(sddesignridesharin_enc(C.RIDER_LAT, C.RIDER_LON, p));
+    W.precTable.push({
+      p: p, gh: W.prefixes[p - 1],
+      big: Math.max(latKm, lonKmEq), page: C.PAGE_PREC[p - 1],
+      latKm: latKm, lonKmEq: lonKmEq
+    });
+  }
+  W.cellH = (W.box.la1 - W.box.la0) * sddesignridesharin_MLAT;      // metres
+  W.cellW = (W.box.lo1 - W.box.lo0) * sddesignridesharin_MLON;
+  W.toS = (C.RIDER_LAT - W.box.la0) * sddesignridesharin_MLAT;
+  W.toN = (W.box.la1 - C.RIDER_LAT) * sddesignridesharin_MLAT;
+  W.toW = (C.RIDER_LON - W.box.lo0) * sddesignridesharin_MLON;
+  W.toE = (W.box.lo1 - C.RIDER_LON) * sddesignridesharin_MLON;
+  W.nearestEdge = Math.min(W.toS, W.toN, W.toW, W.toE);
+  // neighbour-centre distances: the hexagon argument, at this latitude
+  W.diag = Math.sqrt(W.cellW * W.cellW + W.cellH * W.cellH);
+  W.blockCorner = Math.sqrt(Math.pow(W.toE + W.cellW, 2) +
+    Math.pow(W.toN + W.cellH, 2));
+  W.sqRatio = Math.SQRT2;
+  W.realRatio = W.diag / Math.min(W.cellW, W.cellH);
+
+  // the nine cells of the 3x3 block, by encoding points one cell away
+  W.cells = [];
+  var dLat = W.box.la1 - W.box.la0, dLon = W.box.lo1 - W.box.lo0, a, o;
+  for (a = -1; a <= 1; a++) {
+    for (o = -1; o <= 1; o++) {
+      W.cells.push(sddesignridesharin_enc(
+        C.RIDER_LAT + a * dLat, C.RIDER_LON + o * dLon, C.PREC));
+    }
+  }
+
+  // the drivers
+  W.drivers = [];
+  for (i = 0; i < sddesignridesharin_FIELD.length; i++) {
+    var dr = sddesignridesharin_FIELD[i];
+    var pt = sddesignridesharin_pos(dr);
+    var dist = Math.sqrt(dr.n * dr.n + dr.e * dr.e);
+    var gh = sddesignridesharin_enc(pt.lat, pt.lon, C.PREC);
+    var road = dist * C.ROAD_F + (dr.water ? C.DETOUR_M : 0);
+    var eta = road / D.SPEED_MS + C.PICKUP_S;
+    var fresh = dr.age <= C.TTL_S;
+    var inCell = gh === W.cell;
+    var inBlock = false, q;
+    for (q = 0; q < W.cells.length; q++) if (W.cells[q] === gh) inBlock = true;
+    W.drivers.push({
+      id: dr.id, lat: pt.lat, lon: pt.lon, dist: dist, gh: gh,
+      state: dr.state, cls: dr.cls, age: dr.age, water: dr.water,
+      road: road, eta: eta, fresh: fresh, inCell: inCell, inBlock: inBlock,
+      ok: fresh && dr.state === "AVAILABLE" && dr.cls === C.CLASS &&
+        dist <= C.RADIUS_M
+    });
+  }
+  // the page's own scan cost, and what it costs at 800 requests a second
+  W.scanMs = C.ONLINE * C.SCAN_US / 1000;
+  W.scanCores = W.scanMs / 1000 * C.REQ_S;
+  return W;
+})();
+
+// ---- the three builds --------------------------------------------------
+function sddesignridesharin_build(mode) {
+  var C = sddesignridesharin_C, D = sddesignridesharin_D, W = sddesignridesharin_W;
+  var i, d;
+  var b = { mode: mode };
+
+  // step 2 — what the query returns, and what it cost
+  b.seen = [];
+  for (i = 0; i < W.drivers.length; i++) {
+    d = W.drivers[i];
+    if (mode === "scan") b.seen.push(d);
+    else if (mode === "cell") { if (d.inCell) b.seen.push(d); }
+    else if (d.inBlock) b.seen.push(d);
+  }
+  b.cellsQueried = mode === "scan" ? 0 : mode === "cell" ? 1 : 9;
+  b.touched = mode === "scan" ? C.ONLINE : b.seen.length;
+  b.queryMs = mode === "scan" ? W.scanMs
+    : C.RTT_MS + b.seen.length * C.PER_REC_MS;
+  b.writesDuring = D.WRITES_S * b.queryMs / 1000;
+
+  // step 3 — the filters, in the page's order
+  b.pass = []; b.reasons = [];
+  for (i = 0; i < b.seen.length; i++) {
+    d = b.seen[i];
+    var why = !d.fresh ? "expired · " + d.age + " s since its last publish"
+      : d.state !== "AVAILABLE" ? d.state
+      : d.cls !== C.CLASS ? "class " + d.cls
+      : d.dist > C.RADIUS_M ? "outside the " + (C.RADIUS_M / 1000) + " km radius"
+      : "";
+    b.reasons.push({ d: d, why: why });
+    if (!why) b.pass.push(d);
+  }
+
+  // step 4 — ranking. Distance for the first two builds, ETA for the third.
+  b.rankBy = mode === "block" ? "eta" : "distance";
+  b.ranked = b.pass.slice();
+  b.ranked.sort(function (x, y) {
+    return b.rankBy === "eta" ? x.eta - y.eta : x.dist - y.dist;
+  });
+  b.pick = b.ranked.length ? b.ranked[0] : null;
+  b.rankMs = b.pass.length * 0.002 + 0.1;
+
+  // step 5 — the offer, with three riders racing for the same driver
+  b.assign = mode === "scan" ? "read then write"
+    : mode === "cell" ? "distributed lock, " + C.LOCK_TTL_S + " s TTL"
+    : "conditional update WHERE state = AVAILABLE";
+  b.holders = mode === "scan" ? C.RIDERS
+    : mode === "cell" ? 2                       // the GC pause outlives the TTL
+    : 1;
+  b.doubleMatched = b.holders - 1;
+  b.offerMs = mode === "block" ? 3.0 : mode === "cell" ? 3.0 + 1.5 : 6.0;
+  b.rowsAffected = mode === "block" ? [1, 0, 0] : null;
+
+  // total system matching latency, against the page's 5 s budget
+  b.systemMs = 0.05 + b.queryMs + b.pass.length * 0.004 + b.rankMs + b.offerMs;
+
+  // step 6 — the accept window. The third build's best candidate declines,
+  // which is the branch the page's step 6 exists for.
+  b.declined = mode === "block";
+  b.second = b.declined && b.ranked.length > 1 ? b.ranked[1] : null;
+  b.final = b.declined ? b.second : b.pick;
+  b.riderWaitS = b.systemMs / 1000 + (b.declined ? C.ACCEPT_S : 0) + 2;
+
+  // step 7
+  b.pickupS = b.final ? b.final.eta : Infinity;
+  b.bestPossible = null;
+  for (i = 0; i < W.drivers.length; i++) {
+    if (W.drivers[i].ok && (!b.bestPossible || W.drivers[i].eta < b.bestPossible.eta)) {
+      b.bestPossible = W.drivers[i];
+    }
+  }
+  b.regretS = b.final && b.bestPossible ? b.final.eta - b.bestPossible.eta : 0;
+  b.coresAtPeak = b.systemMs / 1000 * C.REQ_S;
+  return b;
+}
+var sddesignridesharin_B = {
+  scan: sddesignridesharin_build("scan"),
+  cell: sddesignridesharin_build("cell"),
+  block: sddesignridesharin_build("block")
+};
+
+// ======================================================================
+function sddesignridesharin_phases(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [], chips = [], i;
+  if (!names.length) return "";
+  for (i = 0; i < names.length; i++) {
+    chips.push({ label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+  }
+  return d.pills(chips);
+}
+
+function sddesignridesharin_caption(mode, i) {
+  var C = sddesignridesharin_C, D = sddesignridesharin_D, W = sddesignridesharin_W;
+  var B = sddesignridesharin_B, b = B[mode];
+  var n = sddesignridesharin_n, km = sddesignridesharin_km;
+  var ms = sddesignridesharin_ms, mins = sddesignridesharin_mins;
+  var xx = sddesignridesharin_x;
+
+  if (i === 0) {
+    var base = "<b>Step 1 — a rider requests a car at Union Square.</b> " +
+      "Their geohash, computed from " + C.RIDER_LAT + ", " + C.RIDER_LON +
+      ", narrows one character at a time: <code>" + W.prefixes.join("</code> → <code>") +
+      "</code>. At precision " + C.PREC + " that is a cell <b>" +
+      Math.round(W.cellW) + " m by " + Math.round(W.cellH) + " m</b> — the " +
+      "page's “~1 km” row. ";
+    if (mode === "scan") return base + "<i>This build computes it and throws it " +
+      "away</i>, because it is about to compare the rider against every driver " +
+      "record it has. The cell is here only so you can see what the other two " +
+      "builds are about to do with it.";
+    if (mode === "cell") return base + "The query will be a <b>prefix scan on " +
+      "<code>" + W.cell + "</code></b> — shared prefix means spatially close, " +
+      "so proximity search becomes a range scan and any ordinary sorted index can " +
+      "do it. <i>Note where the rider is standing: " + Math.round(W.toS) +
+      " m from the southern edge of their own cell.</i>";
+    return base + "The query will be a prefix scan on <b>" + W.cell + " and its " +
+      "eight neighbours</b>, obtained by encoding points one cell away in each " +
+      "direction: <code>" + W.cells.slice(0, 3).join(" ") + " …</code>. " +
+      "<i>Nine prefix scans instead of one, because the rider is standing " +
+      Math.round(W.toS) + " m from a cell boundary and a boundary means nothing " +
+      "on the ground.</i>";
+  }
+
+  if (i === 1) {
+    if (mode === "scan") return "<b>Step 2 — the query: compare the rider " +
+      "against all " + n(C.ONLINE) + " online drivers.</b> At " + C.SCAN_US +
+      " µs per distance computation that is <b>" + ms(b.queryMs) +
+      "</b> for one request. Survivable alone; at the page's " + n(C.REQ_S) +
+      " requests a second it is <b>" + n(W.scanCores) + " cores</b> doing " +
+      "nothing but arithmetic. <i>And the data moved underneath you: " +
+      n(b.writesDuring) +
+      " location updates landed while the scan ran — " +
+      (100 * b.writesDuring / C.ONLINE).toFixed(0) + "% of every online driver " +
+      "reported a new position. An O(n) scan over a " + n(D.WRITES_S) +
+      "/s firehose answers a question about a world that no longer exists.</i>";
+    if (mode === "cell") return "<b>Step 2 — one prefix scan, <code>" +
+      W.cell + "*</code>.</b> <b>" + b.seen.length + " records</b> returned " +
+      "against " + n(C.ONLINE) + " scanned: " + ms(b.queryMs) + " against " +
+      ms(B.scan.queryMs) + ", <b>" + xx(B.scan.queryMs, b.queryMs) +
+      " faster</b>, and the cost is O(log n + m) so it does not grow when more " +
+      "drivers come online. Only " + n(b.writesDuring) + " location writes " +
+      "landed while it ran. <i>Everything about this is right except the answer: " +
+      "the nearest driver is not in this list.</i>";
+    return "<b>Step 2 — nine prefix scans, pipelined.</b> " + b.seen.length +
+      " records against the one cell's " + B.cell.seen.length + ": " +
+      ms(b.queryMs) + ", still <b>" + xx(B.scan.queryMs, b.queryMs) +
+      " faster than the scan</b> and " + n(b.writesDuring) + " writes landed " +
+      "meanwhile. <i>The extra eight cells cost " +
+      ms(b.queryMs - B.cell.queryMs) + " and bought <b>" +
+      (b.seen.length - B.cell.seen.length) + " drivers the single-cell query " +
+      "could not see</b> — including one " +
+      km(W.drivers[0].dist) + " away.</i>";
+  }
+
+  if (i === 2) {
+    var f = "<b>Step 3 — filter: available, right class, inside the " +
+      (C.RADIUS_M / 1000) + " km radius, and not expired.</b> " + b.seen.length +
+      " candidates go in, <b>" + b.pass.length + "</b> come out. ";
+    var ttl = "";
+    var q;
+    for (q = 0; q < b.reasons.length; q++) {
+      if (!b.reasons[q].d.fresh) {
+        ttl = "<b>" + b.reasons[q].d.id + " is gone</b> — its last publish " +
+          "was " + b.reasons[q].d.age + " s ago and every entry carries a " +
+          C.TTL_S + " s TTL, so it expired out of the index on its own. " +
+          "<i>Nobody sent an “I went offline” event, and nobody was " +
+          "going to: a phone that loses signal does not get to say goodbye. " +
+          "Expiry does the work.</i> ";
+      }
+    }
+    if (mode === "cell") return f + "<i>No TTL drama here, because the expired " +
+      "driver was in a neighbouring cell this build never looked at.</i> The two " +
+      "survivors are <b>" + b.pass[0].id + "</b> at " + km(b.pass[0].dist) +
+      " and <b>" + b.pass[1].id + "</b> at " + km(b.pass[1].dist) +
+      ". The filters are cheap and correct; <b>the candidate set they were " +
+      "given is the problem</b>.";
+    return f + ttl + "Straight-line distance is used here as a <i>filter</i>, " +
+      "not as a ranking — the page is precise about that split and the next " +
+      "frame is why.";
+  }
+
+  if (i === 3) {
+    if (mode === "block") return "<b>Step 4 — rank by ETA, not by " +
+      "distance.</b> <code>" + B.scan.pick.id + "</code> is the closest at " +
+      km(B.scan.pick.dist) + ", and it is on the far side of the water: the road " +
+      "route is " + km(B.scan.pick.road) + " via the bridge, <b>" +
+      mins(B.scan.pick.eta) + "</b> away. <code>" + b.pick.id + "</code> is " +
+      km(b.pick.dist) + " away on the same side, <b>" + mins(b.pick.eta) +
+      "</b>. <i>" + xx(B.scan.pick.eta, b.pick.eta) + " the pickup time, and " +
+      "straight-line distance ranks them the wrong way round.</i> The page's " +
+      "sentence, with the arithmetic done: distance filters candidates, ETA " +
+      "ranks them.";
+    return "<b>Step 4 — rank by straight-line distance, which is the " +
+      "obvious thing to do.</b> The winner is <code>" + b.pick.id + "</code> at " +
+      km(b.pick.dist) + ". <b>It is across the water.</b> The road route is " +
+      km(b.pick.road) + " — " + km(C.DETOUR_M) + " of it detour to the " +
+      "nearest bridge — so the actual pickup is <b>" + mins(b.pick.eta) +
+      "</b> against <b>" + mins(B.block.pick.eta) + "</b> for the driver an " +
+      "ETA ranking would have chosen. <i>Metres are not minutes, and a rider " +
+      "waiting is a rider leaving.</i>";
+  }
+
+  if (i === 4) {
+    var head = "<b>Step 5 — the offer, and " + C.RIDERS + " riders want <code>" +
+      b.pick.id + "</code> at the same instant.</b> ";
+    if (mode === "scan") return head + "This build reads the driver's state, sees " +
+      "<code>AVAILABLE</code>, and writes <code>OFFERED</code>. All three " +
+      "requests read before any of them wrote. <b>" + b.holders +
+      " riders now hold the same driver</b> and <b>" + b.doubleMatched +
+      " trips are invalid</b> — against a requirement that reads <i>a driver " +
+      "must NEVER be matched to two rides</i>. <i>The read and the write are two " +
+      "statements; correctness needed them to be one.</i>";
+    if (mode === "cell") return head + "This build takes a distributed lock with " +
+      "a " + C.LOCK_TTL_S + " s TTL, which is correct almost always. One of the " +
+      "three matching services then pauses for <b>" + C.GC_PAUSE_S +
+      " s</b> — longer than the TTL — so its lock expires while it still " +
+      "believes it holds it, a second rider takes the lock, and the first wakes " +
+      "up and writes anyway. <b>" + b.holders + " holders, " + b.doubleMatched +
+      " invalid trip.</b> <i>A lock with a timeout is not a correctness " +
+      "mechanism; it is a performance optimisation with a correctness-shaped " +
+      "hole.</i>";
+    return head + "<code>UPDATE drivers SET state='OFFERED' WHERE id=" + b.pick.id +
+      " AND state='AVAILABLE'</code>, one statement, atomic in the database. " +
+      "Rows affected: <b>" + b.rowsAffected.join(", ") + "</b>. The two riders " +
+      "that got zero rows learn it immediately and move to their own next " +
+      "candidate. <b>" + b.holders + " holder, " + b.doubleMatched +
+      " invalid trips.</b> <i>Optimistic concurrency, the same mechanism as the " +
+      "ticketing design — and the offer goes to one driver at a time, not " +
+      "broadcast to five, because four drivers accepting and losing is how you " +
+      "burn driver trust.</i>";
+  }
+
+  if (i === 5) {
+    if (mode === "block") return "<b>Step 6 — <code>" + b.pick.id +
+      "</code> has " + C.ACCEPT_S + " s to accept, and does not.</b> Timeout: " +
+      "release the state back to <code>AVAILABLE</code> and offer to the next " +
+      "candidate, <code>" + b.second.id + "</code> at " + mins(b.second.eta) +
+      ". <i>This is where the two clocks have to be separated. Our matching work " +
+      "took <b>" + ms(b.systemMs) + "</b> against the page's <b>" +
+      C.MATCH_BUDGET_S + " s</b> budget; the " + C.ACCEPT_S +
+      " s is the driver's, and it is not ours to optimise. Reporting them as one " +
+      "number gives you a metric nobody can meet and nobody can debug.</i> A " +
+      "sweeper releases anything left in <code>OFFERED</code> past its window, " +
+      "or drivers strand there forever.";
+    return "<b>Step 6 — <code>" + b.pick.id + "</code> accepts.</b> " +
+      "Matching work: <b>" + ms(b.systemMs) + "</b> against the page's " +
+      C.MATCH_BUDGET_S + " s budget, which " +
+      (b.systemMs / 1000 <= C.MATCH_BUDGET_S ? "it meets" : "it misses") +
+      ". <i>The budget was never the problem with " +
+      (mode === "scan" ? "a full scan at this scale — " + ms(b.systemMs) +
+        " for one request is fine, and " + n(W.scanCores) +
+        " cores at " + n(C.REQ_S) + " requests a second is not"
+       : "this build — it is fast, and it is about to send a car that is " +
+         mins(b.pick.eta) + " away when one " +
+         mins(B.block.pick.eta) + " away existed") + ".</i>";
+  }
+
+  var v = "<b>Step 7 — the trip row is written and the rider sees an ETA of <b>" +
+    mins(b.pickupS) + "</b>.</b> ";
+  if (mode === "scan") return v + "Matching cost <b>" + ms(b.systemMs) +
+    "</b> and <b>" + n(b.coresAtPeak) + " cores</b> at " + n(C.REQ_S) +
+    " requests/s; the answer was computed against an index that took <b>" +
+    n(b.writesDuring) + " writes</b> while it was being read; and <b>" +
+    b.doubleMatched + " other riders were also given this driver</b>. " +
+    "<i>Every one of those is a different failure, and only the first is about " +
+    "speed. The spatial index is what makes the other two tractable, because a " +
+    "query you can afford to run is a query you can afford to run again, " +
+    "correctly.</i>";
+  if (mode === "cell") return v + "Matching cost <b>" + ms(b.systemMs) +
+    "</b> and <b>" + b.coresAtPeak.toFixed(1) + " cores</b> at " + n(C.REQ_S) +
+    " requests/s — <b>" + xx(B.scan.coresAtPeak, b.coresAtPeak) +
+    " cheaper than the scan</b>, which is real and worth having. And the rider " +
+    "waits <b>" + mins(b.pickupS) + "</b> for a car when one " +
+    mins(B.block.bestPossible.eta) + " away was " + km(B.block.bestPossible.dist) +
+    " from them, in a cell this query never opened. <i>" +
+    km(B.block.bestPossible.dist) + " away and invisible, because a boundary " +
+    "ran between them. <b>Raise this before you are asked</b> — it is the " +
+    "standard way to lose the follow-up.</i>";
+  return v + "<b>" + ms(b.systemMs) + " of matching work, " +
+    b.coresAtPeak.toFixed(1) + " cores at " + n(C.REQ_S) +
+    " requests/s, one holder, zero double-matches</b>, and the rider gets the " +
+    "driver with the shortest ETA who actually accepted. Against the scan: " +
+    xx(B.scan.coresAtPeak, b.coresAtPeak) + " cheaper. Against the single " +
+    "cell: the same speed and <b>" + mins(B.cell.pickupS - b.pickupS) +
+    " less</b> waiting. <i>Three decisions did that, and the page names all " +
+    "three: query the cell <b>and its eight neighbours</b>, rank by <b>ETA</b> " +
+    "rather than metres, and assign with a <b>conditional update</b> rather than " +
+    "a lock. None of them is about scale.</i>";
+}
+
+function sddesignridesharin_scenario(id, label, mode, blurb) {
+  var steps = [{ mode: mode, idle: true, caption: blurb, flag: "idle" }];
+  var C = sddesignridesharin_C, b = sddesignridesharin_B[mode];
+  var i;
+  for (i = 0; i < 7; i++) {
+    steps.push({
+      mode: mode, k: i,
+      caption: sddesignridesharin_caption(mode, i),
+      flag: i === 4 && b.doubleMatched > 0 ? "bad"
+        : i === 6 && b.regretS > 60 ? "bad"
+        : i === 6 ? "ok"
+        : i === 1 && mode === "scan" ? "bad"
+        : i === 3 && b.rankBy === "distance" ? "bad"
+        : "ok"
+    });
+  }
+  return {
+    id: id, label: label, steps: steps,
+    phases: ["the field", "the cell", "query", "filter", "rank", "offer",
+      "accept", "trip"]
+  };
+}
+
+// ======================================================================
+S["sddesignridesharin"] = {
+  title: "Match one rider seven steps, three ways",
+  note: (function () {
+    var C = sddesignridesharin_C, D = sddesignridesharin_D, W = sddesignridesharin_W;
+    var n = sddesignridesharin_n, by = sddesignridesharin_by;
+    return "The page's matching loop, run once. <b>The geohashes are real</b>: " +
+      "encoded from latitude and longitude by the base-32 algorithm, with cell " +
+      "boundaries from decoding them. The rider stands at Union Square, San " +
+      "Francisco — <code>" + W.cell + "</code> at precision " + C.PREC +
+      ", and <code>9q8yy</code> is the page's own worked prefix — in a cell " +
+      Math.round(W.cellW) + " m by " + Math.round(W.cellH) + " m, <b>" +
+      Math.round(W.toS) + " m from its southern boundary</b>. Eight drivers sit " +
+      "at declared metre offsets; <i>which of them share the rider's cell is " +
+      "computed, not asserted</i>, and the nearest one does not. The page's " +
+      "figures: <b>" + n(C.ONLINE) + " drivers online</b> publishing every " +
+      C.UPD_S + " s = <b>" + n(D.WRITES_S) + " writes/s</b> and " +
+      by(D.LIVE_B) + " of live location, a <b>" + C.TTL_S +
+      "s TTL</b> on every entry, <b>" + n(C.REQ_S) + " ride requests/s</b>, " +
+      "matching under <b>" + C.MATCH_BUDGET_S + " s</b>, and " + C.ACCEPT_S +
+      " s for a driver to accept. Declared: a " + (C.RADIUS_M / 1000) +
+      " km radius, " + C.SPEED_KMH + " km/h with a " + C.ROAD_F +
+      "× road factor and " + C.PICKUP_S + " s of overhead, a water barrier " +
+      "costing a " + (C.DETOUR_M / 1000) + " km detour to the nearest bridge, " +
+      C.SCAN_US + " µs per scanned driver, and " + C.RTT_MS +
+      " ms plus " + C.PER_REC_MS + " ms per record for a prefix scan. " +
+      "<b>Three riders request at the same instant</b>, and one matching service " +
+      "pauses " + C.GC_PAUSE_S + " s — longer than the " + C.LOCK_TTL_S +
+      " s lock TTL.";
+  })(),
+  interval: 1700,
+
+  scenarios: [
+    sddesignridesharin_scenario("scan", "Scan every driver", "scan",
+      "<b>Scan every driver and compute the distance.</b> No spatial index at " +
+      "all, ranked by straight-line distance, and the driver is claimed by " +
+      "reading their state and then writing it. The page's first rejected " +
+      "approach. Press Play."),
+    sddesignridesharin_scenario("cell", "Geohash, one cell", "cell",
+      "<b>A geohash prefix scan on the rider's own cell.</b> Two dimensions " +
+      "mapped to one ordered key, so proximity is a range scan — the right " +
+      "idea, stopped one sentence early. Claimed with a distributed lock."),
+    sddesignridesharin_scenario("block", "Cell + 8 neighbours", "block",
+      "<b>The cell and its eight neighbours, ranked by ETA, claimed with a " +
+      "conditional update.</b> The same seven steps, with the three corrections " +
+      "the page insists on.")
+  ],
+
+  draw: function (step, d, ctx) {
+    var C = sddesignridesharin_C, D = sddesignridesharin_D, W = sddesignridesharin_W;
+    var B = sddesignridesharin_B;
+    var n = sddesignridesharin_n, km = sddesignridesharin_km;
+    var ms = sddesignridesharin_ms, mins = sddesignridesharin_mins;
+    var by = sddesignridesharin_by, xx = sddesignridesharin_x;
+    var mode = step && step.mode ? step.mode : "scan";
+    var b = B[mode];
+    var name = mode === "scan" ? "full scan, distance rank, read-then-write"
+      : mode === "cell" ? "one cell, distance rank, lock"
+      : "nine cells, ETA rank, conditional update";
+    var phases = sddesignridesharin_phases(d, ctx);
+    var i, rows;
+
+    if (step && step.idle) {
+      rows = [];
+      for (i = 0; i < W.precTable.length; i++) {
+        rows.push([
+          W.precTable[i].gh,
+          String(W.precTable[i].p),
+          W.precTable[i].big >= 1 ? W.precTable[i].big.toFixed(
+            W.precTable[i].big >= 100 ? 0 : 2) + " km"
+            : Math.round(W.precTable[i].big * 1000) + " m",
+          W.precTable[i].page
+        ]);
+      }
+      return d.stack([
+        phases,
+        d.cols([
+          d.big(n(D.WRITES_S) + "/s", "location writes at peak", "idle"),
+          d.stat({ label: "live locations", value: by(D.LIVE_B),
+            sub: n(C.ONLINE) + " online × " + C.LOC_B + " B", flag: "idle" }),
+          d.stat({ label: "ride requests", value: n(C.REQ_S) + "/s",
+            sub: "match in under " + C.MATCH_BUDGET_S + " s", flag: "idle" })
+        ]),
+        d.cols([
+          d.node({
+            title: "two subsystems, opposite properties",
+            status: "IDLE", statusFlag: "idle", flag: "idle",
+            body: d.table(["", "live locations", "trips"], [
+              ["volume", n(D.WRITES_S) + "/s", n(C.REQ_S) + "/s"],
+              ["durability", "none needed", "full"],
+              ["lifetime", C.TTL_S + " s TTL", "forever"],
+              ["consistency", "eventual", "strong"],
+              ["a year of it", by(D.LIVE_B) + " resident",
+                by(D.TRIP_YEAR_B)]
+            ])
+          }),
+          d.node({
+            title: "the geohash precision table, computed",
+            status: "MATCHES THE PAGE", statusFlag: "ok", flag: "ok",
+            meta: "widest cell dimension at the equator",
+            body: d.table(["prefix", "chars", "computed", "the page"], rows)
+          })
+        ]),
+        d.note("<b>" + n(C.ONLINE) + " ÷ " + C.UPD_S + " s = " +
+          n(D.WRITES_S) + " writes a second of data that is worthless in " +
+          C.TTL_S + " seconds</b> — " + by(D.LOC_BPS) + "/s into memory, " +
+          "never a relational database. The rider's cell here is <code>" +
+          W.cell + "</code>, which is " + Math.round(W.cellW) + " m by " +
+          Math.round(W.cellH) + " m — <i>not square, which matters in a " +
+          "moment.</i>")
+      ]);
+    }
+
+    var k = step.k;
+    var stageFlag = k === 4 && b.doubleMatched > 0 ? "bad"
+      : k >= 3 && b.rankBy === "distance" ? "bad"
+      : k === 1 && mode === "scan" ? "bad" : "ok";
+
+    var head = d.cols([
+      d.big(k >= 6 ? mins(b.pickupS) : ms(b.systemMs),
+        k >= 6 ? "the rider's pickup ETA" : "matching work so far",
+        k >= 6 ? (b.regretS > 60 ? "bad" : "ok")
+          : (b.systemMs / 1000 > C.MATCH_BUDGET_S ? "bad" : "ok")),
+      d.stat({
+        label: "records touched",
+        value: n(b.touched),
+        sub: b.cellsQueried === 0 ? "every online driver"
+          : b.cellsQueried + " cell" + (b.cellsQueried === 1 ? "" : "s") +
+            " prefix-scanned",
+        flag: b.touched > 1000 ? "bad" : "ok"
+      }),
+      d.stat({
+        label: "double matches",
+        value: String(k >= 4 ? b.doubleMatched : 0),
+        sub: k >= 4 ? b.assign : "not yet offered",
+        flag: k >= 4 && b.doubleMatched > 0 ? "bad" : "ok"
+      })
+    ]);
+
+    // the driver field, always visible, with the columns that matter now
+    var dRows = [], dr, vis, note;
+    for (i = 0; i < W.drivers.length; i++) {
+      dr = W.drivers[i];
+      vis = mode === "scan" ? true : mode === "cell" ? dr.inCell : dr.inBlock;
+      note = !vis ? "not queried"
+        : k < 2 ? "returned"
+        : !dr.fresh ? "expired"
+        : dr.state !== "AVAILABLE" ? "on a trip"
+        : dr.cls !== C.CLASS ? "class " + dr.cls
+        : dr.dist > C.RADIUS_M ? "too far"
+        : b.final && dr.id === b.final.id && k >= 5 ? "MATCHED"
+        : b.pick && dr.id === b.pick.id && k >= 4 ? "offered"
+        : "candidate";
+      dRows.push([
+        dr.id, km(dr.dist), dr.gh,
+        k >= 3 ? mins(dr.eta) + (dr.water ? " ⛴" : "") : dr.state.toLowerCase(),
+        note
+      ]);
+    }
+
+    var fieldNode = d.node({
+      title: "the eight drivers in the 3×3 block",
+      status: b.seen.length + " visible to this query",
+      statusFlag: b.seen.length >= 8 && mode !== "scan" ? "ok"
+        : mode === "cell" ? "bad" : "ok",
+      flag: stageFlag,
+      badge: name,
+      meta: "rider cell " + W.cell + " · " + Math.round(W.cellW) + " × " +
+        Math.round(W.cellH) + " m",
+      body: d.table(["id", "straight line", "cell",
+        k >= 3 ? "ETA" : "state", "this build"], dRows)
+    });
+
+    var sRows, title, status, sFlag = "ok", gauges = [];
+    if (k === 0) {
+      title = "step 1 · compute the cell";
+      status = "GEOHASH";
+      sRows = [];
+      for (i = 0; i < W.precTable.length; i++) {
+        sRows.push({ label: W.precTable[i].gh,
+          value: W.precTable[i].big >= 1
+            ? W.precTable[i].big.toFixed(W.precTable[i].big >= 100 ? 0 : 2) + " km"
+            : Math.round(W.precTable[i].big * 1000) + " m",
+          flag: W.precTable[i].p === C.PREC ? "ok" : undefined });
+      }
+      sRows.push({ label: "rider to the nearest cell edge",
+        value: Math.round(W.nearestEdge) + " m", flag: "warn" });
+    } else if (k === 1) {
+      title = "step 2 · the query";
+      status = mode === "scan" ? "O(n)" : "PREFIX SCAN";
+      sFlag = mode === "scan" ? "bad" : "ok";
+      sRows = [
+        { label: "cells scanned", value: b.cellsQueried === 0 ? "none · full scan"
+          : String(b.cellsQueried), flag: b.cellsQueried === 0 ? "bad" : "ok" },
+        { label: "records touched", value: n(b.touched),
+          flag: b.touched > 1000 ? "bad" : "ok" },
+        { label: "records returned", value: String(b.seen.length) },
+        { label: "query time", value: ms(b.queryMs),
+          flag: b.queryMs > 100 ? "bad" : "ok" },
+        { label: "at " + n(C.REQ_S) + " requests/s",
+          value: (b.queryMs / 1000 * C.REQ_S).toFixed(1) + " cores",
+          flag: b.queryMs / 1000 * C.REQ_S > 10 ? "bad" : "ok" },
+        { label: "location writes during the query",
+          value: n(b.writesDuring) + " · " +
+            (100 * b.writesDuring / C.ONLINE).toFixed(1) + "% of all drivers",
+          flag: b.writesDuring > 10000 ? "bad" : "ok" }
+      ];
+      gauges.push({ label: "against the full scan",
+        pct: Math.min(100, 100 * b.queryMs / B.scan.queryMs),
+        value: xx(B.scan.queryMs, b.queryMs) + " faster",
+        flag: mode === "scan" ? "bad" : "ok" });
+    } else if (k === 2) {
+      title = "step 3 · filter";
+      status = b.pass.length + " OF " + b.seen.length + " SURVIVE";
+      sRows = [];
+      for (i = 0; i < b.reasons.length; i++) {
+        sRows.push({
+          label: b.reasons[i].d.id,
+          value: b.reasons[i].why ? "dropped · " + b.reasons[i].why
+            : "candidate",
+          flag: b.reasons[i].why ? "warn" : "ok"
+        });
+      }
+      sRows.push({ label: "never seen by this query",
+        value: String(W.drivers.length - b.seen.length),
+        flag: W.drivers.length - b.seen.length > 0 ? "bad" : "ok" });
+      sRows.push({ label: "the 3×3 block is not a circle",
+        value: Math.round(W.toS + W.cellH) + " m at its nearest edge, " +
+          Math.round(W.blockCorner) + " m at its far corner", flag: "warn" });
+    } else if (k === 3) {
+      title = "step 4 · rank by " + (b.rankBy === "eta" ? "ETA" : "distance");
+      status = b.rankBy === "eta" ? "ETA" : "STRAIGHT LINE";
+      sFlag = b.rankBy === "eta" ? "ok" : "bad";
+      sRows = [];
+      for (i = 0; i < b.ranked.length; i++) {
+        sRows.push({
+          label: (i + 1) + ". " + b.ranked[i].id +
+            (b.ranked[i].water ? " · across the water" : ""),
+          value: km(b.ranked[i].dist) + " · road " + km(b.ranked[i].road) +
+            " · " + mins(b.ranked[i].eta),
+          flag: i === 0 ? (b.ranked[i].water ? "bad" : "ok") : undefined
+        });
+      }
+      sRows.push({ label: "square-cell diagonal, the page's figure",
+        value: W.sqRatio.toFixed(2) + "× an edge neighbour" });
+      sRows.push({ label: "this cell is " + Math.round(W.cellW) + " × " +
+        Math.round(W.cellH) + " m, so the real ratio is",
+        value: W.realRatio.toFixed(2) + "×", flag: "warn" });
+    } else if (k === 4) {
+      title = "step 5 · the offer";
+      status = b.doubleMatched > 0 ? "DOUBLE MATCHED" : "EXACTLY ONE";
+      sFlag = b.doubleMatched > 0 ? "bad" : "ok";
+      sRows = [
+        { label: "mechanism", value: b.assign,
+          flag: mode === "block" ? "ok" : "bad" },
+        { label: "simultaneous requests for " + b.pick.id,
+          value: String(C.RIDERS) },
+        { label: "rows affected", value: b.rowsAffected
+          ? b.rowsAffected.join(" / ") : "not a conditional write",
+          flag: b.rowsAffected ? "ok" : "bad" },
+        { label: "riders holding this driver", value: String(b.holders),
+          flag: b.holders > 1 ? "bad" : "ok" },
+        { label: "invalid trips", value: String(b.doubleMatched),
+          flag: b.doubleMatched > 0 ? "bad" : "ok" },
+        { label: "a driver must NEVER be matched twice",
+          value: b.doubleMatched > 0 ? "VIOLATED" : "held",
+          flag: b.doubleMatched > 0 ? "bad" : "ok" }
+      ];
+      if (mode === "cell") sRows.push({ label: "GC pause vs lock TTL",
+        value: C.GC_PAUSE_S + " s > " + C.LOCK_TTL_S + " s", flag: "bad" });
+    } else if (k === 5) {
+      title = "step 6 · the accept window";
+      status = b.declined ? "TIMED OUT, NEXT" : "ACCEPTED";
+      sFlag = b.declined ? "warn" : "ok";
+      sRows = [
+        { label: "offered to", value: b.pick.id + " · " + C.ACCEPT_S +
+          " s to answer" },
+        { label: "outcome", value: b.declined ? "no answer · released"
+          : "accepted", flag: b.declined ? "warn" : "ok" },
+        { label: "next candidate", value: b.second ? b.second.id + " · " +
+          mins(b.second.eta) : "none needed" },
+        { label: "our matching work", value: ms(b.systemMs) + " of " +
+          C.MATCH_BUDGET_S + " s", flag: b.systemMs / 1000 <= C.MATCH_BUDGET_S
+            ? "ok" : "bad" },
+        { label: "the driver's " + C.ACCEPT_S + " s", value: b.declined
+          ? "spent · not our budget" : "not spent" },
+        { label: "rider waits", value: mins(b.riderWaitS) }
+      ];
+      gauges.push({ label: "matching work against the " + C.MATCH_BUDGET_S +
+        " s budget",
+        pct: Math.min(100, 100 * (b.systemMs / 1000) / C.MATCH_BUDGET_S),
+        value: ms(b.systemMs),
+        flag: b.systemMs / 1000 <= C.MATCH_BUDGET_S ? "ok" : "bad" });
+    } else {
+      title = "step 7 · the trip";
+      status = b.regretS > 60 ? "WORSE THAN AVAILABLE" : "BEST AVAILABLE";
+      sFlag = b.regretS > 60 ? "bad" : "ok";
+      sRows = [
+        { label: "matched", value: b.final.id + " · " + km(b.final.dist) +
+          " · " + mins(b.final.eta) },
+        { label: "best ETA in the field", value: b.bestPossible.id + " · " +
+          mins(b.bestPossible.eta) },
+        { label: "cost of getting it wrong",
+          value: b.regretS <= 1 ? "none" : "+" + mins(b.regretS) + " of waiting",
+          flag: b.regretS > 60 ? "bad" : "ok" },
+        { label: "matching work", value: ms(b.systemMs) + " · " +
+          b.coresAtPeak.toFixed(1) + " cores at " + n(C.REQ_S) + "/s",
+          flag: b.coresAtPeak > 50 ? "bad" : "ok" },
+        { label: "invalid trips", value: String(b.doubleMatched),
+          flag: b.doubleMatched > 0 ? "bad" : "ok" },
+        { label: "trip row written", value: by(C.TRIP_B) + " · " +
+          "transactional, sharded by geography", flag: "ok" }
+      ];
+    }
+
+    var stepNode = d.node({
+      title: title, status: status, statusFlag: sFlag, flag: sFlag,
+      gauges: gauges, rows: sRows
+    });
+
+    var out = [phases, head, d.cols([fieldNode, stepNode])];
+
+    if (k === 6) {
+      out.push(d.table(["build", "records", "matching", "cores at " + n(C.REQ_S) +
+        "/s", "pickup", "invalid trips"], [
+        ["scan every driver", n(B.scan.touched), ms(B.scan.systemMs),
+          n(B.scan.coresAtPeak), mins(B.scan.pickupS), String(B.scan.doubleMatched)],
+        ["one cell", n(B.cell.touched), ms(B.cell.systemMs),
+          B.cell.coresAtPeak.toFixed(1), mins(B.cell.pickupS),
+          String(B.cell.doubleMatched)],
+        ["cell + 8 neighbours", n(B.block.touched), ms(B.block.systemMs),
+          B.block.coresAtPeak.toFixed(1), mins(B.block.pickupS),
+          String(B.block.doubleMatched)]
+      ]));
+      out.push(d.note("<b>The index buys the first two columns and nothing " +
+        "else.</b> The boundary, the ETA and the conditional update are three " +
+        "separate corrections, and a build can have the index and miss all " +
+        "three — which is exactly what the middle row is.", "warn"));
+    } else {
+      out.push(d.note("The <b>cell</b> column is each driver's real precision-" +
+        C.PREC + " geohash. The rider's is <code>" + W.cell + "</code>. " +
+        "<i>Everything a single-cell query can see is a row whose cell string " +
+        "matches that exactly</i> — which is a statement about a grid, not " +
+        "about distance, and that is the whole boundary problem.",
+        mode === "cell" && k >= 1 ? "bad" : undefined));
+    }
+    return d.stack(out);
+  }
+};
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sddesignticketing  (design-ticketing.md)
+  //
+  // The page's on-sale is already a clock: "1M users arrive within 60
+  // seconds for 50,000 seats". So the time axis is that minute — six frames
+  // of ten seconds — and the same minute is run three ways. What differs
+  // between the runs is exactly one thing: what the system trusts to keep a
+  // seat from being sold twice.
+  //
+  //   pess   SELECT ... FOR UPDATE with the payment call inside the
+  //          transaction. Correct, and the connection pool is gone by t+10s.
+  //   opt    Virtual waiting room + the page's conditional UPDATE. Losers
+  //          fail instantly; 99.9% of arrivals never reach the database.
+  //   redis  Same waiting room, but SET ... NX PX 600000 is treated as the
+  //          guarantee and the UPDATE drops its WHERE clause. The primary
+  //          fails at t+30s and the locks in flight are not on the replica.
+  //
+  // FROM THE PAGE (verbatim):
+  //   1,000,000 users within 60 seconds            section 2
+  //   50,000 seats, 20:1 demand                    sections 1, 2
+  //   ~17,000 requests/s                           section 2  (reproduced)
+  //   admit "say 1,000 users/minute"               section 6
+  //   "You are number 40,000"                      section 6
+  //   hold TTL 10 min                              section 3A / 4
+  //   SET seat:123 <token> NX PX 600000            section 3C
+  //
+  // DECLARED HERE, because the page gives no figure:
+  //   400 booking-DB connections, one PSP round trip of 3,000 ms, a
+  //   conditional UPDATE of 2 ms, a 30 s browser timeout, a provider that
+  //   approves 96% / declines 3% / times out 1%, 400 ms of Redis
+  //   replication lag, and a failover at t+30 s.
+  //
+  // Nothing else is typed. Queue depth, timeouts, seats sold, the ETA on
+  // the waiting-room page and the number of seats sold twice are all
+  // accumulated by the run.
+  // ======================================================================
+  var sddesignticketing_C = {
+    ARRIVALS: 1000000,      // page
+    WINDOW_S: 60,           // page
+    SEATS: 50000,           // page
+    ADMIT_PER_MIN: 1000,    // page
+    HOLD_TTL_MIN: 10,       // page
+    LOCK_PX_MS: 600000,     // page, "NX PX 600000"
+    SHOWN_POS: 40000,       // page, "You are number 40,000"
+    FRAMES: 6,              // declared
+    POOL: 400,              // declared
+    PAY_MS: 3000,           // declared
+    COND_MS: 2,             // declared
+    TIMEOUT_S: 30,          // declared
+    APPROVE: 0.96,          // declared
+    PAY_TIMEOUT: 0.01,      // declared
+    REPL_LAG_MS: 400,       // declared
+    FAILOVER_FRAME: 3       // declared, t+30 s
+  };
+
+  var sddesignticketing_D = (function () {
+    var C = sddesignticketing_C, o = {};
+    o.FRAME_S = C.WINDOW_S / C.FRAMES;                          // 10 s
+    o.RATE = C.ARRIVALS / C.WINDOW_S;                           // 16,667/s
+    o.RATIO = C.ARRIVALS / C.SEATS;                             // 20 : 1
+    o.PESS_TPS = C.POOL / (C.PAY_MS / 1000);                    // 133.3/s
+    o.PESS_CAP = Math.floor(o.PESS_TPS * o.FRAME_S);            // 1,333/frame
+    o.OPT_TPS = C.POOL / (C.COND_MS / 1000);                    // 200,000/s
+    o.QCAP = Math.round(o.PESS_TPS * C.TIMEOUT_S);              // 4,000
+    o.SEAT_HOLD_S = C.PAY_MS / 1000;                            // 3 s of row lock
+    o.SEAT_SERVED = Math.floor(C.TIMEOUT_S / o.SEAT_HOLD_S);    // 10 of the 20
+    o.OPT_SEAT_MS = o.RATIO * C.COND_MS;                        // 40 ms for all 20
+    o.ADMIT_PS = C.ADMIT_PER_MIN / 60;                          // 16.67/s
+    o.ROOM_ALL_MIN = C.ARRIVALS / C.ADMIT_PER_MIN;              // 1,000 min
+    o.SHOWN_ETA_MIN = C.SHOWN_POS / C.ADMIT_PER_MIN;            // 40 min
+    o.LOST_LOCKS = Math.ceil(o.ADMIT_PS * (C.REPL_LAG_MS / 1000));   // 7
+    o.DECLINE = 1 - C.APPROVE - C.PAY_TIMEOUT;                  // 0.03
+    o.SELLOUT_MIN = C.SEATS / (C.ADMIT_PER_MIN * C.APPROVE);    // ~52 min
+    return o;
+  })();
+
+  function sddesignticketing_n(x) {
+    if (!isFinite(x)) return "—";
+    return Math.round(x).toLocaleString("en-US");
+  }
+  function sddesignticketing_p2(a, b) {
+    if (!(b > 0)) return "0%";
+    var v = (a / b) * 100;
+    return (v < 1 ? v.toFixed(2) : v.toFixed(1)) + "%";
+  }
+  function sddesignticketing_mins(m) {
+    if (!isFinite(m) || m <= 0) return "0 min";
+    if (m < 60) return m.toFixed(0) + " min";
+    var h = Math.floor(m / 60);
+    return h + " h " + Math.round(m - h * 60) + " min";
+  }
+  function sddesignticketing_phases(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+    return d.pills(chips);
+  }
+  function sddesignticketing_copy(r) {
+    var o = {}, k;
+    for (k in r) {
+      if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
+    }
+    return o;
+  }
+  function sddesignticketing_blank(mode) {
+    return {
+      mode: mode, f: 0, t: 0,
+      arr: 0, arrived: 0, reached: 0, fReached: 0,
+      queue: 0, timedOut: 0, fTimedOut: 0,
+      admitted: 0, fAdmitted: 0, room: 0, etaMin: 0,
+      wins: 0, toldTaken: 0, sold: 0, released: 0, heldRecon: 0,
+      gone: 0, lostLocks: 0, dupUpdates: 0, dupCharges: 0, doubleSold: 0,
+      tickets: 0, util: 0, waitS: 0
+    };
+  }
+
+  // ---- seat 14C: the page's contention case, RATIO people on one seat ----
+  var sddesignticketing_OPT_STATES =
+    ["available", "held", "held", "reserved", "reserved", "sold", "sold"];
+  var sddesignticketing_RDS_STATES =
+    ["available", "held", "held", "split", "split", "split", "double"];
+
+  function sddesignticketing_seat(mode, f) {
+    var C = sddesignticketing_C, D = sddesignticketing_D;
+    var n = Math.round(D.RATIO);
+    var s = { n: n, answered: 0, won: 0, told: 0, waiting: n, lost: 0,
+      holders: 0, state: "available", maxWaitS: 0, lockPct: 0, ttlPct: 0 };
+    if (f <= 0) return s;
+
+    if (mode === "pess") {
+      var t = f * D.FRAME_S;
+      var served = Math.min(n, Math.floor(t / D.SEAT_HOLD_S));
+      var expired = t >= C.TIMEOUT_S;
+      if (expired) served = Math.min(served, D.SEAT_SERVED);
+      var before = Math.min(n, Math.floor((f - 1) * D.FRAME_S / D.SEAT_HOLD_S));
+      if (expired) before = Math.min(before, D.SEAT_SERVED);
+      s.answered = served;
+      s.won = served >= 1 ? 1 : 0;
+      s.told = Math.max(0, served - 1);
+      s.maxWaitS = served * D.SEAT_HOLD_S;
+      s.waiting = expired ? 0 : n - served;
+      s.lost = expired ? n - served : 0;
+      s.state = s.won ? "sold" : "held";
+      s.holders = s.won;
+      s.lockPct = Math.min(100,
+        ((served - before) * D.SEAT_HOLD_S / D.FRAME_S) * 100);
+      return s;
+    }
+
+    // both admitted runs: every one of the 20 conditional updates returns
+    // inside RATIO x COND_MS, and no lock is held across the payment call.
+    s.answered = n;
+    s.won = 1;
+    s.told = n - 1;
+    s.waiting = 0;
+    s.maxWaitS = D.OPT_SEAT_MS / 1000;
+    s.lockPct = 0;
+    var idx = Math.min(f, sddesignticketing_OPT_STATES.length - 1);
+    if (mode === "redis") {
+      s.state = sddesignticketing_RDS_STATES[idx];
+      s.holders = f >= C.FAILOVER_FRAME ? 2 : 1;
+      // the lock's own TTL is nowhere near expiry — that was never the problem
+      s.ttlPct = Math.max(0,
+        100 - (f * D.FRAME_S * 1000 / C.LOCK_PX_MS) * 100);
+    } else {
+      s.state = sddesignticketing_OPT_STATES[idx];
+      s.holders = 1;
+    }
+    return s;
+  }
+
+  // ---- run A: pessimistic, payment inside the transaction ---------------
+  function sddesignticketing_runPess() {
+    var C = sddesignticketing_C, D = sddesignticketing_D;
+    var nf = sddesignticketing_n;
+    var r = sddesignticketing_blank("pess");
+    var steps = [{
+      flag: "idle",
+      st: sddesignticketing_copy(r),
+      seat: sddesignticketing_seat("pess", 0),
+      caption: "Doors open at 10:00. <b>" + nf(C.ARRIVALS) + " people</b> for <b>" +
+        nf(C.SEATS) + " seats</b> — the page's twenty to one — and nothing stands " +
+        "between them and the inventory database. Each booking runs <code>SELECT " +
+        "… FOR UPDATE</code> and then calls the payment provider <i>inside the " +
+        "transaction</i>. Press Play."
+    }];
+
+    var prevArr = 0, f, cum, offered, drain, to, availFrac, wins, soldF, heldF, relF;
+    for (f = 1; f <= C.FRAMES; f++) {
+      cum = Math.round(C.ARRIVALS * f / C.FRAMES);
+      r.f = f;
+      r.t = f * D.FRAME_S;
+      r.arr = cum - prevArr;
+      prevArr = cum;
+      r.arrived = cum;
+
+      offered = r.queue + r.arr;
+      drain = Math.min(offered, D.PESS_CAP);
+      r.fReached = drain;
+      r.reached += drain;
+      r.queue = offered - drain;
+      to = Math.max(0, r.queue - D.QCAP);
+      r.fTimedOut = to;
+      r.timedOut += to;
+      r.queue -= to;
+      r.util = Math.min(100, (offered / D.PESS_CAP) * 100);
+      r.waitS = D.PESS_TPS > 0 ? r.queue / D.PESS_TPS : 0;
+
+      availFrac = (C.SEATS - r.gone) / C.SEATS;
+      wins = Math.min(C.SEATS - r.gone, Math.round(drain * availFrac));
+      r.toldTaken += drain - wins;
+      r.wins += wins;
+      soldF = Math.round(wins * C.APPROVE);
+      heldF = Math.round(wins * C.PAY_TIMEOUT);
+      relF = wins - soldF - heldF;
+      r.sold += soldF;
+      r.heldRecon += heldF;
+      r.released += relF;
+      r.gone = r.sold + r.heldRecon;
+      r.tickets = r.sold;
+
+      var s = sddesignticketing_seat("pess", f);
+      var cap;
+      if (f === 1) {
+        cap = "t+" + r.t + " s. <b>" + nf(r.arr) + "</b> arrived. Every transaction " +
+          "holds its connection for the <b>" + (C.PAY_MS / 1000) + " s</b> the provider " +
+          "takes, so " + C.POOL + " connections retire <b>" + nf(drain) + "</b> this " +
+          "frame and <b>" + nf(r.queue + to) + "</b> queue behind them.";
+      } else if (f === 2) {
+        cap = "t+" + r.t + " s. The queue is pinned at <b>" + nf(D.QCAP) + "</b> — the " +
+          "most that can drain inside the " + C.TIMEOUT_S + " s a browser will wait. " +
+          "Everything behind it is already lost: <b>" + nf(to) + "</b> people time out " +
+          "this frame having seen only a spinner.";
+      } else if (f === C.FAILOVER_FRAME) {
+        cap = "t+" + r.t + " s. Seat 14C: <b>" + s.answered + " of " + s.n +
+          "</b> contenders have been answered, each after waiting up to <b>" +
+          s.maxWaitS + " s</b>. The other <b>" + s.lost + "</b> hit the timeout and " +
+          "are gone. <b>The seat was sold exactly once</b> — the invariant held, and " +
+          "that is the whole of what this design got right.";
+      } else if (f === 4) {
+        cap = "t+" + r.t + " s. The row for 14C is <b>idle</b> — nobody is left waiting " +
+          "on it. <b>" + nf(r.timedOut) + "</b> people are behind a pool that retires " +
+          nf(D.PESS_TPS) + " a second, so an idle row is an unreachable one.";
+      } else if (f === 5) {
+        cap = "t+" + r.t + " s. <b>" + nf(r.sold) + "</b> seats sold of " + nf(C.SEATS) +
+          ". The database has never been wrong and has never once been fast: " +
+          "utilisation " + r.util.toFixed(0) + "%, queue wait <b>" +
+          sddesignticketing_mins(r.waitS / 60) + "</b>.";
+      } else {
+        cap = "t+" + r.t + " s, the minute is over. <b>Zero seats sold twice</b> — " +
+          "pessimistic locking is <i>correct</i>. And <b>" +
+          sddesignticketing_p2(r.reached, C.ARRIVALS) + "</b> of arrivals reached the " +
+          "database at all, <b>" + nf(r.timedOut) + "</b> got a timeout instead of an " +
+          "answer, and <b>" + nf(C.SEATS - r.gone) + "</b> seats are still unsold. " +
+          "<b>Right, and unusable.</b>";
+      }
+
+      steps.push({
+        caption: cap,
+        flag: f === 1 ? "warn" : f >= 2 ? "bad" : "warn",
+        st: sddesignticketing_copy(r),
+        seat: s
+      });
+    }
+
+    return {
+      id: "pess", label: "Pessimistic, lock across payment", steps: steps,
+      phases: ["doors shut", "pool saturated", "queue at cap", "timeouts",
+        "row idle", "still shedding", "minute over"]
+    };
+  }
+
+  // ---- runs B and C: waiting room + conditional UPDATE / Redis lock ------
+  function sddesignticketing_runAdmit(mode) {
+    var C = sddesignticketing_C, D = sddesignticketing_D;
+    var nf = sddesignticketing_n;
+    var isRedis = mode === "redis";
+    var r = sddesignticketing_blank(mode);
+    var steps = [{
+      flag: "idle",
+      st: sddesignticketing_copy(r),
+      seat: sddesignticketing_seat(mode, 0),
+      caption: "Same minute, same " + nf(C.ARRIVALS) + " people, same " + nf(C.SEATS) +
+        " seats. This time a virtual waiting room stands at the edge and admits the " +
+        "page's <b>" + nf(C.ADMIT_PER_MIN) + " users/minute</b>. " +
+        (isRedis
+          ? "Seat acquisition is <code>SET seat:14C &lt;token&gt; NX PX " +
+            C.LOCK_PX_MS + "</code> and the <code>UPDATE</code> that follows has " +
+            "<b>no <code>WHERE status='available'</code></b> — the lock is trusted " +
+            "as the guarantee."
+          : "Seat acquisition is the page's conditional <code>UPDATE … WHERE " +
+            "status='available' AND version=?</code>, checked by affected-row count.") +
+        " Press Play."
+    }];
+
+    var prevArr = 0, prevAdm = 0, f, cum, admCum, availFrac, wins, soldF, heldF, relF;
+    for (f = 1; f <= C.FRAMES; f++) {
+      cum = Math.round(C.ARRIVALS * f / C.FRAMES);
+      r.f = f;
+      r.t = f * D.FRAME_S;
+      r.arr = cum - prevArr;
+      prevArr = cum;
+      r.arrived = cum;
+
+      admCum = Math.round(C.ADMIT_PER_MIN * (f * D.FRAME_S) / 60);
+      r.fAdmitted = admCum - prevAdm;
+      prevAdm = admCum;
+      r.admitted = admCum;
+      r.room = r.arrived - r.admitted;
+      r.etaMin = r.room / C.ADMIT_PER_MIN;
+      r.fReached = r.fAdmitted;
+      r.reached = r.admitted;
+      r.queue = 0;
+      r.fTimedOut = 0;
+      r.waitS = C.COND_MS / 1000;
+      r.util = Math.min(100, (r.fAdmitted / (D.OPT_TPS * D.FRAME_S)) * 100);
+
+      availFrac = (C.SEATS - r.gone) / C.SEATS;
+      wins = Math.min(C.SEATS - r.gone, Math.round(r.fAdmitted * availFrac));
+      r.toldTaken += r.fAdmitted - wins;
+      r.wins += wins;
+      soldF = Math.round(wins * C.APPROVE);
+      heldF = Math.round(wins * C.PAY_TIMEOUT);
+      relF = wins - soldF - heldF;
+      r.sold += soldF;
+      r.heldRecon += heldF;
+      r.released += relF;
+      r.gone = r.sold + r.heldRecon;
+
+      // the Redis run: the failover, then the consequences, one frame apart
+      if (isRedis) {
+        if (f === C.FAILOVER_FRAME) r.lostLocks = D.LOST_LOCKS;
+        if (f === C.FAILOVER_FRAME + 1) r.dupUpdates = D.LOST_LOCKS;
+        if (f === C.FAILOVER_FRAME + 2) r.dupCharges = D.LOST_LOCKS;
+        if (f >= C.FAILOVER_FRAME + 3) {
+          r.dupCharges = D.LOST_LOCKS;
+          r.doubleSold = D.LOST_LOCKS;
+        }
+      }
+      r.tickets = r.sold + r.doubleSold;
+
+      var s = sddesignticketing_seat(mode, f);
+      var cap, flag;
+      if (f === 1) {
+        cap = "t+" + r.t + " s. <b>" + nf(r.arr) + "</b> arrived; the edge admitted <b>" +
+          nf(r.fAdmitted) + "</b> and handed everyone else a signed token with a " +
+          "position. The booking tier sees <b>" + nf(r.fAdmitted / D.FRAME_S) +
+          "/s</b> where <b>" + nf(D.RATE) + "/s</b> arrived. Seat 14C's " + s.n +
+          " contenders all get an answer inside <b>" + D.OPT_SEAT_MS + " ms</b>: one " +
+          "affected row, " + s.told + " zeroes.";
+        flag = "ok";
+      } else if (f === 2) {
+        cap = "t+" + r.t + " s. The hold on 14C carries the page's <b>" +
+          C.HOLD_TTL_MIN + "-minute TTL</b>, checked inside the update itself, so " +
+          "correctness never waits on the sweeper. <b>" + nf(r.room) +
+          "</b> people are in the waiting room; the newest is shown <b>" +
+          sddesignticketing_mins(r.etaMin) + "</b>.";
+        flag = "ok";
+      } else if (f === C.FAILOVER_FRAME && isRedis) {
+        cap = "t+" + r.t + " s. <b>The Redis primary fails.</b> Replication is async " +
+          "with <b>" + C.REPL_LAG_MS + " ms</b> of lag, so the <b>" + nf(D.LOST_LOCKS) +
+          "</b> locks granted in that window are not on the replica that gets " +
+          "promoted. Their seats look unlocked. <b>The TTL still has " +
+          s.ttlPct.toFixed(0) + "% left</b> — the TTL was never the problem.";
+        flag = "bad";
+      } else if (f === C.FAILOVER_FRAME) {
+        cap = "t+" + r.t + " s. Payment is initiated: seat 14C goes <b>Held → " +
+          "Reserved</b>. The transaction has already committed — <b>no database lock " +
+          "is held across the provider call</b>, which is the difference between this " +
+          "and the first tab.";
+        flag = "ok";
+      } else if (f === C.FAILOVER_FRAME + 1 && isRedis) {
+        cap = "t+" + r.t + " s. A second client acquires each of those " +
+          nf(D.LOST_LOCKS) + " locks and runs its <code>UPDATE</code>. With no " +
+          "<code>WHERE status='available'</code> to stop it, <b>both updates " +
+          "succeed</b>. Two clients now believe they hold seat 14C.";
+        flag = "bad";
+      } else if (f === C.FAILOVER_FRAME + 1) {
+        cap = "t+" + r.t + " s. The provider call is in flight for <b>" +
+          (C.PAY_MS / 1000) + " s</b> with a client-supplied idempotency key. " +
+          "Meanwhile the booking tier is running at <b>" + r.util.toFixed(3) +
+          "%</b> of what " + C.POOL + " connections can do at " + C.COND_MS +
+          " ms a call.";
+        flag = "ok";
+      } else if (f === C.FAILOVER_FRAME + 2 && isRedis) {
+        cap = "t+" + r.t + " s. <b>" + nf(r.dupCharges) + " duplicate charges</b> — " +
+          "different idempotency keys, so idempotency cannot save this; the two " +
+          "requests were never the same request. Both are approved.";
+        flag = "bad";
+      } else if (f === C.FAILOVER_FRAME + 2) {
+        cap = "t+" + r.t + " s. Payment confirmed: <b>Reserved → Sold</b>. Across " +
+          "the sale so far <b>" + nf(r.sold) + " sold</b>, <b>" + nf(r.released) +
+          " released</b> on a decline and <b>" + nf(r.heldRecon) +
+          "</b> held for reconciliation after a provider timeout — never guessed.";
+        flag = "ok";
+      } else if (isRedis) {
+        cap = "t+" + r.t + " s, the minute is over. <b>" + nf(r.doubleSold) +
+          " seats sold twice</b>, <b>" + nf(r.tickets) + " tickets</b> issued against " +
+          nf(r.sold) + " seats. Everything else in this run is identical to the " +
+          "conditional-update tab. <b>A distributed lock is not a correctness " +
+          "mechanism</b>, and the invariant is binary: " + nf(r.doubleSold) +
+          " is not a small number, it is " + nf(r.doubleSold) +
+          " people at a turnstile with a valid ticket and no seat.";
+        flag = "bad";
+      } else {
+        cap = "t+" + r.t + " s, the minute is over. <b>Zero sold twice.</b> <b>" +
+          sddesignticketing_p2(r.reached, C.ARRIVALS) + "</b> of arrivals reached the " +
+          "database — the page wants 95% kept away, this keeps <b>" +
+          sddesignticketing_p2(C.ARRIVALS - r.reached, C.ARRIVALS) + "</b>. Nobody " +
+          "timed out: " + nf(r.room) + " people hold a position and an honest ETA, and " +
+          "at " + nf(C.ADMIT_PER_MIN) + "/min the house sells out in <b>" +
+          sddesignticketing_mins(D.SELLOUT_MIN) + "</b>, not in this minute.";
+        flag = "ok";
+      }
+
+      steps.push({ caption: cap, flag: flag, st: sddesignticketing_copy(r), seat: s });
+    }
+
+    return {
+      id: mode,
+      label: isRedis ? "Redis lock as the guarantee" : "Waiting room + conditional UPDATE",
+      steps: steps,
+      phases: isRedis
+        ? ["doors shut", "admitting", "lock held", "primary fails",
+          "two holders", "two charges", "two tickets"]
+        : ["doors shut", "admitting", "held", "reserved", "charging",
+          "sold", "minute over"]
+    };
+  }
+
+  S["sddesignticketing"] = {
+    title: "Sell 50,000 seats to a million people",
+    note: (function () {
+      var C = sddesignticketing_C, D = sddesignticketing_D;
+      var nf = sddesignticketing_n;
+      return "The page's on-sale, run three ways over <b>" + C.FRAMES + " frames of " +
+        D.FRAME_S + " s</b>. <b>" + nf(C.ARRIVALS) + " users in " + C.WINDOW_S +
+        " seconds for " + nf(C.SEATS) + " seats</b> is the page's <b>" +
+        Math.round(D.RATIO) + ":1</b>; uniform arrival makes every frame <b>" +
+        nf(C.ARRIVALS / C.FRAMES) + " people</b> and the rate <b>" + nf(D.RATE) +
+        "/s</b>, the page's “~17,000 requests/s”. The waiting room admits its " +
+        "<b>" + nf(C.ADMIT_PER_MIN) + " users/minute</b>, holds carry its <b>" +
+        C.HOLD_TTL_MIN + "-minute TTL</b>, and the lock is its <code>NX PX " +
+        C.LOCK_PX_MS + "</code>. <b>Declared here</b>, because the page gives no " +
+        "figure: <b>" + C.POOL + "</b> booking-DB connections; a provider round trip " +
+        "of <b>" + C.PAY_MS + " ms</b>, so a transaction that spans one holds a " +
+        "connection for " + (C.PAY_MS / 1000) + " s and the pool retires <b>" +
+        nf(D.PESS_TPS) + "/s</b>, while a <b>" + C.COND_MS +
+        " ms</b> conditional update lets the same pool retire <b>" + nf(D.OPT_TPS) +
+        "/s</b>; a <b>" + C.TIMEOUT_S + " s</b> browser timeout, which caps the useful " +
+        "queue at <b>" + nf(D.QCAP) + "</b>; a provider that approves " +
+        (C.APPROVE * 100).toFixed(0) + "%, declines " + (D.DECLINE * 100).toFixed(0) +
+        "% and times out " + (C.PAY_TIMEOUT * 100).toFixed(0) + "%; and <b>" +
+        C.REPL_LAG_MS + " ms</b> of Redis replication lag with the primary failing at " +
+        "t+" + (C.FAILOVER_FRAME * D.FRAME_S) + " s, which strands <b>" +
+        nf(D.LOST_LOCKS) + "</b> locks. Watch one number across the tabs: <b>seats " +
+        "sold twice</b>.";
+    })(),
+    interval: 1400,
+
+    scenarios: [
+      sddesignticketing_runPess(),
+      sddesignticketing_runAdmit("opt"),
+      sddesignticketing_runAdmit("redis")
+    ],
+
+    draw: function (step, d, ctx) {
+      var C = sddesignticketing_C, D = sddesignticketing_D;
+      var nf = sddesignticketing_n, p2 = sddesignticketing_p2;
+      var r = step.st, s = step.seat;
+      var started = r.f > 0;
+      var isPess = r.mode === "pess";
+      var isRedis = r.mode === "redis";
+      var i;
+
+      var answered = isPess
+        ? r.reached
+        : r.arrived;                       // a position and an ETA is an answer
+      var seatsLeft = C.SEATS - r.gone;
+
+      // ---- headline -----------------------------------------------------
+      var head = d.cols([
+        d.big(started ? nf(r.doubleSold) : "—",
+          "seats sold twice · the one hard invariant",
+          !started ? "idle" : r.doubleSold > 0 ? "bad" : "ok"),
+        d.stat({
+          label: "people who got a definite answer",
+          value: started ? nf(answered) : "—",
+          sub: started
+            ? (isPess ? nf(r.timedOut) + " timed out instead" : "a seat, a “taken”, or a position")
+            : "doors shut",
+          flag: !started ? "idle" : r.timedOut > 0 ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "reached the inventory database",
+          value: started ? nf(r.reached) : "—",
+          sub: started
+            ? p2(r.reached, C.ARRIVALS) + " of " + nf(C.ARRIVALS) + " arrivals"
+            : "nothing has arrived",
+          flag: !started ? "idle"
+            : r.reached > C.ARRIVALS * 0.05 ? "bad" : "ok"
+        })
+      ]);
+
+      // ---- the edge -------------------------------------------------------
+      var edgeRows = [];
+      edgeRows.push({ label: "arrived this frame",
+        value: nf(r.arr) + "  ·  " + nf(started ? D.RATE : 0) + "/s" });
+      if (isPess) {
+        edgeRows.push({ label: "connections × " + (C.PAY_MS / 1000) + " s each",
+          value: nf(D.PESS_CAP) + " per frame", flag: "warn" });
+        edgeRows.push({ label: "queued on the pool",
+          value: nf(r.queue) + " / " + nf(D.QCAP),
+          flag: r.queue >= D.QCAP ? "bad" : r.queue ? "warn" : "ok" });
+        edgeRows.push({ label: "timed out this frame · no answer",
+          value: nf(r.fTimedOut), flag: r.fTimedOut ? "bad" : "idle" });
+        edgeRows.push({ label: "timed out in total",
+          value: nf(r.timedOut), flag: r.timedOut ? "bad" : "idle" });
+      } else {
+        edgeRows.push({ label: "admitted this frame",
+          value: nf(r.fAdmitted) + " / " + nf(C.ADMIT_PER_MIN) + " per min",
+          flag: "ok" });
+        edgeRows.push({ label: "holding a position",
+          value: nf(r.room), flag: r.room ? "warn" : "idle" });
+        edgeRows.push({ label: "ETA shown to the newest arrival",
+          value: started ? sddesignticketing_mins(r.etaMin) : "—",
+          flag: started ? "warn" : "idle" });
+        edgeRows.push({
+          label: "“you are number " + nf(C.SHOWN_POS) + "”",
+          value: sddesignticketing_mins(D.SHOWN_ETA_MIN) + " to admission",
+          flag: "ok" });
+        edgeRows.push({ label: "timed out", value: nf(r.timedOut), flag: "ok" });
+      }
+
+      var edge = d.node({
+        title: isPess ? "edge · nothing in front of the database"
+          : "edge · virtual waiting room, signed token",
+        status: !started ? "DOORS SHUT"
+          : isPess ? (r.queue >= D.QCAP ? "QUEUE PAST THE TIMEOUT" : "QUEUEING")
+          : "ADMITTING",
+        statusFlag: !started ? "idle" : isPess ? "bad" : "ok",
+        badge: isPess ? "no admission control"
+          : nf(C.ADMIT_PER_MIN) + "/min, CDN-served",
+        meta: isPess
+          ? "every one of the " + nf(D.RATE) + " arrivals a second goes straight at " +
+            "the booking tier"
+          : "a position beats a timeout, and the backend never sees the other " +
+            p2(C.ARRIVALS - r.reached, C.ARRIVALS),
+        flag: !started ? "idle" : isPess ? "bad" : "ok",
+        gauges: [{
+          label: isPess
+            ? "booking pool · " + nf(D.PESS_TPS) + "/s"
+            : "booking pool · " + nf(D.OPT_TPS) + "/s",
+          pct: r.util,
+          value: r.util >= 1 ? r.util.toFixed(0) + "%" : r.util.toFixed(3) + "%",
+          flag: !started ? "idle" : r.util >= 99 ? "bad" : r.util >= 50 ? "warn" : "ok"
+        }],
+        rows: edgeRows
+      });
+
+      // ---- seat 14C, the page's contention case ---------------------------
+      var cells = [];
+      for (i = 0; i < s.n; i++) {
+        var got = i < s.answered;
+        cells.push({
+          label: String(i + 1),
+          flag: !got ? (s.lost > 0 ? "bad" : "idle")
+            : i === 0 ? "ok" : "warn",
+          title: i === 0
+            ? (got ? "contender 1 — affected rows = 1, the seat is theirs"
+              : "contender 1 — still waiting on the row lock")
+            : got ? "contender " + (i + 1) + " — told “taken” after " +
+              (isPess ? ((i + 1) * D.SEAT_HOLD_S) + " s of waiting"
+                : ((i + 1) * C.COND_MS) + " ms")
+            : s.lost > 0
+              ? "contender " + (i + 1) + " — gave up at the " + C.TIMEOUT_S +
+                " s timeout, never answered"
+              : "contender " + (i + 1) + " — waiting on the row lock"
+        });
+      }
+
+      var seatRows = [
+        { label: "answered", value: nf(s.answered) + " / " + nf(s.n),
+          flag: s.answered >= s.n ? "ok" : s.answered ? "warn" : "idle" },
+        { label: "worst wait for an answer",
+          value: started
+            ? (s.maxWaitS >= 1 ? s.maxWaitS.toFixed(0) + " s"
+              : (s.maxWaitS * 1000).toFixed(0) + " ms")
+            : "—",
+          flag: !started ? "idle" : s.maxWaitS >= 1 ? "bad" : "ok" },
+        { label: "gave up unanswered", value: nf(s.lost),
+          flag: s.lost ? "bad" : started ? "ok" : "idle" },
+        { label: "clients that believe they hold it", value: nf(s.holders),
+          flag: s.holders > 1 ? "bad" : s.holders ? "ok" : "idle" }
+      ];
+      if (isRedis && started) {
+        seatRows.push({ label: "lock TTL remaining · " + C.LOCK_PX_MS + " ms",
+          value: s.ttlPct.toFixed(1) + "%", flag: "warn" });
+      }
+      if (isPess) {
+        seatRows.push({ label: "row lock held this frame",
+          value: s.lockPct.toFixed(0) + "% of " + D.FRAME_S + " s",
+          flag: s.lockPct >= 90 ? "bad" : s.lockPct ? "warn" : "ok" });
+      }
+
+      var seatNode = d.node({
+        title: "seat 14C · " + s.n + " people want it (the page's " +
+          Math.round(D.RATIO) + ":1)",
+        status: s.state === "available" ? "AVAILABLE"
+          : s.state === "held" ? "HELD"
+          : s.state === "reserved" ? "RESERVED"
+          : s.state === "split" ? "HELD BY TWO"
+          : s.state === "double" ? "SOLD TWICE" : "SOLD",
+        statusFlag: s.state === "split" || s.state === "double" ? "bad"
+          : s.state === "available" ? "idle" : "ok",
+        badge: isPess ? "FOR UPDATE, " + (C.PAY_MS / 1000) + " s per contender"
+          : isRedis ? "NX PX " + C.LOCK_PX_MS + ", UPDATE with no WHERE"
+          : "UPDATE … WHERE status='available'",
+        meta: isPess
+          ? "the row is locked for the whole payment call, so contenders are served " +
+            "one every " + D.SEAT_HOLD_S + " s and contender " + (D.SEAT_SERVED + 1) +
+            " onward never gets an answer"
+          : "no lock is held; all " + s.n + " conditional updates return inside " +
+            D.OPT_SEAT_MS + " ms, one with affected rows = 1",
+        flag: s.state === "split" || s.state === "double" ? "bad"
+          : !started ? "idle" : "ok",
+        rows: seatRows,
+        body: d.cells(cells, {
+          label: "green won · amber told “taken” · grey still waiting " +
+            "· red gave up",
+          dense: true
+        })
+      });
+
+      // ---- inventory + reservation state machine ---------------------------
+      var invRows = [
+        { label: "sold · payment confirmed", value: nf(r.sold),
+          flag: r.sold ? "ok" : "idle" },
+        { label: "released · declined, seat returned", value: nf(r.released),
+          flag: r.released ? "ok" : "idle" },
+        { label: "held · provider timed out, reconciling", value: nf(r.heldRecon),
+          flag: r.heldRecon ? "warn" : "idle" },
+        { label: "told “seat taken”, instantly", value: nf(r.toldTaken),
+          flag: r.toldTaken ? "warn" : "idle" }
+      ];
+      if (isRedis) {
+        invRows.push({ label: "locks stranded by the failover", value: nf(r.lostLocks),
+          flag: r.lostLocks ? "bad" : "idle" });
+        invRows.push({ label: "second UPDATE succeeded anyway", value: nf(r.dupUpdates),
+          flag: r.dupUpdates ? "bad" : "idle" });
+        invRows.push({ label: "duplicate charges", value: nf(r.dupCharges),
+          flag: r.dupCharges ? "bad" : "idle" });
+      }
+      invRows.push({ label: "tickets issued", value: nf(r.tickets),
+        flag: r.tickets > r.sold ? "bad" : r.tickets ? "ok" : "idle" });
+
+      var inv = d.node({
+        title: "inventory · one shard, sharded by event_id",
+        status: seatsLeft <= 0 ? "SOLD OUT" : started ? "SELLING" : "OPEN",
+        statusFlag: seatsLeft <= 0 ? "warn" : started ? "ok" : "idle",
+        badge: "single-shard, no distributed transaction",
+        meta: "all contention for this event lands here, which is the reason strong " +
+          "consistency is affordable at all",
+        flag: r.doubleSold > 0 ? "bad" : "ok",
+        gauges: [{
+          label: "seats left",
+          pct: (seatsLeft / C.SEATS) * 100,
+          value: nf(seatsLeft) + " / " + nf(C.SEATS),
+          flag: !started ? "idle" : seatsLeft <= 0 ? "warn" : "ok"
+        }],
+        rows: invRows
+      });
+
+      // ---- history ---------------------------------------------------------
+      var rows = [], all = ctx.scenario.steps;
+      for (i = 1; i <= r.f && i < all.length; i++) {
+        var h = all[i].st;
+        rows.push([
+          "t+" + h.t + "s",
+          nf(h.arr),
+          nf(h.fReached),
+          nf(isPess ? h.fTimedOut : 0),
+          nf(h.sold),
+          nf(h.doubleSold)
+        ]);
+      }
+
+      var legend = isPess
+        ? "Correct and unusable. The row was never double-sold and the pool never " +
+          "recovered: a transaction that spans a " + (C.PAY_MS / 1000) +
+          "-second provider call turns " + C.POOL + " connections into <b>" +
+          nf(D.PESS_TPS) + " bookings a second</b>, and with " + Math.round(D.RATIO) +
+          " people per seat that makes " + (Math.round(D.RATIO) - 1) +
+          " of every " + Math.round(D.RATIO) + " <i>wait</i> and then fail."
+        : isRedis
+          ? "Everything here is identical to the conditional-update tab except what " +
+            "the system trusts. <b>The lock's TTL never expired and the clocks were " +
+            "fine</b> — a failover with " + C.REPL_LAG_MS +
+            " ms of lag was enough, and a stop-the-world pause longer than the TTL " +
+            "does the same thing. The <code>UPDATE</code> had no <code>WHERE</code> " +
+            "to catch it, so the database could not be the source of truth."
+          : "Two halves, two consistency models. The waiting room keeps <b>" +
+            p2(C.ARRIVALS - r.reached, C.ARRIVALS) + "</b> of the stampede off the " +
+            "database and gives it back a position and an ETA; the conditional " +
+            "<code>UPDATE</code> answers the " + Math.round(D.RATIO) +
+            " contenders for a seat in <b>" + D.OPT_SEAT_MS + " ms</b>, one winner " +
+            "and " + (Math.round(D.RATIO) - 1) + " instant nos, with no lock held " +
+            "anywhere near the payment call.";
+
+      return d.stack([
+        sddesignticketing_phases(d, ctx),
+        head,
+        edge,
+        seatNode,
+        inv,
+        rows.length
+          ? d.table(["t", "arrived", "to DB", "timed out", "sold", "sold twice"], rows)
+          : d.note("The on-sale has not opened yet.", "idle"),
+        d.note(legend, r.doubleSold > 0 ? "bad" : isPess ? "warn" : "ok")
+      ]);
+    }
+  };
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sddesignurlshorten  (design-url-shortener.md)
+  //
+  // The page calls code generation "the actual problem" and then walks four
+  // schemes. Three of them have a genuine clock in them: a keyspace fills,
+  // a birthday bound arrives at a computable moment, and a scraper's haul
+  // grows. So the time axis is the service's first year of minting at the
+  // page's own rate, and the frames land on the milestones the page names:
+  //
+  //   13.5 h   sqrt(62^7) = 1.9M URLs -- the page's birthday bound
+  //   1 day
+  //   1 month  1e8 URLs -- the page's monthly figure
+  //   3 / 6 / 12 months -- 1.2e9 URLs, the page's 1.2 TB/year
+  //
+  // The same year is minted three ways:
+  //   hash     base62(md5(url))[:7]      -- the page's rejected option A
+  //   counter  base62(next value)        -- option C, correct and enumerable
+  //   pool     pre-generated random      -- option D, the page's pick
+  //
+  // FROM THE PAGE (verbatim):
+  //   100M new URLs/month, /30/86,400 ~= 40 writes/s      section 2
+  //   reads 100x writes = 4,000/s, peak ~12,000/s         sections 1, 2
+  //   base62, 7 characters = 62^7 = 3.5 trillion          section 2
+  //   "~2,900 years" of keyspace at 100M/month            section 2
+  //   birthday bound: first collision at ~sqrt(3.5e12) ~= 1.9M    section 4A
+  //   1 KB per row -> 100 GB/month, 1.2 TB/yr, x3 = 3.6 TB        section 2
+  //   hot set ~20M links x 150 B = 3 GB, ~95% hit rate            section 2
+  //   database sees ~600 reads/s                                  sections 2, 6
+  //   "if it were 70%" -- the hit-rate sensitivity                section 7
+  //   negative marker, 60 s TTL                                   section 5
+  //   each app server claims a range of 10,000 IDs                section 4C
+  //   base62(1e9) = "15FTGg"  -- reproduced exactly by the code
+  //                              generator below, which is how the
+  //                              alphabet ordering was verified    section 4C
+  //
+  // DECLARED HERE: one scraper at 1,000 probes/s; a pre-generated pool
+  // holding 24 hours of runway and a generator running at 2x the write
+  // rate; 4 ms per database round trip; and 12% of submissions being a URL
+  // somebody already shortened.
+  //
+  // Nothing else is typed. Collisions, keyspace fill, storage, scraper
+  // haul, coordination calls and every code on screen are computed.
+  // ======================================================================
+  var sddesignurlshorten_C = {
+    PER_MONTH: 1e8,        // page
+    DAYS_MONTH: 30,        // page divides by 30
+    MONTHS_YEAR: 12,       // page
+    BASE: 62,              // page
+    LEN: 7,                // page
+    READ_MULT: 100,        // page
+    WRITES_ROUND: 40,      // page, "(round: 40)"
+    PEAK_READS: 12000,     // page
+    ROW_B: 1024,           // page, "call it 1 KB"
+    REPL: 3,               // page
+    HIT: 0.95,             // page
+    BAD_HIT: 0.70,         // page, "if it were 70%"
+    NEG_TTL_S: 60,         // page
+    HOT_LINKS: 20000000,   // page
+    HOT_ENTRY_B: 150,      // page
+    HOT_FRAC: 0.20,        // page
+    HOT_SHARE: 0.80,       // page
+    BLOCK: 10000,          // page
+    CHECK_N: 1000000000,   // page's worked example, base62(1e9) = "15FTGg"
+    SCAN_QPS: 1000,        // declared
+    POOL_HOURS: 24,        // declared
+    GEN_MULT: 2,           // declared
+    RT_MS: 4,              // declared
+    RESHARE: 0.12          // declared
+  };
+
+  var sddesignurlshorten_D = (function () {
+    var C = sddesignurlshorten_C, o = {};
+    o.MONTH_S = C.DAYS_MONTH * 86400;                           // 2,592,000
+    o.YEAR_S = C.MONTHS_YEAR * o.MONTH_S;                       // 31,104,000
+    o.WRITES_S = C.PER_MONTH / o.MONTH_S;                       // 38.58/s
+    o.K = Math.pow(C.BASE, C.LEN);                              // 3,521,614,606,208
+    o.BIRTHDAY = Math.sqrt(o.K);                                // 1,876,596
+    o.BIRTHDAY_S = o.BIRTHDAY / o.WRITES_S;                     // 48,641 s
+    o.HALF_N = 1.1774 * Math.sqrt(o.K);                         // 50% point
+    o.YEAR_N = C.PER_MONTH * C.MONTHS_YEAR;                     // 1.2e9
+    o.RUNWAY_Y = o.K / o.YEAR_N;                                // 2,935 years
+    o.READS = C.WRITES_ROUND * C.READ_MULT;                     // 4,000/s
+    o.PEAK_MULT = C.PEAK_READS / o.READS;                       // 3x
+    o.DB_READS = C.PEAK_READS * (1 - C.HIT);                    // 600/s
+    o.DB_READS_BAD = C.PEAK_READS * (1 - C.BAD_HIT);            // 3,600/s
+    o.BAD_MULT = o.DB_READS_BAD / o.DB_READS;                   // 6x
+    o.HOT_B = C.HOT_LINKS * C.HOT_ENTRY_B;                      // 3 GB
+    o.MONTH_B = C.PER_MONTH * C.ROW_B;                          // 102 GB
+    o.YEAR_B = o.YEAR_N * C.ROW_B;                              // 1.23 TB
+    o.YEAR_B_REPL = o.YEAR_B * C.REPL;                          // 3.69 TB
+    o.POOL_TARGET = o.WRITES_S * C.POOL_HOURS * 3600;           // 3,333,333
+    o.GEN_S = o.WRITES_S * C.GEN_MULT;                          // 77.2/s
+    o.SCAN_DAYS_RANDOM = o.K / C.SCAN_QPS / 86400;              // 40,759 days
+    o.P4 = Math.pow(C.BASE, 4);                                 // 14,776,336
+    o.P3 = Math.pow(C.BASE, 3);                                 // 238,328
+    o.FRAME_T = [o.BIRTHDAY_S, 86400, o.MONTH_S,
+      3 * o.MONTH_S, 6 * o.MONTH_S, 12 * o.MONTH_S];
+    return o;
+  })();
+
+  // base62, the page's alphabet. Verified by base62(1e9) === "15FTGg".
+  var sddesignurlshorten_ALPHA =
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+  function sddesignurlshorten_b62(v, pad) {
+    var n = Math.floor(v), s = "";
+    if (n <= 0) s = "0";
+    while (n > 0) {
+      s = sddesignurlshorten_ALPHA.charAt(n % 62) + s;
+      n = Math.floor(n / 62);
+    }
+    while (pad && s.length < pad) s = "0" + s;
+    return s;
+  }
+  // A deterministic avalanche (FNV-1a). Standing in for md5 / for a keyed
+  // Feistel permutation: what matters here is that the output is spread
+  // over the keyspace, not which primitive produced it.
+  function sddesignurlshorten_fnv(s) {
+    var h = 2166136261, i;
+    for (i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h >>> 0;
+  }
+  function sddesignurlshorten_scatter(id, salt) {
+    var D = sddesignurlshorten_D;
+    var a = sddesignurlshorten_fnv(salt + ":" + id);
+    var b = sddesignurlshorten_fnv(id + "#" + salt);
+    return (a % D.P4) * D.P3 + (b % D.P3);
+  }
+
+  function sddesignurlshorten_n(x) {
+    if (!isFinite(x)) return "—";
+    var a = Math.abs(x);
+    if (a >= 1e12) return (x / 1e12).toFixed(2) + " trillion";
+    if (a >= 1e9) return (x / 1e9).toFixed(a >= 1e10 ? 1 : 2) + "B";
+    if (a >= 1e6) return (x / 1e6).toFixed(a >= 1e8 ? 0 : 1) + "M";
+    return Math.round(x).toLocaleString("en-US");
+  }
+  function sddesignurlshorten_bytes(b) {
+    if (!isFinite(b)) return "—";
+    if (b >= 1e12) return (b / 1e12).toFixed(b >= 1e13 ? 0 : 2) + " TB";
+    if (b >= 1e9) return (b / 1e9).toFixed(b >= 1e10 ? 0 : 1) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
+    return Math.round(b) + " B";
+  }
+  function sddesignurlshorten_when(t) {
+    var D = sddesignurlshorten_D;
+    if (t < 86400) return (t / 3600).toFixed(1) + " h";
+    if (t < D.MONTH_S) return Math.round(t / 86400) + " day" +
+      (t / 86400 >= 2 ? "s" : "");
+    var m = t / D.MONTH_S;
+    if (m >= 12) return Math.round(m / 12) + " year" + (m >= 24 ? "s" : "");
+    return Math.round(m) + " month" + (m >= 2 ? "s" : "");
+  }
+  function sddesignurlshorten_days(dd) {
+    if (!isFinite(dd)) return "never";
+    if (dd < 1 / 24) return Math.round(dd * 1440) + " min";
+    if (dd < 1) return (dd * 24).toFixed(1) + " h";
+    if (dd < 400) return dd.toFixed(dd < 10 ? 1 : 0) + " days";
+    return sddesignurlshorten_n(dd / 365) + " years";
+  }
+  function sddesignurlshorten_pct(a, b) {
+    if (!(b > 0)) return "0%";
+    var v = (a / b) * 100;
+    if (v >= 1) return v.toFixed(1) + "%";
+    if (v >= 0.001) return v.toFixed(4) + "%";
+    return v.toExponential(1) + "%";
+  }
+  function sddesignurlshorten_phases(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+    return d.pills(chips);
+  }
+
+  // ---- one frame of the run, for a given scheme -------------------------
+  function sddesignurlshorten_frame(mode, f) {
+    var C = sddesignurlshorten_C, D = sddesignurlshorten_D;
+    var r = { mode: mode, f: f, t: 0, n: 0, fill: 0, collisions: 0,
+      fCollisions: 0, retryRate: 0, rt: 0, coord: 0, shared: 0,
+      bytes: 0, bytesRepl: 0, probeHit: 0, harvested: 0, sweepDays: 0,
+      poolDepth: 0, poolHours: 0, genAttempts: 0, sample: [], sample2: [] };
+    if (f <= 0) {
+      r.rt = mode === "hash" ? 2 : mode === "counter" ? 1 : 2;
+      r.probeHit = 0;
+      r.sweepDays = mode === "counter" ? 0 : D.SCAN_DAYS_RANDOM;
+      r.poolDepth = mode === "pool" ? D.POOL_TARGET : 0;
+      r.poolHours = mode === "pool" ? C.POOL_HOURS : 0;
+      return r;
+    }
+
+    var t = D.FRAME_T[f - 1];
+    var n = D.WRITES_S * t;
+    r.t = t;
+    r.n = n;
+    r.fill = n / D.K;
+    r.bytes = n * C.ROW_B;
+    r.bytesRepl = r.bytes * C.REPL;
+
+    // expected unordered pairs sharing a code: n(n-1) / 2K
+    if (mode === "hash") {
+      r.collisions = n * (n - 1) / (2 * D.K);
+      var prevT = f >= 2 ? D.FRAME_T[f - 2] : 0;
+      var prevN = D.WRITES_S * prevT;
+      r.fCollisions = r.collisions - prevN * (prevN - 1) / (2 * D.K);
+      r.retryRate = r.fill;                      // marginal, per write
+      r.rt = 2 + 2 * r.retryRate;                // check + insert + retries
+      r.shared = n * C.RESHARE;                  // same URL -> same code
+      r.probeHit = r.fill;
+    } else if (mode === "counter") {
+      r.rt = 1 + 1 / C.BLOCK;                    // insert + amortised claim
+      r.coord = Math.ceil(n / C.BLOCK);
+      r.probeHit = 1;                            // codes are contiguous
+    } else {
+      r.rt = 2;                                  // pop + insert
+      r.poolDepth = D.POOL_TARGET;
+      r.poolHours = C.POOL_HOURS;
+      // the generator still checks, off the hot path; it retries at the
+      // fill rate, which is what makes moving the check so cheap
+      r.genAttempts = n / (1 - r.fill);
+      r.probeHit = r.fill;
+    }
+
+    r.harvested = Math.min(n, C.SCAN_QPS * t * r.probeHit);
+    r.sweepDays = mode === "counter"
+      ? n / C.SCAN_QPS / 86400
+      : D.SCAN_DAYS_RANDOM;
+
+    // four consecutive codes the service would mint right now
+    var base = Math.floor(n), i, id;
+    for (i = 0; i < 4; i++) {
+      id = base + i;
+      if (mode === "counter") {
+        r.sample.push(sddesignurlshorten_b62(id % D.K, C.LEN));
+        r.sample2.push(sddesignurlshorten_b62(
+          sddesignurlshorten_scatter(id, "feistel"), C.LEN));
+      } else {
+        r.sample.push(sddesignurlshorten_b62(
+          sddesignurlshorten_scatter(id, mode === "hash" ? "md5" : "pool"),
+          C.LEN));
+      }
+    }
+    return r;
+  }
+
+  function sddesignurlshorten_scenario(mode, label, captions, phases) {
+    var steps = [], f;
+    for (f = 0; f < captions.length; f++) {
+      steps.push({
+        caption: captions[f][0],
+        flag: captions[f][1],
+        st: sddesignurlshorten_frame(mode, f)
+      });
+    }
+    return { id: mode, label: label, steps: steps, phases: phases };
+  }
+
+  function sddesignurlshorten_build(mode) {
+    var C = sddesignurlshorten_C, D = sddesignurlshorten_D;
+    var nf = sddesignurlshorten_n, wh = sddesignurlshorten_when;
+    var dy = sddesignurlshorten_days, pc = sddesignurlshorten_pct;
+    var by = sddesignurlshorten_bytes;
+    var caps = [], f, r, flag, c;
+
+    for (f = 0; f <= 6; f++) {
+      r = sddesignurlshorten_frame(mode, f);
+      if (f === 0) {
+        if (mode === "hash") {
+          c = "An empty <code>urls</code> table and a keyspace of <b>62<sup>7</sup> = " +
+            nf(D.K) + "</b> codes — " +
+            Math.round(D.RUNWAY_Y).toLocaleString("en-US") + " years of runway at " + nf(C.PER_MONTH) + " a month. The scheme is the " +
+            "page's option A: <code>base62(md5(long_url))[:7]</code>. No counter, no " +
+            "pool, nothing to run. Press Play and watch the year go by.";
+        } else if (mode === "counter") {
+          c = "Same empty table, same <b>" + nf(D.K) + "</b> codes. The scheme is the " +
+            "page's option C: take the next value from a counter and render it in " +
+            "base62. <b>No collisions are possible</b>, by construction. " +
+            "(<code>base62(" + C.CHECK_N.toLocaleString('en-US') + ")</code> below is computed, and comes " +
+            "out as the page's <code>15FTGg</code>.) Press Play.";
+        } else {
+          c = "Same empty table. A background job has already filled an " +
+            "<code>available_codes</code> table with <b>" + nf(D.POOL_TARGET) +
+            "</b> unused random codes — <b>" + C.POOL_HOURS +
+            " hours</b> of runway at " + D.WRITES_S.toFixed(1) +
+            " writes/s. The write path pops one. Press Play.";
+        }
+        caps.push([c, "idle"]);
+        continue;
+      }
+
+      if (mode === "hash") {
+        if (f === 1) {
+          c = "<b>" + wh(r.t) + " in.</b> " + nf(r.n) + " URLs — the page's " +
+            "<b>√(3.5×10<sup>12</sup>) ≈ 1.9M</b>. Expected colliding " +
+            "pairs: <b>" + r.collisions.toFixed(2) + "</b>, which is the birthday " +
+            "bound stated precisely: at n = √K the expectation is exactly one " +
+            "half. The 50/50 point is <b>" + nf(D.HALF_N) + "</b> URLs.";
+          flag = "warn";
+        } else if (f === 2) {
+          c = "<b>One day in.</b> " + nf(r.n) + " URLs, <b>" +
+            r.collisions.toFixed(1) + "</b> expected collisions. Every single write " +
+            "has already been paying for this: a <code>SELECT</code> before every " +
+            "<code>INSERT</code>, forever, on the hot path.";
+          flag = "warn";
+        } else if (f === 3) {
+          c = "<b>One month in — the page's " + nf(C.PER_MONTH) +
+            "</b>. Collisions: <b>" + nf(Math.round(r.collisions)) +
+            "</b>. And the keyspace is <b>" + pc(r.n, D.K) +
+            " full</b>. It is not filling up; it is the square-root law biting a " +
+            "space that is 99.997% empty.";
+          flag = "bad";
+        } else if (f === 4) {
+          c = "<b>Three months.</b> <b>" + nf(Math.round(r.collisions)) +
+            "</b> collisions, each one a salt-and-rehash loop. Worse, and quieter: " +
+            "the same URL always hashes to the same code, so the <b>" +
+            nf(r.shared) + "</b> resubmissions of links somebody already shortened " +
+            "are forced to share one row — one expiry, one owner, between them.";
+          flag = "bad";
+        } else if (f === 5) {
+          c = "<b>Six months.</b> <b>" + nf(Math.round(r.collisions)) +
+            "</b> collisions. Storage " + by(r.bytes) + ". The retry loop is not " +
+            "converging — it grows with <b>n²</b> while the table grows " +
+            "with n.";
+          flag = "bad";
+        } else {
+          c = "<b>One year.</b> " + nf(r.n) + " URLs, " + by(r.bytes) + " (×" +
+            C.REPL + " = " + by(r.bytesRepl) + " — the page's figures), and <b>" +
+            nf(Math.round(r.collisions)) + " collisions</b> in a keyspace that is <b>" +
+            pc(r.n, D.K) + " full</b>. That is the whole argument against hashing: " +
+            "you buy a read plus a retry loop on every write, forever, and you buy " +
+            "it at " + pc(r.n, D.K) + " occupancy.";
+          flag = "bad";
+        }
+      } else if (mode === "counter") {
+        if (f === 1) {
+          c = "<b>" + wh(r.t) + " in.</b> " + nf(r.n) + " URLs — the point where " +
+            "hashing expected its first collision. Here: <b>zero</b>, and zero " +
+            "possible. The codes below are consecutive, and that is the entire " +
+            "problem with them.";
+          flag = "warn";
+        } else if (f === 2) {
+          c = "<b>One day.</b> One scraper at " + nf(C.SCAN_QPS) +
+            " probes a second needs <b>" + dy(r.sweepDays) +
+            "</b> to hold every link in the service, because <b>every probe is a " +
+            "hit</b> — it walks the codes rather than guessing them.";
+          flag = "bad";
+        } else if (f === 3) {
+          c = "<b>One month.</b> <b>" + nf(r.coord) +
+            "</b> range claims so far — one per " + nf(C.BLOCK) +
+            " writes, because each app server hands out a block locally. The " +
+            "counter is not a bottleneck; it is touched " + pc(1, C.BLOCK) +
+            " as often as the write path runs.";
+          flag = "warn";
+        } else if (f === 4) {
+          c = "<b>Three months.</b> The write path is <b>" + r.rt.toFixed(4) +
+            "</b> database round trips per code — the cheapest of the three " +
+            "schemes. Correctness is free. Privacy is what this costs.";
+          flag = "warn";
+        } else if (f === 5) {
+          c = "<b>Six months.</b> Shortened links routinely point at documents whose " +
+            "URLs were the only thing keeping them private. <b>" + nf(r.n) +
+            "</b> of them are sitting behind a counter anyone can increment.";
+          flag = "bad";
+        } else {
+          c = "<b>One year.</b> Zero collisions, " + r.rt.toFixed(4) +
+            " round trips per write, and <b>" + dy(r.sweepDays) +
+            "</b> for one scraper to own the catalogue. Put the counter through a " +
+            "keyed bijection — the second row of codes below, same counter, " +
+            "same collision-freedom — and that " + dy(r.sweepDays) +
+            " becomes <b>" + dy(D.SCAN_DAYS_RANDOM) + "</b>.";
+          flag = "ok";
+        }
+      } else {
+        if (f === 1) {
+          c = "<b>" + wh(r.t) + " in.</b> " + nf(r.n) + " codes popped from the pool. " +
+            "<b>Zero collisions</b> and <b>zero collision checks on the write " +
+            "path</b> — the generator did them, hours ago, off the hot path.";
+          flag = "ok";
+        } else if (f === 2) {
+          c = "<b>One day.</b> The generator ran at " + D.GEN_S.toFixed(0) +
+            "/s — " + C.GEN_MULT + "× the write rate — and made <b>" +
+            nf(Math.round(r.genAttempts)) + "</b> attempts for " + nf(r.n) +
+            " codes. The check did not disappear; it moved somewhere its retries " +
+            "cost nothing.";
+          flag = "ok";
+        } else if (f === 3) {
+          c = "<b>One month.</b> A probe from a scraper hits a live link with " +
+            "probability <b>" + pc(r.probeHit, 1) +
+            "</b>, so sweeping the space takes <b>" + dy(r.sweepDays) +
+            "</b>. That number does not grow with the catalogue — it is a " +
+            "property of 62<sup>7</sup>, not of how many links you hold.";
+          flag = "ok";
+        } else if (f === 4) {
+          c = "<b>Three months.</b> Write path: <b>" + r.rt +
+            "</b> round trips — a pop and an insert, no read to check and no " +
+            "counter to contend on. The thing to alert on is the <b>pool depth</b>: " +
+            C.POOL_HOURS + " hours of runway means " + C.POOL_HOURS +
+            " hours to notice the generator died.";
+          flag = "ok";
+        } else if (f === 5) {
+          c = "<b>Six months.</b> " + by(r.bytes) + " stored. The read path on top of " +
+            "this is unchanged by any of it — codes are immutable, so the " +
+            "cache has no invalidation problem at all, whichever scheme minted them.";
+          flag = "ok";
+        } else {
+          c = "<b>One year.</b> " + nf(r.n) + " URLs, " + by(r.bytes) + " (×" +
+            C.REPL + " = " + by(r.bytesRepl) + "), <b>zero collisions</b>, <b>" +
+            r.rt + " round trips</b> per write, and <b>" + dy(r.sweepDays) +
+            "</b> to enumerate. Compare the tabs on those four numbers and the " +
+            "page's pick answers itself.";
+          flag = "ok";
+        }
+      }
+      caps.push([c, flag]);
+    }
+
+    return sddesignurlshorten_scenario(
+      mode,
+      mode === "hash" ? "Hash + truncate"
+        : mode === "counter" ? "Counter + base62" : "Pre-generated pool",
+      caps,
+      mode === "hash"
+        ? ["empty table", "birthday bound", "1 day", "1 month", "3 months",
+          "6 months", "1 year"]
+        : mode === "counter"
+          ? ["empty table", "1.9M codes", "the scraper walks", "range claims",
+            "write path", "6 months", "1 year"]
+          : ["pool primed", "popping", "generator ahead", "sweep time",
+            "pool depth", "6 months", "1 year"]
+    );
+  }
+
+  S["sddesignurlshorten"] = {
+    title: "Mint a year of short codes, three ways",
+    note: (function () {
+      var C = sddesignurlshorten_C, D = sddesignurlshorten_D;
+      var nf = sddesignurlshorten_n, by = sddesignurlshorten_bytes;
+      return "The page's own year of minting. <b>" + nf(C.PER_MONTH) +
+        " URLs a month ÷ " + C.DAYS_MONTH + " ÷ 86,400 = <b>" +
+        D.WRITES_S.toFixed(1) + " writes/s</b> (the page rounds it to " +
+        C.WRITES_ROUND + "), into a keyspace of <b>62<sup>7</sup> = " + nf(D.K) +
+        "</b> — <b>" + Math.round(D.RUNWAY_Y).toLocaleString("en-US") +
+        " years</b> of runway, the " +
+        "page's “~2,900”. Six frames land on the milestones the page " +
+        "names: <b>√K = " + nf(D.BIRTHDAY) + " URLs at " +
+        (D.BIRTHDAY_S / 3600).toFixed(1) + " h</b> (its birthday bound), one day, " +
+        "one month (" + nf(C.PER_MONTH) + "), then 3, 6 and 12 months — " +
+        nf(D.YEAR_N) + " URLs, " + by(D.YEAR_B) + ", ×" + C.REPL + " = " +
+        by(D.YEAR_B_REPL) + ", all three the page's figures. Expected colliding " +
+        "pairs are n(n−1)/2K; the read path on top is its " + nf(D.READS) +
+        " reads/s, peak " + nf(C.PEAK_READS) + ", " + (C.HIT * 100).toFixed(0) +
+        "% hit rate, <b>" + nf(D.DB_READS) + " reads/s</b> reaching the database. " +
+        "<b>Declared here</b>: one scraper at <b>" + nf(C.SCAN_QPS) +
+        " probes/s</b>; a pool holding <b>" + C.POOL_HOURS +
+        " hours</b> of runway with the generator at " + C.GEN_MULT +
+        "×; " + C.RT_MS + " ms per round trip; and " +
+        (C.RESHARE * 100).toFixed(0) + "% of submissions being a URL somebody " +
+        "already shortened. Every code on screen is really base62 — " +
+        "<code>base62(" + C.CHECK_N.toLocaleString('en-US') + ")</code> computes to <b>" +
+        sddesignurlshorten_b62(C.CHECK_N, 0) + "</b>, the page's own example.";
+    })(),
+    interval: 1600,
+
+    scenarios: [
+      sddesignurlshorten_build("hash"),
+      sddesignurlshorten_build("counter"),
+      sddesignurlshorten_build("pool")
+    ],
+
+    draw: function (step, d, ctx) {
+      var C = sddesignurlshorten_C, D = sddesignurlshorten_D;
+      var nf = sddesignurlshorten_n, by = sddesignurlshorten_bytes;
+      var dy = sddesignurlshorten_days, pc = sddesignurlshorten_pct;
+      var wh = sddesignurlshorten_when;
+      var r = step.st;
+      var started = r.f > 0;
+      var isHash = r.mode === "hash";
+      var isCounter = r.mode === "counter";
+      var isPool = r.mode === "pool";
+      var i;
+
+      // ---- headline -----------------------------------------------------
+      var head = d.cols([
+        d.big(started ? nf(Math.round(r.collisions)) : "—",
+          "expected code collisions · n(n−1)/2K",
+          !started ? "idle" : r.collisions >= 1 ? "bad" : "ok"),
+        d.stat({
+          label: "one scraper at " + nf(C.SCAN_QPS) + "/s holds every link in",
+          value: started ? dy(r.sweepDays) : "—",
+          sub: started
+            ? "a probe hits a live link " + pc(r.probeHit, 1) + " of the time"
+            : "nothing minted yet",
+          flag: !started ? "idle" : r.sweepDays < 365 ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "codes minted",
+          value: started ? nf(r.n) : "0",
+          sub: started
+            ? pc(r.n, D.K) + " of the 62⁷ keyspace"
+            : "runway " + Math.round(D.RUNWAY_Y).toLocaleString("en-US") + " years",
+          flag: started ? "ok" : "idle"
+        })
+      ]);
+
+      // ---- the mint -------------------------------------------------------
+      var mintRows = [];
+      mintRows.push({ label: "database round trips per code",
+        value: isCounter ? r.rt.toFixed(4) : r.rt.toFixed(isHash ? 5 : 0),
+        flag: r.rt > 2 ? "bad" : r.rt > 1.5 ? "warn" : "ok" });
+      mintRows.push({ label: "write-path latency at " + C.RT_MS + " ms a trip",
+        value: (r.rt * C.RT_MS).toFixed(1) + " ms",
+        flag: r.rt * C.RT_MS > C.RT_MS * 2 ? "warn" : "ok" });
+      if (isHash) {
+        mintRows.push({ label: "writes that hit the retry loop",
+          value: nf(Math.round(r.collisions)),
+          flag: r.collisions >= 1 ? "bad" : "ok" });
+        mintRows.push({ label: "marginal retry rate, right now",
+          value: pc(r.retryRate, 1) + "  ·  1 in " +
+            nf(Math.round(r.fill > 0 ? 1 / r.fill : 0)),
+          flag: started ? "warn" : "idle" });
+        mintRows.push({ label: "resubmissions forced to share one row",
+          value: nf(r.shared),
+          flag: r.shared > 0 ? "bad" : "idle" });
+      } else if (isCounter) {
+        mintRows.push({ label: "collisions possible", value: "0 — by construction",
+          flag: "ok" });
+        mintRows.push({ label: "range claims · one per " + nf(C.BLOCK),
+          value: nf(r.coord), flag: "ok" });
+        mintRows.push({ label: "codes are guessable from the last one",
+          value: "yes", flag: "bad" });
+      } else {
+        mintRows.push({ label: "collisions on the write path", value: "0",
+          flag: "ok" });
+        mintRows.push({ label: "generator attempts for " + nf(r.n) + " codes",
+          value: started ? nf(Math.round(r.genAttempts)) : "0",
+          flag: "ok" });
+        mintRows.push({ label: "pool depth · alert below",
+          value: nf(r.poolDepth) + "  ·  " + r.poolHours + " h runway",
+          flag: r.poolDepth > 0 ? "ok" : "bad" });
+      }
+
+      var codeCells = [];
+      for (i = 0; i < r.sample.length; i++) {
+        codeCells.push({ label: r.sample[i],
+          flag: isCounter ? "bad" : "ok",
+          title: isCounter
+            ? "consecutive — increment the last one and you have the next link"
+            : "spread across the keyspace" });
+      }
+      if (!codeCells.length) {
+        codeCells.push({ label: "—", flag: "idle", title: "nothing minted yet" });
+      }
+      var codeBody = d.cells(codeCells, {
+        label: isCounter
+          ? "four consecutive codes, base62 of the counter"
+          : "four codes this scheme would mint next",
+        dense: true
+      });
+      if (isCounter && r.sample2.length) {
+        var f2 = [];
+        for (i = 0; i < r.sample2.length; i++) {
+          f2.push({ label: r.sample2[i], flag: "ok",
+            title: "same counter value through a keyed bijection — still " +
+              "collision-free, no longer walkable" });
+        }
+        codeBody += d.cells(f2, {
+          label: "the same four counter values through a Feistel permutation",
+          dense: true
+        });
+      }
+
+      var mint = d.node({
+        title: isHash ? "mint · base62(md5(long_url))[:7]"
+          : isCounter ? "mint · base62(next counter value)"
+          : "mint · pop from available_codes",
+        status: !started ? "IDLE"
+          : isHash ? "COLLIDING" : isCounter ? "ENUMERABLE" : "CLEAN",
+        statusFlag: !started ? "idle"
+          : isHash ? "bad" : isCounter ? "bad" : "ok",
+        badge: started ? wh(r.t) + " in" : "before launch",
+        meta: isHash
+          ? "a SELECT before every INSERT, plus a salt-and-rehash loop when the " +
+            "check fires"
+          : isCounter
+            ? "one INSERT, plus one coordination call per " + nf(C.BLOCK) + " writes"
+            : "one pop and one insert; the collision check lives in the generator",
+        flag: !started ? "idle" : isPool ? "ok" : "bad",
+        rows: mintRows,
+        body: codeBody
+      });
+
+      // ---- keyspace and storage -------------------------------------------
+      var space = d.node({
+        title: "keyspace · 62⁷ = " + nf(D.K),
+        status: started ? pc(r.n, D.K) + " USED" : "EMPTY",
+        statusFlag: "ok",
+        badge: Math.round(D.RUNWAY_Y).toLocaleString("en-US") + " years at " + nf(C.PER_MONTH) + "/month",
+        meta: "the birthday bound arrives at √K = " + nf(D.BIRTHDAY) +
+          " codes, which at " + D.WRITES_S.toFixed(1) + " writes/s is " +
+          (D.BIRTHDAY_S / 3600).toFixed(1) + " hours after launch — nothing " +
+          "to do with how full the space is",
+        flag: "ok",
+        gauges: [{
+          label: "codes used · log scale, so √K sits exactly at the midpoint",
+          pct: started ? (Math.log(r.n) / Math.log(D.K)) * 100 : 0,
+          value: pc(r.n, D.K),
+          flag: started ? "ok" : "idle"
+        }],
+        rows: [
+          { label: "rows stored · " + C.ROW_B + " B each",
+            value: started ? by(r.bytes) : "0 B", flag: started ? "ok" : "idle" },
+          { label: "with ×" + C.REPL + " replication",
+            value: started ? by(r.bytesRepl) : "0 B", flag: started ? "ok" : "idle" },
+          { label: "scraper haul so far",
+            value: started ? nf(Math.round(r.harvested)) + "  ·  " +
+              pc(r.harvested, r.n) + " of the catalogue" : "0",
+            flag: !started ? "idle" : r.harvested / r.n > 0.5 ? "bad" : "ok" }
+        ]
+      });
+
+      // ---- the read path, identical whichever scheme minted the codes ----
+      var read = d.node({
+        title: "the read path this catalogue creates",
+        status: "SAME IN ALL THREE TABS",
+        statusFlag: "ok",
+        badge: nf(D.READS) + "/s, peak " + nf(C.PEAK_READS) + "/s",
+        meta: "rows are immutable, so there is no invalidation problem at all — " +
+          "which is the reason the hit rate can be this high",
+        flag: "ok",
+        gauges: [{
+          label: "Redis hit rate · hot set " + nf(C.HOT_LINKS) + " links × " +
+            C.HOT_ENTRY_B + " B = " + by(D.HOT_B),
+          pct: C.HIT * 100,
+          value: (C.HIT * 100).toFixed(0) + "%",
+          flag: "ok"
+        }],
+        rows: [
+          { label: "reaching Postgres at peak",
+            value: nf(D.DB_READS) + "/s", flag: "ok" },
+          { label: "if the hit rate were " + (C.BAD_HIT * 100).toFixed(0) + "%",
+            value: nf(D.DB_READS_BAD) + "/s  ·  ×" +
+              D.BAD_MULT.toFixed(0), flag: "warn" },
+          { label: "404s · negative marker, " + C.NEG_TTL_S + " s TTL",
+            value: isCounter
+              ? "a walker never 404s — nothing to absorb"
+              : "absorbs " + pc(1 - r.probeHit, 1) + " of probes",
+            flag: isCounter ? "bad" : "ok" },
+          { label: "top " + (C.HOT_FRAC * 100).toFixed(0) + "% of links serve",
+            value: (C.HOT_SHARE * 100).toFixed(0) + "% of redirects", flag: "ok" }
+        ]
+      });
+
+      // ---- history ---------------------------------------------------------
+      var rows = [], all = ctx.scenario.steps;
+      for (i = 1; i <= r.f && i < all.length; i++) {
+        var h = all[i].st;
+        rows.push([
+          wh(h.t),
+          nf(h.n),
+          nf(Math.round(h.collisions)),
+          by(h.bytes),
+          dy(h.sweepDays)
+        ]);
+      }
+
+      var legend = isHash
+        ? "The keyspace never fills; the <b>square root</b> of it does. That is the " +
+          "whole of the argument: at " + pc(r.n, D.K) + " occupancy you are " +
+          "carrying <b>" + nf(Math.round(r.collisions)) + "</b> colliding pairs, a " +
+          "read before every insert and a retry loop that grows with n². And " +
+          "a deterministic code means two people cannot own the same link " +
+          "separately."
+        : isCounter
+          ? "Collision-free and the cheapest write path of the three — and " +
+            "<b>walkable</b>. The failure here is not correctness, it is that " +
+            "shortened links usually point at things whose URL <i>was</i> the " +
+            "access control. The fix keeps everything good about this scheme: a " +
+            "keyed bijection over the counter is still a bijection."
+          : "Zero collisions, no check on the hot path, no counter to contend on, " +
+            "and a sweep time of <b>" + dy(r.sweepDays) +
+            "</b> that is a property of 62⁷ rather than of the catalogue. " +
+            "The price is a table to monitor: <b>" + C.POOL_HOURS +
+            " hours</b> of runway is also " + C.POOL_HOURS +
+            " hours to notice the generator stopped.";
+
+      return d.stack([
+        sddesignurlshorten_phases(d, ctx),
+        head,
+        mint,
+        space,
+        read,
+        rows.length
+          ? d.table(["at", "URLs", "collisions", "stored", "sweep time"], rows)
+          : d.note("Nothing minted yet — press Play.", "idle"),
+        d.note(legend, isPool ? "ok" : "bad")
+      ]);
+    }
+  };
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sddesignvideostrea  (design-video-streaming.md)
+  //
+  // The page's own bitrate ladder played against one network trace. The
+  // time axis is segment-by-segment playback: the client measures its own
+  // throughput, picks the next rendition, and the buffer either absorbs a
+  // dip or does not. Three runs, ONE trace, one variable changed each time:
+  //
+  //   fixed  no adaptation at all -- always 1080p. Start time misses the
+  //          page's 2 s bar and the dip becomes three visible stalls.
+  //   abr    the page's "start low, then ramp", 30 s VOD buffer target.
+  //          Same dip, same renditions available, zero stalls.
+  //   live   the SAME ABR on the SAME trace, with only the buffer target
+  //          changed from the page's 30 s VOD figure to its 2-6 s live
+  //          band. The dip becomes a stall, and the stalled seconds are
+  //          content the viewer never sees -- "the moment is gone".
+  //
+  // FROM THE PAGE (verbatim):
+  //   ladder 240p 400 kbps / 480p 1 Mbps / 720p 3 Mbps / 1080p 6 Mbps   s4
+  //   segment length 2-10 s; buffer target 30 s VOD; live buffer 2-6 s   s4,6
+  //   "playback start < 2s"                                             s1
+  //   1B views/day x 5 min x 3 Mbps = ~112 PB/day = ~10 Tbps            s2
+  //   5M uploads/day x 10 min x 6 renditions = 300M min/day             s2
+  //   / 1,440 min/day = ~208,000 cores                                  s2
+  //   60-min video / 10 s chunks = 360 chunks x 6 = 2,160 tasks         s3
+  //   AV1/HEVC saves 30-50%; spot capacity is a 70-90% discount         s3,8
+  //
+  // DECLARED HERE: a 4 s segment (inside the page's 2-10 s band); the
+  // measured throughput trace in Mbps; an ABR rule that takes the highest
+  // rung at or below 0.8x the last measured throughput, steps up at most
+  // one rung per segment, and drops to the bottom if the buffer falls
+  // below one segment; and 40% for the AV1 saving, the midpoint of the
+  // page's band.
+  //
+  // Download time, buffer level, stall seconds, the renditions chosen and
+  // the egress figures are all computed from that trace and that ladder.
+  // ======================================================================
+  var sddesignvideostrea_C = {
+    LADDER: [                        // page, section 4
+      { name: "240p", kbps: 400 },
+      { name: "480p", kbps: 1000 },
+      { name: "720p", kbps: 3000 },
+      { name: "1080p", kbps: 6000 }
+    ],
+    SEG_S: 4,                        // declared, inside the page's 2-10 s
+    BUF_VOD: 30,                     // page
+    BUF_LIVE: 4,                     // page's 2-6 s band
+    START_BAR_S: 2,                  // page
+    TRACE: [9, 12, 10, 3.0, 1.8, 2.6, 8, 12],   // declared, Mbps measured
+    SAFETY: 0.8,                     // declared
+    VIEWS: 1e9,                      // page
+    WATCH_S: 300,                    // page, 5 min
+    PAGE_MBPS: 3,                    // page
+    UPLOADS: 5e6,                    // page
+    UPLOAD_MIN: 10,                  // page
+    RENDITIONS: 6,                   // page
+    CHUNK_S: 10,                     // page
+    LONG_MIN: 60,                    // page's worked example
+    AV1_SAVE: 0.40,                  // declared, midpoint of the page's 30-50%
+    SPOT_SAVE: 0.80                  // declared, midpoint of the page's 70-90%
+  };
+
+  var sddesignvideostrea_D = (function () {
+    var C = sddesignvideostrea_C, o = {};
+    o.SEGS = C.TRACE.length;                                     // 8
+    o.TOP = C.LADDER.length - 1;                                 // 3
+    o.PAGE_BITS_DAY = C.VIEWS * C.WATCH_S * C.PAGE_MBPS * 1e6;   // 9e17
+    o.PAGE_PB_DAY = o.PAGE_BITS_DAY / 8 / 1e15;                  // 112.5
+    o.PAGE_TBPS = o.PAGE_BITS_DAY / 86400 / 1e12;                // 10.4
+    o.CHUNKS = C.LONG_MIN * 60 / C.CHUNK_S;                      // 360
+    o.TASKS = o.CHUNKS * C.RENDITIONS;                           // 2,160
+    o.ENC_MIN_DAY = C.UPLOADS * C.UPLOAD_MIN * C.RENDITIONS;     // 3e8
+    o.CORES = o.ENC_MIN_DAY / 1440;                              // 208,333
+    o.SERIAL_MIN = C.LONG_MIN;                                   // 60 min/rendition
+    o.PARALLEL_MIN = C.CHUNK_S / 60;                             // one chunk
+    o.SPEEDUP = o.SERIAL_MIN / o.PARALLEL_MIN;                   // 360x
+    o.RUN_S = o.SEGS * C.SEG_S;                                  // 32 s of video
+    o.FIXED_START = (C.LADDER[o.TOP].kbps / 1000) * C.SEG_S / C.TRACE[0];
+    return o;
+  })();
+
+  function sddesignvideostrea_s(x, dec) {
+    if (!isFinite(x)) return "—";
+    return x.toFixed(dec === undefined ? 2 : dec) + " s";
+  }
+  function sddesignvideostrea_trim(s) {
+    if (s.indexOf(".") < 0) return s;
+    return s.replace(/0+$/, "").replace(/\.$/, "");
+  }
+  function sddesignvideostrea_n(x) {
+    if (!isFinite(x)) return "—";
+    var a = Math.abs(x);
+    if (a >= 1e9) return sddesignvideostrea_trim((x / 1e9).toFixed(1)) + "B";
+    if (a >= 1e6) return sddesignvideostrea_trim((x / 1e6).toFixed(a >= 1e8 ? 0 : 1)) + "M";
+    return Math.round(x).toLocaleString("en-US");
+  }
+  function sddesignvideostrea_mb(bytes) {
+    if (bytes >= 1e6) return (bytes / 1e6).toFixed(2) + " MB";
+    return Math.round(bytes / 1e3) + " kB";
+  }
+  function sddesignvideostrea_phases(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+    return d.pills(chips);
+  }
+
+  // ---- one playback run over the shared trace ---------------------------
+  function sddesignvideostrea_play(mode) {
+    var C = sddesignvideostrea_C, D = sddesignvideostrea_D;
+    var fixed = mode === "fixed";
+    var bufTarget = mode === "live" ? C.BUF_LIVE : C.BUF_VOD;
+    var cur = fixed ? D.TOP : 0;
+    var buffer = 0, startS = 0, stalls = 0, stallS = 0, skippedS = 0;
+    var bits = 0, played = 0;
+    var out = [], k, j, T, Tlast, capR, kbps, bytes, dl, stall, bufIn, capped;
+
+    for (k = 0; k < D.SEGS; k++) {
+      T = C.TRACE[k];
+      if (!fixed) {
+        if (k === 0) {
+          cur = 0;                                  // start low, then ramp
+        } else {
+          Tlast = C.TRACE[k - 1];
+          capR = 0;
+          for (j = 0; j <= D.TOP; j++) {
+            if (C.LADDER[j].kbps / 1000 <= C.SAFETY * Tlast) capR = j;
+          }
+          if (buffer < C.SEG_S) cur = 0;            // panic: one segment left
+          else if (capR < cur) cur = capR;          // throughput fell: drop now
+          else cur = Math.min(capR, cur + 1);       // ramp one rung at a time
+        }
+      }
+      kbps = C.LADDER[cur].kbps;
+      bytes = kbps * 1000 * C.SEG_S / 8;
+      dl = (kbps / 1000) * C.SEG_S / T;
+      bufIn = buffer;
+      stall = 0;
+
+      if (k === 0) {
+        startS = dl;                                // playback begins here
+        buffer = C.SEG_S;
+      } else {
+        buffer -= dl;
+        if (buffer < 0) {
+          stall = -buffer;
+          buffer = 0;
+          stalls += 1;
+          stallS += stall;
+          if (mode === "live") skippedS += stall;   // the moment is gone
+        }
+        buffer += C.SEG_S;
+      }
+      capped = buffer > bufTarget;
+      if (capped) buffer = bufTarget;
+
+      bits += kbps * 1000 * C.SEG_S;
+      played += C.SEG_S;
+
+      out.push({
+        mode: mode, k: k, seg: k + 1, T: T, rung: cur,
+        name: C.LADDER[cur].name, kbps: kbps, bytes: bytes,
+        dl: dl, bufIn: bufIn, buffer: buffer, capped: capped,
+        stall: stall, stalls: stalls, stallS: stallS, skippedS: skippedS,
+        startS: startS, bufTarget: bufTarget,
+        meanMbps: bits / played / 1e6,
+        deficit: dl - C.SEG_S,
+        wallS: startS + played + stallS
+      });
+    }
+    return out;
+  }
+
+  function sddesignvideostrea_build(mode) {
+    var C = sddesignvideostrea_C, D = sddesignvideostrea_D;
+    var ss = sddesignvideostrea_s;
+    var run = sddesignvideostrea_play(mode);
+    var last = run[run.length - 1];
+    var bufTarget = mode === "live" ? C.BUF_LIVE : C.BUF_VOD;
+    var idle = {
+      mode: mode, k: -1, seg: 0, T: 0, rung: mode === "fixed" ? D.TOP : 0,
+      name: C.LADDER[mode === "fixed" ? D.TOP : 0].name,
+      kbps: C.LADDER[mode === "fixed" ? D.TOP : 0].kbps,
+      bytes: 0, dl: 0, bufIn: 0, buffer: 0, capped: false,
+      stall: 0, stalls: 0, stallS: 0, skippedS: 0, startS: 0,
+      bufTarget: bufTarget, meanMbps: 0, deficit: 0, wallS: 0
+    };
+
+    var steps = [], phases = ["before play"], k, st, cap, flag;
+    steps.push({
+      flag: "idle", st: idle,
+      caption: mode === "fixed"
+        ? "One video, one network trace, no adaptation: every segment is " +
+          "requested at <b>1080p, " + (C.LADDER[D.TOP].kbps / 1000) +
+          " Mbps</b>. The manifest lists four renditions and the player ignores " +
+          "three of them. Press Play."
+        : mode === "abr"
+          ? "The same trace, the same manifest, and the page's rule: <b>start low, " +
+            "then ramp</b>. The client measures its own throughput and picks the " +
+            "rendition for the <i>next</i> segment; the server does nothing but " +
+            "serve immutable HTTP GETs. Buffer target <b>" + C.BUF_VOD +
+            " s</b>. Press Play."
+          : "The same trace and the <b>same ABR rule</b> — one thing changes. " +
+            "This is live, so the player cannot fetch segments that have not been " +
+            "encoded yet: the buffer ceiling drops from the page's <b>" +
+            C.BUF_VOD + " s</b> for VOD to <b>" + C.BUF_LIVE +
+            " s</b>, inside its 2–6 s live band. Press Play."
+    });
+
+    for (k = 0; k < run.length; k++) {
+      st = run[k];
+      phases.push("seg " + st.seg + " · " +
+        (st.stall > 0 ? "STALL" : st.name));
+
+      if (k === 0) {
+        if (mode === "fixed") {
+          cap = "Segment 1 at <b>" + st.name + "</b>: " +
+            sddesignvideostrea_mb(st.bytes) + " over a measured <b>" + st.T +
+            " Mbps</b> takes <b>" + ss(st.dl) + "</b>. That is the start time, and " +
+            "it misses the page's <b>" + C.START_BAR_S + " s</b> bar by <b>" +
+            ((st.dl / C.START_BAR_S - 1) * 100).toFixed(0) +
+            "%</b> — before a single frame of trouble.";
+          flag = "bad";
+        } else {
+          cap = "Segment 1 at <b>" + st.name + "</b>, the bottom rung: " +
+            sddesignvideostrea_mb(st.bytes) + " over " + st.T +
+            " Mbps is <b>" + ss(st.dl) + "</b>. Playback starts, well inside the " +
+            "page's " + C.START_BAR_S + " s bar. Quality is bad for exactly one " +
+            "segment — <b>the thing users judge is the start</b>.";
+          flag = "ok";
+        }
+      } else if (st.stall > 0) {
+        cap = "Throughput measured <b>" + st.T + " Mbps</b>. " +
+          sddesignvideostrea_mb(st.bytes) + " of " + st.name + " needs <b>" +
+          ss(st.dl) + "</b> to deliver <b>" + C.SEG_S +
+          " s</b> of video — a deficit of " + ss(st.deficit) +
+          ", against <b>" + ss(st.bufIn) + "</b> of buffer. <b>The picture " +
+          "freezes for " + ss(st.stall) + ".</b>" +
+          (mode === "live"
+            ? " And in live that is not a delay: the player rejoins at the edge, " +
+              "so those " + ss(st.stall) + " are content this viewer never sees."
+            : "");
+        flag = "bad";
+      } else if (st.rung < run[k - 1].rung) {
+        cap = "The last segment measured <b>" + C.TRACE[k - 1] +
+          " Mbps</b>, so " + (C.SAFETY * 100).toFixed(0) + "% of it is <b>" +
+          (C.SAFETY * C.TRACE[k - 1]).toFixed(1) + " Mbps</b> and " +
+          run[k - 1].name + " no longer fits. The client <b>steps down to " +
+          st.name + "</b> for this segment: " + ss(st.dl) + " to deliver " +
+          C.SEG_S + " s, and the buffer <b>grows</b> to " + ss(st.buffer) +
+          ". No server was involved in that decision.";
+        flag = "warn";
+      } else if (st.rung > run[k - 1].rung) {
+        cap = "Measured <b>" + C.TRACE[k - 1] + " Mbps</b> on the last segment, so " +
+          "the client steps up one rung to <b>" + st.name + "</b> — one rung, " +
+          "not four, because a measurement is a guess about the next four seconds. " +
+          "Buffer " + ss(st.bufIn) + " → " + ss(st.buffer) +
+          (st.capped ? ", capped at the " + ss(st.bufTarget, 0) + " target." : ".");
+        flag = "ok";
+      } else {
+        cap = "Segment " + st.seg + " at <b>" + st.name + "</b>: " + ss(st.dl) +
+          " to deliver " + C.SEG_S + " s over " + st.T + " Mbps. Buffer " +
+          ss(st.bufIn) + " → <b>" + ss(st.buffer) + "</b>" +
+          (st.capped
+            ? ", held at the " + ss(st.bufTarget, 0) +
+              (mode === "live"
+                ? " live ceiling — the next segment does not exist yet."
+                : " target — the player idles rather than fetch ahead.")
+            : ".");
+        flag = st.buffer < C.SEG_S ? "warn" : "ok";
+      }
+
+      if (k === run.length - 1) {
+        cap = "<b>Done.</b> " + D.RUN_S + " s of video in " + ss(st.wallS) +
+          " of wall clock: start " + ss(st.startS) + ", <b>" + st.stalls +
+          " stall" + (st.stalls === 1 ? "" : "s") + "</b> totalling <b>" +
+          ss(st.stallS) + "</b>" +
+          (mode === "live" && st.skippedS > 0
+            ? " of content the viewer <b>never sees</b>" : "") +
+          ". Mean bitrate <b>" + st.meanMbps.toFixed(2) + " Mbps</b>" +
+          (mode === "fixed"
+            ? " — " + (st.meanMbps / C.PAGE_MBPS).toFixed(1) +
+              "× the page's " + C.PAGE_MBPS +
+              " Mbps average, so this viewer costs " +
+              (st.meanMbps / C.PAGE_MBPS).toFixed(1) +
+              "× in egress as well as rebuffering."
+            : mode === "abr"
+              ? " — " + (st.meanMbps / C.PAGE_MBPS).toFixed(2) +
+                "× the page's " + C.PAGE_MBPS +
+                " Mbps, and not one freeze."
+              : ", identical to the VOD tab. <b>The renditions chosen were the " +
+                "same; only the buffer was smaller.</b>");
+        flag = st.stalls === 0 ? "ok" : "bad";
+      }
+
+      steps.push({ caption: cap, flag: flag, st: st });
+    }
+
+    return {
+      id: mode,
+      label: mode === "fixed" ? "Fixed 1080p, no ABR"
+        : mode === "abr" ? "ABR · 30 s VOD buffer" : "Live · 4 s buffer",
+      steps: steps,
+      phases: phases
+    };
+  }
+
+  S["sddesignvideostrea"] = {
+    title: "Play one network trace three ways",
+    note: (function () {
+      var C = sddesignvideostrea_C, D = sddesignvideostrea_D;
+      var nf = sddesignvideostrea_n;
+      var names = [], i;
+      for (i = 0; i < C.LADDER.length; i++) {
+        names.push(C.LADDER[i].name + " " +
+          (C.LADDER[i].kbps >= 1000
+            ? (C.LADDER[i].kbps / 1000) + " Mbps"
+            : C.LADDER[i].kbps + " kbps"));
+      }
+      return "The page's bitrate ladder — <b>" + names.join(" · ") +
+        "</b> — played against one measured throughput trace, <b>" +
+        C.TRACE.join(", ") + " Mbps</b>, in <b>" + D.SEGS + " segments of " +
+        C.SEG_S + " s</b> (the page's 2–10 s band) for " + D.RUN_S +
+        " s of video. Download time is bitrate × " + C.SEG_S +
+        " s ÷ measured throughput; the buffer gains " + C.SEG_S +
+        " s per segment and loses the download time, and goes negative as a " +
+        "freeze. <b>Declared here</b>: the trace, and an ABR rule that takes the " +
+        "highest rung at or below <b>" + (C.SAFETY * 100).toFixed(0) +
+        "%</b> of the last measured throughput, steps up at most one rung per " +
+        "segment, and drops to the bottom if the buffer falls under one segment. " +
+        "Everything else is the page's: the <b>" + C.START_BAR_S +
+        " s</b> start bar, a <b>" + C.BUF_VOD + " s</b> VOD buffer target against " +
+        "live's <b>" + C.BUF_LIVE + " s</b>, and its egress arithmetic — " +
+        nf(C.VIEWS) + " views × " + (C.WATCH_S / 60) + " min × " +
+        C.PAGE_MBPS + " Mbps = <b>" + D.PAGE_PB_DAY.toFixed(1) + " PB/day, " +
+        D.PAGE_TBPS.toFixed(1) + " Tbps</b>, recomputed below at each run's own " +
+        "mean bitrate. <b>The third tab changes exactly one number from the " +
+        "second.</b>";
+    })(),
+    interval: 1500,
+
+    scenarios: [
+      sddesignvideostrea_build("fixed"),
+      sddesignvideostrea_build("abr"),
+      sddesignvideostrea_build("live")
+    ],
+
+    draw: function (step, d, ctx) {
+      var C = sddesignvideostrea_C, D = sddesignvideostrea_D;
+      var ss = sddesignvideostrea_s, nf = sddesignvideostrea_n;
+      var r = step.st;
+      var started = r.k >= 0;
+      var isLive = r.mode === "live";
+      var isFixed = r.mode === "fixed";
+      var i;
+
+      var startFlag = !started ? "idle"
+        : r.startS > C.START_BAR_S ? "bad" : "ok";
+
+      // ---- headline -----------------------------------------------------
+      var head = d.cols([
+        d.big(started ? ss(r.stallS) : "—",
+          "frozen picture · " + (started ? r.stalls : 0) + " stall" +
+            (started && r.stalls === 1 ? "" : "s"),
+          !started ? "idle" : r.stallS > 0 ? "bad" : "ok"),
+        d.stat({
+          label: "time to first frame",
+          value: started ? ss(r.startS) : "—",
+          sub: started
+            ? "the page's bar is " + C.START_BAR_S + " s · " +
+              (r.startS > C.START_BAR_S ? "missed by " : "met with ") +
+              Math.abs((r.startS / C.START_BAR_S - 1) * 100).toFixed(0) +
+              "% " + (r.startS > C.START_BAR_S ? "" : "to spare")
+            : "nothing requested yet",
+          flag: startFlag
+        }),
+        d.stat({
+          label: "serving now",
+          value: started ? r.name : "—",
+          sub: started
+            ? "mean so far " + r.meanMbps.toFixed(2) + " Mbps"
+            : (isFixed ? "no adaptation" : "starts at the bottom rung"),
+          flag: started ? "ok" : "idle"
+        })
+      ]);
+
+      // ---- the ladder ------------------------------------------------------
+      var rungs = [];
+      for (i = 0; i < C.LADDER.length; i++) {
+        var fits = started && C.LADDER[i].kbps / 1000 <= C.SAFETY * r.T;
+        rungs.push({
+          label: C.LADDER[i].name,
+          flag: i === r.rung ? "ok" : !started ? "idle" : fits ? "warn" : "bad",
+          title: C.LADDER[i].name + " · " + C.LADDER[i].kbps + " kbps · " +
+            sddesignvideostrea_mb(C.LADDER[i].kbps * 1000 * C.SEG_S / 8) +
+            " per " + C.SEG_S + " s segment" +
+            (i === r.rung ? " — serving this one" : "")
+        });
+      }
+
+      var ladder = d.node({
+        title: "manifest · the client picks, the server does not",
+        status: started ? r.name.toUpperCase() : "READY",
+        statusFlag: started ? "ok" : "idle",
+        badge: isFixed ? "adaptation off" :
+          "highest rung ≤ " + (C.SAFETY * 100).toFixed(0) + "% of measured",
+        meta: "every segment is an immutable HTTP GET, which is why ordinary CDN " +
+          "caching works and no streaming-specific server exists. These renditions " +
+          "came off a DAG that split the source on keyframe boundaries into " +
+          C.CHUNK_S + " s chunks: " + nf(D.CHUNKS) + " chunks × " +
+          C.RENDITIONS + " renditions = " + nf(D.TASKS) + " parallel tasks for a " +
+          C.LONG_MIN + "-minute video.",
+        flag: started ? "ok" : "idle",
+        rows: [
+          { label: "measured throughput, this segment",
+            value: started ? r.T + " Mbps" : "—",
+            flag: !started ? "idle" : r.T < C.LADDER[1].kbps / 1000 ? "bad"
+              : r.T < C.LADDER[2].kbps / 1000 ? "warn" : "ok" },
+          { label: "segment size at " + (started ? r.name : "—"),
+            value: started ? sddesignvideostrea_mb(r.bytes) : "—",
+            flag: started ? "ok" : "idle" },
+          { label: "download time vs " + C.SEG_S + " s of video",
+            value: started ? ss(r.dl) + "  ·  " +
+              (r.deficit > 0 ? "+" : "") + ss(r.deficit) : "—",
+            flag: !started ? "idle" : r.deficit > 0 ? "bad" : "ok" }
+        ],
+        body: d.cells(rungs, {
+          label: "green is serving · amber fits the measurement · red " +
+            "does not",
+          dense: true
+        })
+      });
+
+      // ---- buffer ----------------------------------------------------------
+      var segCells = [], bufCells = [], all = ctx.scenario.steps;
+      for (i = 1; i < all.length; i++) {
+        var h = all[i].st;
+        var seen = i <= r.k + 1;
+        segCells.push({
+          label: seen ? h.name.replace("p", "") : "·",
+          flag: !seen ? "idle" : h.stall > 0 ? "bad" : h.rung >= 2 ? "ok" : "warn",
+          title: seen
+            ? "segment " + h.seg + " · " + h.name + " · " + h.T +
+              " Mbps · " + ss(h.dl) + " to fetch" +
+              (h.stall > 0 ? " · froze for " + ss(h.stall) : "")
+            : "not requested yet"
+        });
+        bufCells.push({
+          label: seen ? h.buffer.toFixed(0) : "·",
+          flag: !seen ? "idle"
+            : h.stall > 0 ? "bad"
+            : h.buffer >= h.bufTarget ? "ok"
+            : h.buffer < C.SEG_S ? "warn" : "ok",
+          title: seen
+            ? "buffer after segment " + h.seg + ": " + ss(h.buffer) + " of a " +
+              ss(h.bufTarget, 0) + " target"
+            : "—"
+        });
+      }
+
+      var buf = d.node({
+        title: "buffer · target " + ss(r.bufTarget, 0) +
+          (isLive ? " (live ceiling)" : " (VOD)"),
+        status: !started ? "EMPTY"
+          : r.stall > 0 ? "FROZE" : r.capped ? "AT TARGET" : "FILLING",
+        statusFlag: !started ? "idle" : r.stall > 0 ? "bad" : "ok",
+        badge: isLive
+          ? "cannot fetch ahead of the encoder"
+          : "idles once it reaches the target",
+        meta: isLive
+          ? "glass-to-glass latency is roughly the buffer plus a segment: " +
+            ss(C.BUF_LIVE + C.SEG_S, 0) + ", inside the page's 2–30 s band, " +
+            "and a segment that arrives late cannot be retried — the moment " +
+            "has passed"
+          : "a dip only becomes visible once it is deeper than the buffer, which " +
+            "is the entire reason VOD targets " + C.BUF_VOD + " s",
+        flag: !started ? "idle" : r.stallS > 0 ? "bad" : "ok",
+        gauges: [{
+          label: "seconds of video in hand",
+          pct: (r.buffer / r.bufTarget) * 100,
+          value: ss(r.buffer) + " / " + ss(r.bufTarget, 0),
+          flag: !started ? "idle"
+            : r.buffer < C.SEG_S ? "bad" : r.buffer < r.bufTarget / 2 ? "warn" : "ok"
+        }],
+        rows: [
+          { label: "buffer before this fetch",
+            value: started ? ss(r.bufIn) : "—",
+            flag: !started ? "idle" : r.bufIn < C.SEG_S ? "warn" : "ok" },
+          { label: "froze this segment",
+            value: started ? ss(r.stall) : "—",
+            flag: !started ? "idle" : r.stall > 0 ? "bad" : "ok" },
+          { label: isLive ? "content skipped · rejoined at the edge"
+            : "playback delayed in total",
+            value: started ? ss(isLive ? r.skippedS : r.stallS) : "—",
+            flag: !started ? "idle"
+              : (isLive ? r.skippedS : r.stallS) > 0 ? "bad" : "ok" },
+          { label: "wall clock for " + D.RUN_S + " s of video",
+            value: started ? ss(r.wallS) : "—",
+            flag: started ? (r.stallS > 0 ? "bad" : "ok") : "idle" }
+        ],
+        body: d.lane({ label: "rendition", cells: segCells }) +
+          d.lane({ label: "buffer s", cells: bufCells })
+      });
+
+      // ---- what this viewer costs ------------------------------------------
+      var runBits = C.VIEWS * C.WATCH_S * r.meanMbps * 1e6;
+      var runPB = runBits / 8 / 1e15;
+      var runTbps = runBits / 86400 / 1e12;
+      var av1PB = runPB * (1 - C.AV1_SAVE);
+
+      var cost = d.node({
+        title: "if every view looked like this one",
+        status: !started ? "IDLE"
+          : runTbps > D.PAGE_TBPS ? "OVER THE PAGE'S BUDGET" : "UNDER",
+        statusFlag: !started ? "idle" : runTbps > D.PAGE_TBPS ? "bad" : "ok",
+        badge: nf(C.VIEWS) + " views/day × " + (C.WATCH_S / 60) + " min",
+        meta: "the page's binding constraint is not QPS, it is egress: " +
+          D.PAGE_PB_DAY.toFixed(1) + " PB/day and " + D.PAGE_TBPS.toFixed(1) +
+          " Tbps at its " + C.PAGE_MBPS + " Mbps average. No origin serves that, " +
+          "which is why the CDN is the architecture rather than an optimisation.",
+        flag: !started ? "idle" : runTbps > D.PAGE_TBPS ? "bad" : "ok",
+        rows: [
+          { label: "this run's mean bitrate",
+            value: started ? r.meanMbps.toFixed(2) + " Mbps" : "—",
+            flag: !started ? "idle"
+              : r.meanMbps > C.PAGE_MBPS ? "bad" : "ok" },
+          { label: "egress",
+            value: started ? runPB.toFixed(0) + " PB/day  ·  " +
+              runTbps.toFixed(1) + " Tbps" : "—",
+            flag: !started ? "idle" : runTbps > D.PAGE_TBPS ? "bad" : "ok" },
+          { label: "against the page's " + C.PAGE_MBPS + " Mbps baseline",
+            value: started
+              ? "×" + (r.meanMbps / C.PAGE_MBPS).toFixed(2) : "—",
+            flag: !started ? "idle"
+              : r.meanMbps > C.PAGE_MBPS ? "bad" : "ok" },
+          { label: "same run on AV1 (" + (C.AV1_SAVE * 100).toFixed(0) + "% saved)",
+            value: started ? av1PB.toFixed(0) + " PB/day" : "—",
+            flag: started ? "ok" : "idle" },
+          { label: "transcode fleet behind it",
+            value: nf(D.CORES) + " cores  ·  " +
+              (C.SPOT_SAVE * 100).toFixed(0) + "% off on spot",
+            flag: "ok" }
+        ]
+      });
+
+      // ---- history -----------------------------------------------------------
+      var rows = [];
+      for (i = 1; i <= r.k + 1 && i < all.length; i++) {
+        var g = all[i].st;
+        rows.push([
+          String(g.seg),
+          g.T + " Mbps",
+          g.name,
+          ss(g.dl),
+          ss(g.buffer),
+          g.stall > 0 ? ss(g.stall) : "—"
+        ]);
+      }
+
+      var legend = isFixed
+        ? "One rendition for every network on earth. The start cost <b>" +
+          ss(r.startS) + "</b> against a <b>" + C.START_BAR_S +
+          " s</b> bar, the dip cost <b>" + ss(r.stallS) +
+          "</b> of frozen picture, and the egress is <b>×" +
+          (r.meanMbps / C.PAGE_MBPS).toFixed(1) + "</b> the page's baseline. " +
+          "Adaptation is not a refinement here; it is what makes the product work " +
+          "and what makes it affordable."
+        : isLive
+          ? "<b>Identical ABR, identical trace, identical renditions chosen.</b> " +
+            "The only change is the buffer ceiling: " + C.BUF_VOD + " s → " +
+            C.BUF_LIVE + " s. That single number turned zero stalls into <b>" +
+            r.stalls + "</b>, and in live the frozen seconds are not delay but " +
+            "<b>lost content</b> — the player rejoins at the edge. Low " +
+            "latency and playback stability are directly opposed; sports pay " +
+            "this, a concert stream should not."
+          : "The intelligence sits where the network information is. The client " +
+            "measured <b>" + C.TRACE.join(", ") +
+            " Mbps</b>, walked the ladder up one rung at a time and down " +
+            "immediately, and never asked the server for anything but an " +
+            "immutable GET. Start <b>" + ss(r.startS) + "</b>, <b>" + r.stalls +
+            " stalls</b>, mean <b>" + r.meanMbps.toFixed(2) +
+            " Mbps</b>. A " + ss(r.startS) + " start that ramps beats a " +
+            ss(D.FIXED_START) +
+            " start that freezes, on every engagement measure there is.";
+
+      return d.stack([
+        sddesignvideostrea_phases(d, ctx),
+        head,
+        ladder,
+        buf,
+        cost,
+        rows.length
+          ? d.table(["seg", "measured", "rendition", "fetch", "buffer", "froze"],
+              rows)
+          : d.note("Nothing requested yet — press Play.", "idle"),
+        d.note(legend, r.stallS > 0 ? "bad" : started ? "ok" : undefined)
+      ]);
+    }
+  };
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sddesignwebcrawler  (design-web-crawler.md)
+  //
+  // The page's politeness arithmetic is already a derivation with a clock
+  // in it: 400 pages/s at 1 request/s/host means 400 distinct hosts in
+  // flight at all times. So the time axis is one minute of crawling --
+  // six frames of ten seconds -- with the same fetcher pool, the same
+  // seed set and the same link structure behind three frontiers:
+  //
+  //   flat      one FIFO, no politeness. Links cluster by host, so a
+  //             contiguous run is consumed by ~10 fetchers at once and the
+  //             host sees a 10 req/s burst. Hosts start refusing, and the
+  //             crawl dies at a computable moment.
+  //   frontier  the page's two-level frontier. One host, one back queue,
+  //             one worker: the rate limit is a property of the data
+  //             structure. 400 pages/s, 1/s/host, nothing blocked.
+  //   nonorm    the SAME two-level frontier -- same throughput, same
+  //             politeness -- with URL normalisation switched off. Session
+  //             IDs make every URL textually new, the Bloom filter
+  //             suppresses nothing it should, and the bandwidth is spent
+  //             on pages already held.
+  //
+  // FROM THE PAGE (verbatim):
+  //   1e9 pages/month / 30 / 86,400 = ~400 pages/s, peak ~1,200/s     s2
+  //   400/s x 500 KB = 200 MB/s = 1.6 Gbps                            s2
+  //   raw HTML ~100 KB compressed -> ~100 TB/month                    s2
+  //   URL metadata 200 B -> 200 GB/month                              s2
+  //   10B URLs x 100 B = 1 TB exact; x 10 bits = ~12 GB Bloom, ~1% FP s2,5
+  //   <= 1 request/second/host                                        s1
+  //   "at least 400 DISTINCT hosts in flight"  <- FETCHERS is derived
+  //                                               from exactly this     s2
+  //   simhash: Hamming distance <= 3 bits in 64                       s5
+  //   redirect hop cap 5; DNS 100 ms+ per lookup                      s6
+  //   a 304 is "a few hundred bytes instead of 500 KB"                s7
+  //
+  // DECLARED HERE: 500 seed hosts; 200 crawlable pages per host; 12
+  // links per page of which 85% are same-host; 5% of off-host links
+  // introduce a host we did not know; 8% of fetched pages are
+  // near-duplicates of something already stored; 55% of discovered URLs
+  // are already-seen once normalised; 60% of hosts stamp a session ID
+  // into every link; a 1 s fetch round trip; and a host that refuses
+  // after a burst of more than 5 requests in a second.
+  //
+  // The optimal k, the false-positive rate, the burst size, the blocked
+  // host count and the moment the flat crawl dies are all computed.
+  // ======================================================================
+  var sddesignwebcrawler_C = {
+    PAGES_MONTH: 1e9,      // page
+    DAYS_MONTH: 30,        // page
+    TARGET_ROUND: 400,     // page, "~400 pages/s"
+    PEAK: 1200,            // page
+    PER_HOST_PPS: 1,       // page
+    PAGE_KB: 500,          // page
+    STORED_KB: 100,        // page
+    META_B: 200,           // page
+    URLS_KNOWN: 1e10,      // page, 10B known URLs
+    URL_B: 100,            // page
+    BLOOM_BITS: 10,        // page, "~10 bits each"
+    SIMHASH_BITS: 64,      // page
+    SIMHASH_DIST: 3,       // page
+    REDIRECT_CAP: 5,       // page
+    DNS_MS: 100,           // page
+    CG_B: 300,             // declared, the page's "a few hundred bytes"
+    FRAMES: 6,             // declared
+    FRAME_S: 10,           // declared
+    SEED_HOSTS: 500,       // declared
+    HOST_PAGES: 200,       // declared
+    LINKS_PAGE: 12,        // declared
+    SAME_HOST: 0.85,       // declared
+    NEW_HOST_FRAC: 0.05,   // declared
+    MIRROR: 0.08,          // declared
+    NORM_DUP: 0.55,        // declared
+    SID_HOSTS: 0.60,       // declared
+    BURST_LIMIT: 5,        // declared
+    RTT_S: 1.0             // declared
+  };
+
+  var sddesignwebcrawler_D = (function () {
+    var C = sddesignwebcrawler_C, o = {};
+    o.TARGET = C.PAGES_MONTH / (C.DAYS_MONTH * 86400);        // 385.8/s
+    o.FETCHERS = C.TARGET_ROUND / C.PER_HOST_PPS;             // 400 -- the page
+    o.ATTEMPTS = o.FETCHERS * C.FRAME_S / C.RTT_S;            // 4,000 per frame
+    o.BW_BPS = C.TARGET_ROUND * C.PAGE_KB * 1000;             // 200 MB/s
+    o.BW_GBPS = o.BW_BPS * 8 / 1e9;                           // 1.6 Gbps
+    o.RUN_LEN = C.LINKS_PAGE * C.SAME_HOST;                   // 10.2 URLs
+    o.FLAT_HOSTS = Math.round(o.FETCHERS / o.RUN_LEN);        // 39 in flight
+    o.FLAT_BURST = o.FETCHERS / o.FLAT_HOSTS;                 // 10.3 req/s/host
+    o.COUNTER_PPS = o.FLAT_HOSTS * C.PER_HOST_PPS;            // 39/s if you coordinate
+    o.IDLE_FETCHERS = o.FETCHERS - o.COUNTER_PPS;             // 361 asleep
+    o.NEW_HOSTS_PAGE = C.LINKS_PAGE * (1 - C.SAME_HOST) * C.NEW_HOST_FRAC;  // 0.09
+    o.BLOOM_K = Math.round(C.BLOOM_BITS * Math.LN2);          // 7
+    o.BLOOM_FP = Math.pow(1 - Math.exp(-o.BLOOM_K / C.BLOOM_BITS), o.BLOOM_K);
+    o.BLOOM_B = C.URLS_KNOWN * C.BLOOM_BITS / 8;              // 12.5 GB
+    o.EXACT_B = C.URLS_KNOWN * C.URL_B;                       // 1 TB
+    o.BLOOM_RATIO = o.EXACT_B / o.BLOOM_B;                    // 80x
+    o.CG_SAVE = C.PAGE_KB * 1000 / C.CG_B;                    // 1,667x
+    o.STORE_MONTH_B = C.PAGES_MONTH * C.STORED_KB * 1000;     // 100 TB
+    o.META_MONTH_B = C.PAGES_MONTH * C.META_B;                // 200 GB
+    o.HOST_EXHAUST_S = C.HOST_PAGES / C.PER_HOST_PPS;         // 200 s
+    // the flat crawl's death: hosts blocked per page is 1/RUN_LEN, hosts
+    // discovered per page is NEW_HOSTS_PAGE, and it starts with SEED_HOSTS
+    o.BURN_PER_PAGE = 1 / o.RUN_LEN - o.NEW_HOSTS_PAGE;
+    return o;
+  })();
+
+  var sddesignwebcrawler_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+  function sddesignwebcrawler_trim(s) {
+    if (s.indexOf(".") < 0) return s;
+    return s.replace(/0+$/, "").replace(/\.$/, "");
+  }
+  function sddesignwebcrawler_n(x) {
+    if (!isFinite(x)) return "—";
+    var a = Math.abs(x), t = sddesignwebcrawler_trim;
+    if (a >= 1e9) return t((x / 1e9).toFixed(a >= 1e10 ? 0 : 1)) + "B";
+    if (a >= 1e6) return t((x / 1e6).toFixed(a >= 1e8 ? 0 : 1)) + "M";
+    return Math.round(x).toLocaleString("en-US");
+  }
+  function sddesignwebcrawler_bytes(b) {
+    if (!isFinite(b)) return "—";
+    var t = sddesignwebcrawler_trim;
+    if (b >= 1e12) return t((b / 1e12).toFixed(b >= 1e13 ? 0 : 1)) + " TB";
+    if (b >= 1e9) return t((b / 1e9).toFixed(b >= 1e11 ? 0 : 1)) + " GB";
+    if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
+    if (b >= 1e3) return (b / 1e3).toFixed(0) + " kB";
+    return Math.round(b) + " B";
+  }
+  function sddesignwebcrawler_p1(v) {
+    if (!isFinite(v)) return "0%";
+    return (v * 100 < 1 ? (v * 100).toFixed(2) : (v * 100).toFixed(0)) + "%";
+  }
+  function sddesignwebcrawler_months(pps) {
+    var C = sddesignwebcrawler_C;
+    if (!(pps > 0)) return "never";
+    var m = C.PAGES_MONTH / pps / (C.DAYS_MONTH * 86400);
+    return m.toFixed(m < 10 ? 1 : 0) + " month" + (m >= 2 ? "s" : "");
+  }
+  function sddesignwebcrawler_phases(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+    return d.pills(chips);
+  }
+  function sddesignwebcrawler_copy(r) {
+    var o = {}, k;
+    for (k in r) {
+      if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
+    }
+    return o;
+  }
+
+  function sddesignwebcrawler_blank(mode) {
+    var C = sddesignwebcrawler_C;
+    return {
+      mode: mode, f: 0, t: 0,
+      hosts: C.SEED_HOSTS, blocked: 0, fBlocked: 0, blockedFrac: 0,
+      attempts: 0, fSuccess: 0, fRefused: 0, success: 0, refused: 0,
+      perHost: 0, pps: 0, lostPages: 0,
+      unique: 0, fUnique: 0, dupes: 0, fDupes: 0, dupFrac: 0,
+      discovered: 0, fDiscovered: 0, newURLs: 0, fSuppressed: 0,
+      suppressed: 0, suppressRate: 0, falseSkip: 0, frontier: 0,
+      wastedB: 0, storedB: 0, bwB: 0
+    };
+  }
+
+  // ---- one minute of crawling ------------------------------------------
+  function sddesignwebcrawler_run(mode) {
+    var C = sddesignwebcrawler_C, D = sddesignwebcrawler_D;
+    var r = sddesignwebcrawler_blank(mode);
+    var out = [sddesignwebcrawler_copy(r)];
+    var f, succ, disc, newU, supp, dupFrac, dupSid, entryFrac;
+
+    for (f = 1; f <= C.FRAMES; f++) {
+      r.f = f;
+      r.t = f * C.FRAME_S;
+      r.attempts = D.ATTEMPTS;
+
+      if (mode === "flat") {
+        // a contiguous run of same-host URLs is pulled by RUN_LEN fetchers
+        // at once, so the host sees RUN_LEN requests inside one round trip
+        r.perHost = D.FLAT_BURST;
+        entryFrac = r.hosts > 0 ? r.blocked / r.hosts : 0;
+        succ = Math.round(D.ATTEMPTS * (1 - entryFrac));
+        r.fRefused = D.ATTEMPTS - succ;
+        r.fBlocked = Math.round(succ / D.RUN_LEN);   // one host per run consumed
+        r.blocked += r.fBlocked;
+        r.lostPages += r.fBlocked * (C.HOST_PAGES - Math.round(D.RUN_LEN));
+        r.hosts += Math.round(succ * D.NEW_HOSTS_PAGE);
+        r.blockedFrac = r.hosts > 0 ? r.blocked / r.hosts : 0;
+        dupFrac = C.MIRROR;
+      } else {
+        // one host, one back queue, one worker: the limit is structural
+        r.perHost = C.PER_HOST_PPS;
+        succ = Math.min(D.FETCHERS, r.hosts) * C.PER_HOST_PPS * C.FRAME_S;
+        r.fRefused = 0;
+        r.fBlocked = 0;
+        r.blockedFrac = 0;
+        r.hosts += Math.round(succ * D.NEW_HOSTS_PAGE);
+        if (mode === "nonorm") {
+          // on a session-ID host a URL is drawn from pages we may already
+          // hold, and nothing filters it: the odds are the share of that
+          // host we have already fetched
+          dupSid = Math.min(1, (f * C.FRAME_S * C.PER_HOST_PPS) / C.HOST_PAGES);
+          dupFrac = C.MIRROR + C.SID_HOSTS * dupSid;
+          r.dupSid = dupSid;
+        } else {
+          dupFrac = C.MIRROR;      // simhash discards these before storing
+        }
+      }
+
+      r.fSuccess = succ;
+      r.success += succ;
+      r.refused += r.fRefused;
+      r.pps = succ / C.FRAME_S;
+      r.dupFrac = dupFrac;
+      r.fDupes = Math.round(succ * dupFrac);
+      r.dupes += r.fDupes;
+      r.fUnique = succ - r.fDupes;
+      r.unique += r.fUnique;
+
+      disc = succ * C.LINKS_PAGE;
+      r.fDiscovered = disc;
+      r.discovered += disc;
+      if (mode === "nonorm") {
+        // only the hosts that do NOT stamp a session ID still dedup
+        supp = Math.round(disc * (1 - C.SID_HOSTS) * C.NORM_DUP);
+      } else {
+        supp = Math.round(disc * C.NORM_DUP);
+      }
+      r.fSuppressed = supp;
+      r.suppressed += supp;
+      r.suppressRate = disc > 0 ? supp / disc : 0;
+      newU = disc - supp;
+      r.newURLs += newU;
+      r.falseSkip += Math.round(newU * D.BLOOM_FP);
+      r.frontier += newU - succ;
+      if (r.frontier < 0) r.frontier = 0;
+
+      r.bwB = succ / C.FRAME_S * C.PAGE_KB * 1000;
+      r.storedB += r.fUnique * C.STORED_KB * 1000;
+      if (mode === "nonorm") r.wastedB += r.fDupes * C.PAGE_KB * 1000;
+
+      out.push(sddesignwebcrawler_copy(r));
+    }
+    return out;
+  }
+
+  function sddesignwebcrawler_build(mode) {
+    var C = sddesignwebcrawler_C, D = sddesignwebcrawler_D;
+    var nf = sddesignwebcrawler_n, by = sddesignwebcrawler_bytes;
+    var p1 = sddesignwebcrawler_p1, mo = sddesignwebcrawler_months;
+    var run = sddesignwebcrawler_run(mode);
+    var steps = [], f, r, cap, flag;
+
+    for (f = 0; f < run.length; f++) {
+      r = run[f];
+      if (f === 0) {
+        cap = mode === "flat"
+          ? "<b>" + nf(C.SEED_HOSTS) + " seed hosts</b> in one FIFO and <b>" +
+            nf(D.FETCHERS) + " fetchers</b> pulling from its head. No per-host " +
+            "limit, no coordination — maximum throughput, which is the point " +
+            "of this tab. Press Play."
+          : mode === "frontier"
+            ? "The same " + nf(C.SEED_HOSTS) + " seeds, the same " + nf(D.FETCHERS) +
+              " fetchers, arranged as the page's <b>two-level frontier</b>: " +
+              "priority queues in front, <b>one host → one back queue → " +
+              "one worker</b> behind, each with a next-allowed-fetch time. " +
+              nf(D.FETCHERS) + " fetchers came straight out of the page's own " +
+              "arithmetic: " + C.TARGET_ROUND + " pages/s ÷ " + C.PER_HOST_PPS +
+              " request/s/host. Press Play."
+            : "Identical frontier to the middle tab — same queues, same " +
+              "workers, same politeness. <b>One thing is switched off: URL " +
+              "normalisation.</b> " + (C.SID_HOSTS * 100).toFixed(0) +
+              "% of these hosts stamp a session ID into every link, so every URL " +
+              "they emit is textually new. Press Play.";
+        flag = "idle";
+        steps.push({ caption: cap, flag: flag, st: r });
+        continue;
+      }
+
+      if (mode === "flat") {
+        if (f === 1) {
+          cap = "t+" + r.t + " s. <b>" + nf(r.fSuccess) + " pages</b> — " +
+            nf(r.pps) + "/s, the target hit exactly. But links cluster: <b>" +
+            D.RUN_LEN.toFixed(1) + " of the " + C.LINKS_PAGE +
+            " links on a page are same-host</b>, so they land as a contiguous run " +
+            "and <b>" + Math.round(D.RUN_LEN) + " fetchers pull it at once</b>. " +
+            "Each of those hosts just saw <b>" + D.FLAT_BURST.toFixed(1) +
+            " requests in one second</b> against a limit of " + C.PER_HOST_PPS + ".";
+          flag = "warn";
+        } else if (f === 2) {
+          cap = "t+" + r.t + " s. <b>" + nf(r.blocked) +
+            " hosts</b> are now refusing us — " + p1(r.blockedFrac) +
+            " of every host we know about. Throughput falls to <b>" + nf(r.pps) +
+            "/s</b> and <b>" + nf(r.fRefused) +
+            "</b> fetches this frame came back 403.";
+          flag = "bad";
+        } else if (f === 3) {
+          cap = "t+" + r.t + " s. Every blocked host takes its remaining <b>" +
+            (C.HOST_PAGES - Math.round(D.RUN_LEN)) +
+            " pages</b> with it: <b>" + nf(r.lostPages) +
+            " pages</b> are now permanently out of reach, against <b>" +
+            nf(r.success) + "</b> actually fetched. <b>We are destroying the web " +
+            "faster than we are reading it.</b>";
+          flag = "bad";
+        } else if (f === 4) {
+          cap = "t+" + r.t + " s. We burn <b>" + (1 / D.RUN_LEN).toFixed(3) +
+            " hosts per page</b> fetched and discover <b>" +
+            D.NEW_HOSTS_PAGE.toFixed(3) +
+            "</b>, so the pool of hosts willing to answer shrinks on every " +
+            "single fetch. Throughput " + nf(r.pps) + "/s, and still falling.";
+          flag = "bad";
+        } else if (f === 5) {
+          cap = "t+" + r.t + " s. <b>" + p1(r.blockedFrac) +
+            " blocked.</b> At " + nf(r.pps) + " pages/s the month's " +
+            nf(C.PAGES_MONTH) + " would take <b>" + mo(r.pps) +
+            "</b>, and the rate is still going the wrong way.";
+          flag = "bad";
+        } else {
+          cap = "t+" + r.t + " s, one minute in. <b>" + nf(r.success) +
+            " fetched, " + nf(r.refused) + " refused, " + nf(r.blocked) +
+            " hosts lost, " + nf(r.lostPages) +
+            " pages now unreachable.</b> Nothing here is a scaling problem — " +
+            "the fetchers were never the bottleneck. <b>Being blocked is the real " +
+            "failure mode</b>, and a flat queue walks into it by construction " +
+            "because link structure, not scheduling, decides who gets hit.";
+          flag = "bad";
+        }
+      } else if (mode === "frontier") {
+        if (f === 1) {
+          cap = "t+" + r.t + " s. <b>" + nf(r.fSuccess) + " pages, " + nf(r.pps) +
+            "/s</b>, and every host saw exactly <b>" + C.PER_HOST_PPS +
+            " request/s</b>. No lock, no shared counter, no coordination: a host " +
+            "lives in one back queue served by one worker, so the rate limit is a " +
+            "property of the data structure.";
+          flag = "ok";
+        } else if (f === 2) {
+          cap = "t+" + r.t + " s. Of <b>" + nf(r.fDiscovered) +
+            "</b> links extracted this frame the Bloom filter suppressed <b>" +
+            nf(r.fSuppressed) + "</b> as already seen — " +
+            p1(r.suppressRate) + " — after normalising host case, default " +
+            "ports, fragments and tracking parameters. <b>Normalisation matters " +
+            "more than the filter</b>; the third tab is what happens without it.";
+          flag = "ok";
+        } else if (f === 3) {
+          cap = "t+" + r.t + " s. The filter is <b>" + by(D.BLOOM_B) +
+            "</b> against <b>" + by(D.EXACT_B) + "</b> for an exact set of the " +
+            "page's " + nf(C.URLS_KNOWN) + " URLs — " +
+            D.BLOOM_RATIO.toFixed(0) + "× smaller, at k = " + D.BLOOM_K +
+            " hashes and a false-positive rate of <b>" +
+            (D.BLOOM_FP * 100).toFixed(2) + "%</b>. <b>" + nf(r.falseSkip) +
+            "</b> genuinely new pages have been skipped for that. A false " +
+            "negative is impossible, so we can miss a page but never loop.";
+          flag = "ok";
+        } else if (f === 4) {
+          cap = "t+" + r.t + " s. Simhash discarded <b>" + nf(r.dupes) +
+            "</b> near-duplicates — mirrors and print versions, " +
+            p1(C.MIRROR) + " of fetches — on a Hamming distance of " +
+            C.SIMHASH_DIST + " bits in " + C.SIMHASH_BITS +
+            ". A byte-exact hash would have caught almost none of them; one " +
+            "rotating advert defeats it.";
+          flag = "ok";
+        } else if (f === 5) {
+          cap = "t+" + r.t + " s. Hosts known: <b>" + nf(r.hosts) +
+            "</b>, up from " + nf(C.SEED_HOSTS) + ", because " +
+            p1(1 - C.SAME_HOST) + " of links leave the host. The frontier holds <b>" +
+            nf(r.frontier) + "</b> URLs and is durable — losing it means " +
+            "recrawling everything, which is why it does not live in memory.";
+          flag = "ok";
+        } else {
+          cap = "t+" + r.t + " s, one minute in. <b>" + nf(r.success) +
+            " fetched at " + nf(r.pps) + "/s, " + nf(r.unique) +
+            " unique pages stored, zero hosts blocked, " +
+            by(r.bwB) + "/s of bandwidth</b> — the page's " +
+            D.BW_GBPS.toFixed(1) + " Gbps. At this rate the month's " +
+            nf(C.PAGES_MONTH) + " takes <b>" + mo(r.pps) + "</b>.";
+          flag = "ok";
+        }
+      } else {
+        if (f === 1) {
+          cap = "t+" + r.t + " s. <b>" + nf(r.pps) +
+            " pages/s, one request per host per second, nothing blocked</b> — " +
+            "politeness and throughput are exactly as good as the middle tab. " +
+            "Watch what is <i>stored</i> instead.";
+          flag = "warn";
+        } else if (f === 2) {
+          cap = "t+" + r.t + " s. The filter suppressed only <b>" +
+            p1(r.suppressRate) + "</b> of discovered links, against " +
+            p1(C.NORM_DUP) + " in the middle tab. It is working perfectly; it is " +
+            "being asked about URLs that are textually new and semantically old, " +
+            "and <b>a Bloom filter cannot see that</b>.";
+          flag = "bad";
+        } else if (f === 3) {
+          cap = "t+" + r.t + " s. The frontier holds <b>" + nf(r.frontier) +
+            "</b> URLs and is growing at <b>" +
+            nf(r.fDiscovered - r.fSuppressed - r.fSuccess) +
+            "/frame</b>. Session IDs make a host's URL space infinite, so this " +
+            "does not converge — it is the same shape as a calendar trap, " +
+            "arriving through the front door.";
+          flag = "bad";
+        } else if (f === 4) {
+          cap = "t+" + r.t + " s. <b>" + p1(r.dupFrac) +
+            "</b> of what we fetch is content we already hold, and the figure " +
+            "climbs because it is <i>proportional to how much of each host we " +
+            "have already seen</i>: " + p1(r.dupSid) + " of every session-ID " +
+            "host, so far.";
+          flag = "bad";
+        } else if (f === 5) {
+          cap = "t+" + r.t + " s. <b>" + by(r.wastedB) +
+            "</b> of pages we already had, fetched again. At " +
+            by(r.bwB) + "/s that is <b>" +
+            by(r.wastedB / (r.t) * 86400) + "/day</b> of bandwidth buying nothing.";
+          flag = "bad";
+        } else {
+          cap = "t+" + r.t + " s, one minute in. <b>" + nf(r.success) +
+            " fetched</b> — the same as the middle tab — but only <b>" +
+            nf(r.unique) + " unique</b>. A host is exhausted after <b>" +
+            D.HOST_EXHAUST_S + " s</b> at " + C.PER_HOST_PPS +
+            "/s, and by then the duplicate rate on a session-ID host is <b>100%</b>: " +
+            "full throughput, perfect politeness, <b>zero progress</b>. " +
+            "Normalise before you check, or the filter is checking the wrong thing.";
+          flag = "bad";
+        }
+      }
+
+      steps.push({ caption: cap, flag: flag, st: r });
+    }
+
+    return {
+      id: mode,
+      label: mode === "flat" ? "Flat queue, no politeness"
+        : mode === "frontier" ? "Two-level frontier"
+        : "Same frontier, no normalisation",
+      steps: steps,
+      phases: mode === "flat"
+        ? ["seeded", "bursts of 10", "hosts refusing", "pages lost",
+          "pool shrinking", "most hosts gone", "dying"]
+        : mode === "frontier"
+          ? ["seeded", "400 hosts in flight", "filter suppressing",
+            "12 GB, not 1 TB", "simhash", "frontier durable", "one minute"]
+          : ["seeded", "same 400/s", "filter blind", "frontier bloating",
+            "duplicates stored", "bandwidth wasted", "one minute"]
+    };
+  }
+
+  S["sddesignwebcrawler"] = {
+    title: "Crawl one minute, three frontiers",
+    note: (function () {
+      var C = sddesignwebcrawler_C, D = sddesignwebcrawler_D;
+      var nf = sddesignwebcrawler_n, by = sddesignwebcrawler_bytes;
+      return "The page's politeness arithmetic, run for a minute in <b>" +
+        C.FRAMES + " frames of " + C.FRAME_S + " s</b>. <b>" +
+        nf(C.PAGES_MONTH) + " pages/month ÷ " + C.DAYS_MONTH +
+        " ÷ 86,400 = " + D.TARGET.toFixed(0) + " pages/s</b> (the page rounds " +
+        "to " + C.TARGET_ROUND + "), and at its <b>" + C.PER_HOST_PPS +
+        " request/s/host</b> that needs <b>" + nf(D.FETCHERS) +
+        " distinct hosts in flight</b> — so the fetcher count here is the " +
+        "page's own derivation, not a guess. <b>Declared here</b>: " +
+        nf(C.SEED_HOSTS) + " seed hosts of " + C.HOST_PAGES + " pages each; " +
+        C.LINKS_PAGE + " links per page of which " + (C.SAME_HOST * 100).toFixed(0) +
+        "% are same-host, which makes a contiguous run of <b>" +
+        D.RUN_LEN.toFixed(1) + "</b> in a flat queue and a <b>" +
+        D.FLAT_BURST.toFixed(1) + " req/s</b> burst at " + Math.round(D.RUN_LEN) +
+        " fetchers; " + (C.NEW_HOST_FRAC * 100).toFixed(0) +
+        "% of off-host links being a new host; " + (C.MIRROR * 100).toFixed(0) +
+        "% of fetches being near-duplicates; " + (C.NORM_DUP * 100).toFixed(0) +
+        "% of discovered URLs already seen once normalised; " +
+        (C.SID_HOSTS * 100).toFixed(0) + "% of hosts stamping a session ID; a " +
+        C.RTT_S + " s round trip; and a host that refuses after more than " +
+        C.BURST_LIMIT + " requests in a second. The Bloom figures are computed " +
+        "from the page's " + C.BLOOM_BITS + " bits/URL: <b>k = " + D.BLOOM_K +
+        "</b>, false positives <b>" + (D.BLOOM_FP * 100).toFixed(2) +
+        "%</b> (its “roughly 1%”), <b>" + by(D.BLOOM_B) + "</b> against " +
+        by(D.EXACT_B) + " for an exact set of " + nf(C.URLS_KNOWN) +
+        " URLs. Everything else — blocked hosts, throughput, frontier depth, " +
+        "unique pages — is accumulated by the run.";
+    })(),
+    interval: 1500,
+
+    scenarios: [
+      sddesignwebcrawler_build("flat"),
+      sddesignwebcrawler_build("frontier"),
+      sddesignwebcrawler_build("nonorm")
+    ],
+
+    draw: function (step, d, ctx) {
+      var C = sddesignwebcrawler_C, D = sddesignwebcrawler_D;
+      var nf = sddesignwebcrawler_n, by = sddesignwebcrawler_bytes;
+      var p1 = sddesignwebcrawler_p1, mo = sddesignwebcrawler_months;
+      var r = step.st;
+      var started = r.f > 0;
+      var isFlat = r.mode === "flat";
+      var isNoNorm = r.mode === "nonorm";
+      var i;
+
+      // ---- headline -----------------------------------------------------
+      var head = d.cols([
+        d.big(started ? nf(r.pps) + "/s" : "—",
+          "pages fetched · the page's target is " + C.TARGET_ROUND + "/s",
+          !started ? "idle"
+            : r.pps >= C.TARGET_ROUND * 0.95 ? "ok"
+            : r.pps >= C.TARGET_ROUND * 0.5 ? "warn" : "bad"),
+        d.stat({
+          label: "requests per second to one host",
+          value: started ? r.perHost.toFixed(1) : "—",
+          sub: "the page's limit is " + C.PER_HOST_PPS + "/s" +
+            (started && r.perHost > C.PER_HOST_PPS
+              ? "  ·  ×" + (r.perHost / C.PER_HOST_PPS).toFixed(1)
+              : ""),
+          flag: !started ? "idle"
+            : r.perHost > C.PER_HOST_PPS ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "unique pages added to the index",
+          value: started ? nf(r.unique) : "0",
+          sub: started
+            ? p1(r.success > 0 ? r.unique / r.success : 0) + " of " +
+              nf(r.success) + " fetched"
+            : "nothing fetched",
+          flag: !started ? "idle"
+            : r.success > 0 && r.unique / r.success < 0.85 ? "bad" : "ok"
+        })
+      ]);
+
+      // ---- the frontier, and what the fetchers are holding ---------------
+      var slots = [], hostIdx, letter, sid, isBlk;
+      var runLen = Math.max(1, Math.round(D.RUN_LEN));
+      var offset = isFlat
+        ? Math.round(r.success / Math.max(1, D.RUN_LEN))
+        : r.f * 4;
+      for (i = 0; i < 12; i++) {
+        hostIdx = offset + (isFlat ? Math.floor(i / runLen) : i);
+        letter = sddesignwebcrawler_ALPHA.charAt(hostIdx % 26);
+        sid = (hostIdx % 5) < 3;                   // the declared 60%
+        isBlk = isFlat && started &&
+          ((hostIdx * 7) % 100) < r.blockedFrac * 100;
+        slots.push({
+          label: letter,
+          flag: !started ? "idle"
+            : isBlk ? "bad"
+            : isFlat ? "warn"
+            : isNoNorm && sid ? "warn" : "ok",
+          title: !started ? "idle fetcher"
+            : isBlk ? letter + " — refusing us, every fetch returns 403"
+            : isFlat
+              ? letter + " — " + runLen + " fetchers hold this one host at once"
+              : isNoNorm && sid
+                ? letter + " — stamps a session ID into every link, so its " +
+                  "URLs never dedup"
+                : letter + " — its own back queue, its own worker, " +
+                  C.PER_HOST_PPS + " request/s"
+        });
+      }
+
+      var frontRows = [];
+      if (isFlat) {
+        frontRows.push({ label: "distinct hosts across " + nf(D.FETCHERS) +
+          " in-flight URLs", value: nf(D.FLAT_HOSTS),
+          flag: "bad" });
+        frontRows.push({ label: "same-host links per page · the run length",
+          value: D.RUN_LEN.toFixed(1) + " of " + C.LINKS_PAGE, flag: "warn" });
+        frontRows.push({ label: "if you add a shared per-host counter instead",
+          value: nf(D.COUNTER_PPS) + " pages/s  ·  " + nf(D.IDLE_FETCHERS) +
+            " fetchers asleep", flag: "warn" });
+      } else {
+        frontRows.push({ label: "back queues with a worker",
+          value: nf(Math.min(D.FETCHERS, r.hosts)) + " of " + nf(r.hosts) +
+            " hosts", flag: "ok" });
+        frontRows.push({ label: "next-allowed-fetch spacing",
+          value: (1 / C.PER_HOST_PPS).toFixed(0) + " s, per queue", flag: "ok" });
+        frontRows.push({ label: "coordination between fetchers",
+          value: "none — the invariant does it", flag: "ok" });
+      }
+      frontRows.push({ label: "frontier depth",
+        value: nf(r.frontier) + " URLs",
+        flag: !started ? "idle" : isNoNorm ? "bad" : "ok" });
+      frontRows.push({ label: "hosts known · blocked",
+        value: nf(r.hosts) + "  ·  " + nf(r.blocked),
+        flag: r.blocked > 0 ? "bad" : started ? "ok" : "idle" });
+
+      var front = d.node({
+        title: isFlat ? "frontier · one flat FIFO"
+          : "frontier · priority in front, one host per back queue",
+        status: !started ? "SEEDED"
+          : isFlat ? (r.blockedFrac > 0.5 ? "MOSTLY BLOCKED" : "HAMMERING")
+          : isNoNorm ? "POLITE, AND BLOATING" : "POLITE",
+        statusFlag: !started ? "idle" : isFlat ? "bad" : isNoNorm ? "warn" : "ok",
+        badge: nf(D.FETCHERS) + " fetchers · " + C.RTT_S + " s round trip",
+        meta: isFlat
+          ? "the queue is not random: " + (C.SAME_HOST * 100).toFixed(0) +
+            "% of a page's links are same-host, so they append as a contiguous " +
+            "run and " + runLen + " fetchers pull the same host at the same moment"
+          : "one host maps to exactly one queue served by exactly one worker, " +
+            "which turns distributed rate limiting into a data-structure property",
+        flag: !started ? "idle" : isFlat ? "bad" : "ok",
+        rows: frontRows,
+        body: d.lane({
+          label: isFlat ? "in flight" : "back queues",
+          cells: slots
+        })
+      });
+
+      // ---- politeness ------------------------------------------------------
+      var polite = d.node({
+        title: "politeness · the constraint that shapes the design",
+        status: !started ? "IDLE"
+          : r.perHost > C.PER_HOST_PPS ? "OVER THE LIMIT" : "WITHIN THE LIMIT",
+        statusFlag: !started ? "idle"
+          : r.perHost > C.PER_HOST_PPS ? "bad" : "ok",
+        badge: "≤ " + C.PER_HOST_PPS + " req/s/host, honour Crawl-delay",
+        meta: "robots.txt is cached per host — refetching it would itself " +
+          "double our request volume to every host — and DNS is cached too, " +
+          "which at " + C.DNS_MS + " ms a lookup is worth " +
+          (C.DNS_MS / 1000 * C.TARGET_ROUND).toFixed(0) +
+          " fetcher-seconds every second at " + C.TARGET_ROUND + " pages/s",
+        flag: !started ? "idle" : r.blocked > 0 ? "bad" : "ok",
+        gauges: [{
+          label: "hosts refusing us",
+          pct: r.blockedFrac * 100,
+          value: nf(r.blocked) + " of " + nf(r.hosts) + "  ·  " +
+            p1(r.blockedFrac),
+          flag: !started ? "idle"
+            : r.blockedFrac > 0.5 ? "bad" : r.blocked > 0 ? "warn" : "ok"
+        }],
+        rows: [
+          { label: "fetches refused this frame · 403",
+            value: nf(r.fRefused), flag: r.fRefused > 0 ? "bad" : "ok" },
+          { label: "pages now permanently unreachable",
+            value: nf(r.lostPages),
+            flag: r.lostPages > 0 ? "bad" : started ? "ok" : "idle" },
+          { label: nf(C.PAGES_MONTH) + " pages/month at this rate",
+            value: started ? mo(r.pps) : "—",
+            flag: !started ? "idle"
+              : r.pps >= D.TARGET ? "ok" : "bad" },
+          { label: "redirect hops capped · read timeout",
+            value: C.REDIRECT_CAP + " hops · abort on a huge body",
+            flag: "ok" }
+        ]
+      });
+
+      // ---- deduplication ---------------------------------------------------
+      var dedup = d.node({
+        title: "dedup · Bloom on URLs, simhash on content",
+        status: !started ? "IDLE"
+          : isNoNorm ? "SUPPRESSING " + p1(r.suppressRate) : "WORKING",
+        statusFlag: !started ? "idle" : isNoNorm ? "bad" : "ok",
+        badge: "k = " + D.BLOOM_K + " · " + C.BLOOM_BITS + " bits/URL · FP " +
+          (D.BLOOM_FP * 100).toFixed(2) + "%",
+        meta: "a Bloom filter can only over-report membership, so the failure " +
+          "mode is “miss a page” and never “loop forever” " +
+          "— and it holds " + nf(C.URLS_KNOWN) + " URLs in " +
+          by(D.BLOOM_B) + " where an exact set needs " + by(D.EXACT_B),
+        flag: !started ? "idle" : isNoNorm ? "bad" : "ok",
+        gauges: [{
+          label: "discovered URLs suppressed as already seen",
+          pct: r.suppressRate * 100,
+          value: nf(r.suppressed) + " of " + nf(r.discovered) + "  ·  " +
+            p1(r.suppressRate),
+          flag: !started ? "idle"
+            : r.suppressRate < C.NORM_DUP * 0.9 ? "bad" : "ok"
+        }],
+        rows: [
+          { label: "new pages wrongly skipped · false positives",
+            value: nf(r.falseSkip),
+            flag: started ? "warn" : "idle" },
+          { label: "false negatives · the reason we can never loop",
+            value: "0, impossible", flag: "ok" },
+          { label: isNoNorm
+              ? "fetched content we already hold · nothing filters it"
+              : "near-duplicates discarded · Hamming ≤ " +
+                C.SIMHASH_DIST + "/" + C.SIMHASH_BITS,
+            value: nf(r.dupes) + "  ·  " + p1(r.dupFrac),
+            flag: !started ? "idle" : isNoNorm ? "bad" : "ok" },
+          { label: "bandwidth · stored (compressed)",
+            value: by(r.bwB) + "/s  ·  " + by(r.storedB),
+            flag: started ? "ok" : "idle" },
+          { label: isNoNorm ? "bandwidth spent on pages we had"
+              : "recrawl with a conditional GET",
+            value: isNoNorm
+              ? by(r.wastedB) + (r.t > 0
+                  ? "  ·  " + by(r.wastedB / r.t * 86400) + "/day" : "")
+              : C.CG_B + " B vs " + C.PAGE_KB + " kB  ·  ×" +
+                nf(D.CG_SAVE) + " cheaper",
+            flag: !started ? "idle" : isNoNorm ? "bad" : "ok" }
+        ]
+      });
+
+      // ---- history -----------------------------------------------------------
+      var rows = [], all = ctx.scenario.steps;
+      for (i = 1; i <= r.f && i < all.length; i++) {
+        var h = all[i].st;
+        rows.push([
+          "t+" + h.t + "s",
+          nf(h.pps) + "/s",
+          h.perHost.toFixed(1),
+          nf(h.blocked),
+          nf(h.fUnique),
+          nf(h.frontier)
+        ]);
+      }
+
+      var legend = isFlat
+        ? "Both flat-queue options are here, and both lose. Run it without a " +
+          "per-host limit and link structure hammers <b>" + nf(D.FLAT_HOSTS) +
+          "</b> hosts at <b>" + D.FLAT_BURST.toFixed(1) +
+          " req/s</b> until they refuse. Add a shared per-host counter instead " +
+          "and throughput is capped by the head window's host diversity: <b>" +
+          nf(D.COUNTER_PPS) + " pages/s</b> with <b>" + nf(D.IDLE_FETCHERS) +
+          "</b> of " + nf(D.FETCHERS) + " fetchers asleep on a rate limiter."
+        : isNoNorm
+          ? "<b>Throughput, politeness and blocked hosts are identical to the " +
+            "middle tab.</b> The only change is that URLs are checked as they " +
+            "were found. <code>HTTP://Example.com:80/a/../b?sid=1</code> and " +
+            "<code>http://example.com/b</code> are the same page, and the filter " +
+            "cannot know that — so suppression drops to <b>" +
+            p1(r.suppressRate) + "</b>, the frontier grows without converging, " +
+            "and the duplicate rate rises with how much of each host we already " +
+            "hold. <b>Normalise before you check, or the filter is answering the " +
+            "wrong question.</b>"
+          : "“One host, one queue, one worker” converts distributed " +
+            "rate limiting into a data-structure property: no lock, no shared " +
+            "counter, no contention, and <b>" + nf(D.FETCHERS) +
+            "</b> fetchers busy because the page's own arithmetic says " +
+            C.TARGET_ROUND + " pages/s ÷ " + C.PER_HOST_PPS +
+            "/s/host needs that many distinct hosts in flight at all times.";
+
+      return d.stack([
+        sddesignwebcrawler_phases(d, ctx),
+        head,
+        front,
+        polite,
+        dedup,
+        rows.length
+          ? d.table(["t", "rate", "req/s/host", "blocked", "unique", "frontier"],
+              rows)
+          : d.note("Seeds loaded, nothing fetched yet.", "idle"),
+        d.note(legend, isFlat || isNoNorm ? "bad" : "ok")
+      ]);
+    }
+  };
+
+  // ====================================================================
   // ======================================================================
   // SIM · sdestimation  (estimation.md)
   // The page's five-line template (§4) executed one line at a time on the
@@ -8566,6 +17252,1349 @@ S["sdapidesign"] = {
   };
 
   // ====================================================================
+// ======================================================================
+// SIM · sdidempotency  (idempotency.md)
+//
+// TIME AXIS: one $100 charge crossing client -> server -> payment provider,
+// with the page's own lost response and the retry that follows it. The page
+// draws exactly this in section 1 as ASCII; the sim runs it. Three tabs are
+// three runs of the same machinery:
+//   1. no idempotency key at all            -> the double charge
+//   2. the page's charge() implemented      -> one charge, and the client
+//                                              still gets a real answer
+//   3. SELECT-then-INSERT instead of the
+//      atomic claim                         -> the race the page names, and
+//                                              the reconciliation backstop
+//
+// CONFIG — page figures used verbatim
+//   amount 10000 (cents), currency "usd", source "card_xyz"
+//                                          — the page's POST /v1/charges body
+//   Idempotency-Key: 8f14e45f-ea1c-4a4b-9f3e-2c0d7b1a9e55
+//                                          — the page's request header
+//   expires_at = now() + interval '24 hours'   — the page's CREATE TABLE
+//   state is in_progress | completed           — the page's schema
+//   200 on success and on replay, 409 on in_progress and on a request_hash
+//   mismatch                                   — the page's charge()
+//   request_hash is stored and compared        — the page's charge()
+//   "a job compares our ledger to the provider's daily settlement and refunds
+//   duplicates"                                — the page's section 6
+//
+// CONFIG — declared here, because the page states none
+//   ONE response is lost, on the first attempt (the page's ASCII diagram)
+//   ONE impatient concurrent retry arrives while state = in_progress
+//   ONE buggy caller reuses the key with amount 20000 (twice the real one),
+//     so the stored request_hash has something to catch
+//   the provider settles daily, so reconciliation runs 24 h after the charge
+//   request_hash is a real FNV-1a over the body string, computed below — the
+//     "same key, different body" comparison is therefore a real comparison,
+//     not a typed-in verdict
+// ======================================================================
+
+var sdidempotency_AMOUNT = 10000;      // page: {"amount": 10000, ...}
+var sdidempotency_BAD_AMOUNT = 20000;  // declared: the buggy reuse
+var sdidempotency_KEY = "8f14e45f-ea1c-4a4b-9f3e-2c0d7b1a9e55";  // page
+var sdidempotency_TTL_H = 24;          // page: interval '24 hours'
+var sdidempotency_OK = 200;            // page: return 200, result
+var sdidempotency_CONFLICT = 409;      // page: raise Conflict(...)   # 409
+var sdidempotency_ERR = 500;           // a PRIMARY KEY violation escapes
+var sdidempotency_SETTLE_H = 24;       // declared: "daily settlement"
+
+function sdidempotency_body(cents) {
+  return '{"amount":' + cents + ',"currency":"usd","source":"card_xyz"}';
+}
+
+// FNV-1a, 32-bit, shift-multiply form so every step stays inside int32.
+function sdidempotency_hash(s) {
+  var h = 2166136261, i;
+  for (i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return ("0000000" + h.toString(16)).slice(-8);
+}
+
+var sdidempotency_BODY = sdidempotency_body(sdidempotency_AMOUNT);
+var sdidempotency_HASH = sdidempotency_hash(sdidempotency_BODY);
+var sdidempotency_BAD_BODY = sdidempotency_body(sdidempotency_BAD_AMOUNT);
+var sdidempotency_BAD_HASH = sdidempotency_hash(sdidempotency_BAD_BODY);
+var sdidempotency_SHORT = sdidempotency_KEY.slice(0, 8);
+
+function sdidempotency_usd(cents) {
+  var v = cents / 100;
+  return "$" + v.toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2
+  });
+}
+
+// ----------------------------------------------------------------------
+// The world: our table, the provider's charge log, and what the client
+// actually holds in its hand. Nothing else is tracked, because nothing else
+// decides the outcome.
+// ----------------------------------------------------------------------
+function sdidempotency_fresh() {
+  return {
+    rows: [],       // idempotency_keys
+    provider: [],   // charges actually executed at the payment provider
+    refunds: [],    // compensating movements
+    requests: 0,    // requests the server saw
+    replays: 0,
+    conflicts: 0,
+    errors: 0,
+    held: ""        // what answer the client is holding right now
+  };
+}
+
+function sdidempotency_snap(st) {
+  var s = {
+    rows: [], provider: [], refunds: [],
+    requests: st.requests, replays: st.replays,
+    conflicts: st.conflicts, errors: st.errors, held: st.held
+  }, i;
+  for (i = 0; i < st.rows.length; i++) {
+    s.rows.push({
+      key: st.rows[i].key, hash: st.rows[i].hash,
+      state: st.rows[i].state, code: st.rows[i].code, body: st.rows[i].body
+    });
+  }
+  for (i = 0; i < st.provider.length; i++) {
+    s.provider.push({ id: st.provider[i].id, cents: st.provider[i].cents });
+  }
+  for (i = 0; i < st.refunds.length; i++) {
+    s.refunds.push({ id: st.refunds[i].id, cents: st.refunds[i].cents });
+  }
+  s.gross = 0;
+  for (i = 0; i < s.provider.length; i++) s.gross += s.provider[i].cents;
+  s.back = 0;
+  for (i = 0; i < s.refunds.length; i++) s.back += s.refunds[i].cents;
+  s.captured = s.gross - s.back;
+  return s;
+}
+
+// perform_charge() — the only thing in the system that moves money.
+function sdidempotency_charge(st, cents) {
+  var id = "ch_" + (st.provider.length + 1);
+  st.provider.push({ id: id, cents: cents });
+  return id;
+}
+
+// ----------------------------------------------------------------------
+// TAB 1 — no idempotency key. POST /orders is not idempotent (the page's
+// table, row 4) and nothing in the request lets the server recognise the
+// retry, so the second attempt is simply a second charge.
+// ----------------------------------------------------------------------
+function sdidempotency_tabNone() {
+  var st = sdidempotency_fresh();
+  var steps = [];
+  function frame(o) { o.snap = sdidempotency_snap(st); steps.push(o); }
+
+  frame({
+    hasTable: false, wire: "(the wire is quiet)",
+    flag: "idle",
+    caption: "<b>One charge of " + sdidempotency_usd(sdidempotency_AMOUNT) +
+      ", no idempotency key.</b> The request carries nothing the server could " +
+      "use to recognise a repeat of it. Press Play and watch the page's own " +
+      "section-1 diagram run: the charge succeeds, the response is lost, and " +
+      "the client has to decide something it cannot decide."
+  });
+
+  st.requests++;
+  frame({
+    hasTable: false,
+    wire: "POST /v1/charges   " + sdidempotency_BODY,
+    flag: "warn",
+    caption: "<b>Attempt 1 leaves the client.</b> A bare <code>POST</code> — " +
+      "the page's table marks it <b>not idempotent</b>, because it creates a " +
+      "new thing every time it is executed. The body hashes to <code>" +
+      sdidempotency_HASH + "</code>, but nobody is storing that."
+  });
+
+  sdidempotency_charge(st, sdidempotency_AMOUNT);
+  st.held = "still waiting";
+  frame({
+    hasTable: false,
+    wire: "perform_charge() -> ch_1   " + sdidempotency_usd(sdidempotency_AMOUNT) + " captured",
+    flag: "warn",
+    caption: "<b>The charge succeeds.</b> " +
+      sdidempotency_usd(sdidempotency_AMOUNT) + " has left the customer's " +
+      "card and the provider has recorded <code>ch_1</code>. The server writes " +
+      "a <code>" + sdidempotency_OK + "</code> and considers itself finished."
+  });
+
+  frame({
+    hasTable: false,
+    wire: "X  " + sdidempotency_OK + " response lost  X",
+    flag: "bad",
+    caption: "<b>The response never arrives.</b> This is the whole problem in " +
+      "one frame: the money moved, and the only record of that fact which the " +
+      "client could see has been dropped by the network."
+  });
+
+  st.held = "nothing — timed out";
+  frame({
+    hasTable: false,
+    wire: "timeout -- retry?",
+    flag: "bad",
+    caption: "<b>The client times out and cannot tell which world it is in.</b> " +
+      "Request never arrived, or request succeeded and the answer was lost — " +
+      "the observable evidence is <i>identical</i>. This is the two generals " +
+      "problem, and the page is right that no further exchange of messages " +
+      "fixes it. Retry and risk a double charge; do not retry and risk a lost " +
+      "order."
+  });
+
+  st.requests++;
+  frame({
+    hasTable: false,
+    wire: "POST /v1/charges   " + sdidempotency_BODY + "   (retry)",
+    flag: "bad",
+    caption: "<b>It retries — byte for byte the same request.</b> Notice that " +
+      "this is the <i>correct</i> choice for a lost request and the " +
+      "<i>wrong</i> one for a lost response, and the client has no way to " +
+      "know which it is doing."
+  });
+
+  sdidempotency_charge(st, sdidempotency_AMOUNT);
+  st.held = sdidempotency_OK + " + charge ch_2";
+  frame({
+    hasTable: false,
+    wire: "perform_charge() -> ch_2   " + sdidempotency_usd(sdidempotency_AMOUNT) + " captured",
+    flag: "bad",
+    caption: "<b>A second charge executes.</b> The server has no key column, " +
+      "no request hash and no stored response, so <code>ch_2</code> is simply " +
+      "another charge. Two requests, two charges, <b>" +
+      sdidempotency_usd(2 * sdidempotency_AMOUNT) + "</b> taken for one " +
+      "intended purchase."
+  });
+
+  frame({
+    hasTable: false, done: true,
+    wire: "ledger: 2 charges, 1 intended",
+    flag: "bad",
+    caption: "<b>" + sdidempotency_usd(sdidempotency_AMOUNT) + " of the " +
+      sdidempotency_usd(2 * sdidempotency_AMOUNT) + " taken should not have " +
+      "been.</b> Nothing here was a bug in the code — the charge worked, the " +
+      "retry was reasonable, the network lost one packet. <i>The design simply " +
+      "had no way to make the second request harmless, and that is the thing " +
+      "idempotency adds.</i>"
+  });
+
+  return {
+    id: "none", label: "No key",
+    phases: ["quiet", "POST #1", "charge", "response lost", "timeout",
+             "retry", "charge again", "ledger"],
+    steps: steps
+  };
+}
+
+// ----------------------------------------------------------------------
+// TAB 2 — the page's charge(), executed line by line.
+// ----------------------------------------------------------------------
+function sdidempotency_tabKeys() {
+  var st = sdidempotency_fresh();
+  var steps = [];
+  function frame(o) { o.snap = sdidempotency_snap(st); steps.push(o); }
+
+  frame({
+    hasTable: true, wire: "(the wire is quiet)",
+    flag: "idle",
+    caption: "<b>Same charge, same lost response — now with the page's " +
+      "implementation behind it.</b> The client generates one key for this " +
+      "logical operation and reuses it on every retry. Four requests will " +
+      "arrive; watch how many of them move money."
+  });
+
+  st.requests++;
+  frame({
+    hasTable: true,
+    wire: "POST  Idempotency-Key: " + sdidempotency_KEY,
+    flag: "ok",
+    caption: "<b>Attempt 1 carries a client-generated key.</b> Client-" +
+      "generated matters: asking the server for a key would itself be a " +
+      "request that can fail, which is the problem you are trying to remove. " +
+      "The body hashes to <code>" + sdidempotency_HASH + "</code>."
+  });
+
+  st.rows.push({
+    key: sdidempotency_KEY, hash: sdidempotency_HASH,
+    state: "in_progress", code: "", body: ""
+  });
+  frame({
+    hasTable: true,
+    wire: "INSERT … ON CONFLICT (key) DO NOTHING RETURNING key  -> claimed",
+    flag: "ok",
+    caption: "<b>The key is claimed atomically.</b> The <code>PRIMARY KEY</code> " +
+      "constraint <i>is</i> the lock — one statement, no window. The row exists " +
+      "with <code>state = in_progress</code> and the request hash already " +
+      "stored, before a single rupee has moved."
+  });
+
+  st.requests++;
+  st.conflicts++;
+  frame({
+    hasTable: true,
+    wire: sdidempotency_CONFLICT + " request in progress, retry shortly",
+    flag: "warn",
+    caption: "<b>An impatient concurrent retry arrives mid-flight.</b> Its " +
+      "<code>INSERT</code> conflicts, the stored hash <code>" +
+      sdidempotency_HASH + "</code> matches, and the state is still " +
+      "<code>in_progress</code> — so it gets <b>" + sdidempotency_CONFLICT +
+      "</b> and executes nothing. <i>This is the request that a " +
+      "select-then-insert would have allowed through; tab 3 shows what that " +
+      "costs.</i>"
+  });
+
+  sdidempotency_charge(st, sdidempotency_AMOUNT);
+  st.rows[0].state = "completed";
+  st.rows[0].code = String(sdidempotency_OK);
+  st.rows[0].body = "ch_1 / " + sdidempotency_usd(sdidempotency_AMOUNT);
+  frame({
+    hasTable: true,
+    wire: "BEGIN; perform_charge() -> ch_1; UPDATE … state='completed'; COMMIT",
+    flag: "ok",
+    caption: "<b>The charge and the recorded response commit together.</b> " +
+      "One transaction. A crash between the two would leave a claimed key " +
+      "with no answer stored, and the next retry would find " +
+      "<code>in_progress</code> forever — which is why this is one " +
+      "<code>BEGIN</code> and not two statements."
+  });
+
+  st.held = "nothing — timed out";
+  frame({
+    hasTable: true,
+    wire: "X  " + sdidempotency_OK + " response lost  X   ->  timeout",
+    flag: "warn",
+    caption: "<b>The same packet is lost as in tab 1.</b> The client is in " +
+      "exactly the same state of ignorance — it still cannot distinguish the " +
+      "two worlds. Nothing about the uncertainty has been solved. What has " +
+      "changed is what happens next."
+  });
+
+  st.requests++;
+  st.replays++;
+  st.held = sdidempotency_OK + " + ch_1 (replayed)";
+  frame({
+    hasTable: true,
+    wire: "retry -> conflict -> hash matches -> completed -> replay stored " +
+      sdidempotency_OK,
+    flag: "ok",
+    caption: "<b>The retry replays the stored response.</b> No second charge, " +
+      "and — the part the page says matters most — the client gets the <i>real " +
+      "answer</i>, charge <code>ch_1</code>, not a bare \"already processed\". " +
+      "It retried because it had no answer; a system that prevents the " +
+      "duplicate but withholds the result has solved half the problem."
+  });
+
+  st.requests++;
+  st.conflicts++;
+  frame({
+    hasTable: true,
+    wire: "reuse key with amount " + sdidempotency_BAD_AMOUNT + "  ->  hash " +
+      sdidempotency_BAD_HASH + " != " + sdidempotency_HASH,
+    flag: "warn",
+    caption: "<b>A buggy caller reuses the same key for a different body.</b> " +
+      "The stored hash earns its place here: <code>" + sdidempotency_BAD_HASH +
+      "</code> is not <code>" + sdidempotency_HASH + "</code>, so the server " +
+      "returns <b>" + sdidempotency_CONFLICT + "</b> instead of silently " +
+      "replaying an unrelated " + sdidempotency_usd(sdidempotency_AMOUNT) +
+      " result for a " + sdidempotency_usd(sdidempotency_BAD_AMOUNT) +
+      " request."
+  });
+
+  frame({
+    hasTable: true, done: true,
+    wire: "row expires in " + sdidempotency_TTL_H + " h",
+    flag: "ok",
+    caption: "<b>Four requests, one charge, " +
+      sdidempotency_usd(sdidempotency_AMOUNT) + " taken, one table row.</b> " +
+      "Two of the four were refused with <b>" + sdidempotency_CONFLICT +
+      "</b> and one replayed the original answer. The row expires after " +
+      sdidempotency_TTL_H + " hours so the table does not grow forever. " +
+      "<i>The uncertainty was never removed — the consequence was.</i>"
+  });
+
+  return {
+    id: "keys", label: "Idempotency key, done properly",
+    phases: ["quiet", "POST #1", "claim", "concurrent " + sdidempotency_CONFLICT,
+             "charge + commit", "response lost", "retry → replay",
+             "bad body → " + sdidempotency_CONFLICT, "ledger"],
+    steps: steps
+  };
+}
+
+// ----------------------------------------------------------------------
+// TAB 3 — the failure mode the page calls out by name: "a SELECT-then-INSERT
+// would race and let two concurrent retries both proceed, which is the exact
+// bug idempotency keys exist to prevent."
+// ----------------------------------------------------------------------
+function sdidempotency_tabRace() {
+  var st = sdidempotency_fresh();
+  var steps = [];
+  function frame(o) { o.snap = sdidempotency_snap(st); steps.push(o); }
+
+  frame({
+    hasTable: true, wire: "(the wire is quiet)",
+    flag: "idle",
+    caption: "<b>The same key, the same table, and one line of the page's " +
+      "code changed.</b> Instead of <code>INSERT … ON CONFLICT DO " +
+      "NOTHING</code>, this server does <code>SELECT</code>, then " +
+      "<code>INSERT</code>. Everything reads correctly. Two concurrent " +
+      "retries are all it takes."
+  });
+
+  st.requests++;
+  frame({
+    hasTable: true,
+    wire: "req A:  SELECT * FROM idempotency_keys WHERE key = '" +
+      sdidempotency_SHORT + "…'  ->  0 rows",
+    flag: "warn",
+    caption: "<b>Request A checks the table and finds nothing.</b> Correct — " +
+      "this key really is new. A proceeds to charge. The gap between this " +
+      "<code>SELECT</code> and the <code>INSERT</code> that will follow it is " +
+      "the entire defect, and it is open right now."
+  });
+
+  st.requests++;
+  frame({
+    hasTable: true,
+    wire: "req B (the timeout retry):  SELECT …  ->  0 rows",
+    flag: "bad",
+    caption: "<b>The client's timeout retry lands inside that gap.</b> B runs " +
+      "the same <code>SELECT</code>, sees the same empty result, and reaches " +
+      "the same correct-looking conclusion. Two requests are now both " +
+      "convinced they are the first."
+  });
+
+  sdidempotency_charge(st, sdidempotency_AMOUNT);
+  sdidempotency_charge(st, sdidempotency_AMOUNT);
+  frame({
+    hasTable: true,
+    wire: "A: perform_charge() -> ch_1     B: perform_charge() -> ch_2",
+    flag: "bad",
+    caption: "<b>Both charge.</b> " +
+      sdidempotency_usd(2 * sdidempotency_AMOUNT) + " taken — the identical " +
+      "outcome to tab 1, from a design that has an idempotency key, a request " +
+      "hash, a stored response and an expiry. <i>The table was never the " +
+      "mechanism; the atomic claim was.</i>"
+  });
+
+  st.rows.push({
+    key: sdidempotency_KEY, hash: sdidempotency_HASH,
+    state: "completed", code: String(sdidempotency_OK),
+    body: "ch_1 / " + sdidempotency_usd(sdidempotency_AMOUNT)
+  });
+  st.errors++;
+  frame({
+    hasTable: true,
+    wire: "A: INSERT ok        B: INSERT -> duplicate key  -> " + sdidempotency_ERR,
+    flag: "bad",
+    caption: "<b>The constraint fires — one statement too late.</b> A's insert " +
+      "succeeds; B's violates the <code>PRIMARY KEY</code> and blows up with a " +
+      "<b>" + sdidempotency_ERR + "</b>. The constraint was always going to " +
+      "catch the duplicate. It just caught it <i>after</i> the money moved " +
+      "instead of before."
+  });
+
+  st.held = sdidempotency_OK + " + ch_1, and one " + sdidempotency_ERR;
+  frame({
+    hasTable: true,
+    wire: "client holds: one " + sdidempotency_OK + ", one " + sdidempotency_ERR,
+    flag: "bad",
+    caption: "<b>Our ledger says one charge; the provider says two.</b> The " +
+      "single stored row looks perfect — <code>completed</code>, <code>" +
+      sdidempotency_OK + "</code>, <code>ch_1</code> — and it is a complete " +
+      "description of a world that is not the one we are in. Nothing local " +
+      "can detect this, because locally nothing is wrong."
+  });
+
+  frame({
+    hasTable: true,
+    wire: "+" + sdidempotency_SETTLE_H + " h  reconciliation: ledger 1 vs settlement " +
+      "2  ->  1 duplicate",
+    flag: "warn",
+    caption: "<b>" + sdidempotency_SETTLE_H + " hours later the reconciliation " +
+      "job runs.</b> It compares our ledger against the provider's daily " +
+      "settlement file, finds <b>2</b> charges against <b>1</b> intended, and " +
+      "flags <b>" + sdidempotency_usd(sdidempotency_AMOUNT) + "</b> of " +
+      "over-capture. This is the layer the page says separates a complete " +
+      "answer: prevention alone is never complete, so you design the detection."
+  });
+
+  st.refunds.push({ id: "re_1", cents: sdidempotency_AMOUNT });
+  frame({
+    hasTable: true, done: true,
+    wire: "refund re_1  " + sdidempotency_usd(sdidempotency_AMOUNT) +
+      "   net " + sdidempotency_usd(sdidempotency_AMOUNT),
+    flag: "warn",
+    caption: "<b>Net " + sdidempotency_usd(sdidempotency_AMOUNT) + " — and it " +
+      "is not the same as never having taken " +
+      sdidempotency_usd(2 * sdidempotency_AMOUNT) + ".</b> The customer's " +
+      "statement now shows three lines, the money was gone for " +
+      sdidempotency_SETTLE_H + " hours, and compensation is a <i>new fact</i>, " +
+      "not an erasure — the page's own point about sagas, arriving here. " +
+      "Detection is the backstop, not the plan."
+  });
+
+  return {
+    id: "race", label: "SELECT-then-INSERT (the race)",
+    phases: ["quiet", "A: SELECT → miss", "B: SELECT → miss", "both charge",
+             "INSERT collides", "what we believe", "reconciliation", "refund"],
+    steps: steps
+  };
+}
+
+var sdidempotency_A = sdidempotency_tabNone();
+var sdidempotency_B = sdidempotency_tabKeys();
+var sdidempotency_C = sdidempotency_tabRace();
+
+// ----------------------------------------------------------------------
+function sdidempotency_phaseStrip(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : "idle"
+    });
+  }
+  return d.pills(chips);
+}
+
+// ======================================================================
+S["sdidempotency"] = {
+  title: "Lose one response, then retry — three ways",
+  note: "One charge of <b>" + sdidempotency_usd(sdidempotency_AMOUNT) +
+    "</b> (the page's <code>{\"amount\": " + sdidempotency_AMOUNT +
+    ", \"currency\": \"usd\"}</code>), one idempotency key (<code>" +
+    sdidempotency_SHORT + "…</code>, the page's header), and <b>exactly one " +
+    "lost response</b> — the packet the page's section-1 diagram drops. " +
+    "Everything counted below falls out of that: charges executed at the " +
+    "provider, money taken, rows in <code>idempotency_keys</code>, and which " +
+    "answer the client is holding. Status codes are the page's own — <b>" +
+    sdidempotency_OK + "</b> on success and on replay, <b>" +
+    sdidempotency_CONFLICT + "</b> for <code>in_progress</code> and for a " +
+    "request-hash mismatch — and the hashes are a real FNV-1a of the bodies, " +
+    "so <code>" + sdidempotency_HASH + "</code> vs <code>" +
+    sdidempotency_BAD_HASH + "</code> is a genuine comparison. Rows expire " +
+    "after the page's <b>" + sdidempotency_TTL_H + " hours</b>; the provider " +
+    "settles daily, so reconciliation arrives <b>+" + sdidempotency_SETTLE_H +
+    " h</b>.",
+  interval: 1600,
+
+  scenarios: [sdidempotency_A, sdidempotency_B, sdidempotency_C],
+
+  draw: function (step, d, ctx) {
+    var s = step.snap;
+    var i;
+    var dup = s.provider.length > 1 ? s.provider.length - 1 : 0;
+
+    // ---- headline counters ---------------------------------------------
+    var head = d.cols([
+      d.big(sdidempotency_usd(s.captured), "net taken from the customer",
+        s.captured === 0 ? "idle"
+          : s.captured === sdidempotency_AMOUNT ? "ok" : "bad"),
+      d.stat({
+        label: "charges executed",
+        value: String(s.provider.length),
+        sub: s.provider.length === 0 ? "none yet — 1 intended"
+          : dup === 0 ? "1 intended, 1 executed"
+          : dup + " more than intended",
+        flag: s.provider.length === 0 ? "idle"
+          : s.provider.length === 1 ? "ok" : "bad"
+      }),
+      d.stat({
+        label: "requests the server saw",
+        value: String(s.requests),
+        sub: s.requests === 0 ? "nothing sent yet"
+          : s.replays + " replayed · " + s.conflicts + " refused " +
+            sdidempotency_CONFLICT,
+        flag: s.requests === 0 ? "idle" : "ok"
+      }),
+      d.stat({
+        label: "idempotency_keys rows",
+        value: step.hasTable ? String(s.rows.length) : "—",
+        sub: step.hasTable
+          ? "expire after " + sdidempotency_TTL_H + " h"
+          : "no such table in this design",
+        flag: !step.hasTable ? "bad" : s.rows.length === 0 ? "idle" : "ok"
+      })
+    ]);
+
+    // ---- the money bar --------------------------------------------------
+    var moneyBar = d.bar({
+      label: "the card — bar fills at twice the intended " +
+        sdidempotency_usd(sdidempotency_AMOUNT),
+      pct: (s.captured / (2 * sdidempotency_AMOUNT)) * 100,
+      value: sdidempotency_usd(s.captured),
+      flag: s.captured === 0 ? "idle"
+        : s.captured === sdidempotency_AMOUNT ? "ok" : "bad"
+    });
+
+    // ---- the three parties ----------------------------------------------
+    var parties = d.cols([
+      d.node({
+        title: "client",
+        status: s.held === "" ? "IDLE"
+          : s.held === "still waiting" ? "WAITING"
+          : s.held === "nothing — timed out" ? "TIMED OUT" : "HAS AN ANSWER",
+        statusFlag: s.held === "" ? "idle"
+          : s.held === "nothing — timed out" ? "bad"
+          : s.held === "still waiting" ? "warn" : "ok",
+        meta: "generates the key, owns the retry",
+        rows: [
+          { label: "requests sent", value: String(s.requests) },
+          {
+            label: "answer held",
+            value: s.held === "" ? "none yet" : s.held,
+            flag: s.held === "" ? "idle"
+              : s.held.indexOf(String(sdidempotency_OK)) === 0 ? "ok" : "bad"
+          }
+        ]
+      }),
+      d.node({
+        title: "our server",
+        status: !step.hasTable ? "NO DEDUPE"
+          : s.rows.length === 0 ? "TABLE EMPTY"
+          : s.rows[0].state === "in_progress" ? "KEY CLAIMED" : "ANSWER STORED",
+        statusFlag: !step.hasTable ? "bad"
+          : s.rows.length === 0 ? "idle"
+          : s.rows[0].state === "in_progress" ? "warn" : "ok",
+        meta: step.hasTable ? "idempotency_keys is the whole mechanism"
+          : "nothing to recognise a repeat by",
+        rows: [
+          {
+            label: "refused " + sdidempotency_CONFLICT,
+            value: String(s.conflicts),
+            flag: s.conflicts > 0 ? "ok" : "idle"
+          },
+          {
+            label: "replayed",
+            value: String(s.replays),
+            flag: s.replays > 0 ? "ok" : "idle"
+          },
+          {
+            label: "errors escaped",
+            value: String(s.errors),
+            flag: s.errors > 0 ? "bad" : "idle"
+          }
+        ]
+      }),
+      d.node({
+        title: "payment provider",
+        status: s.provider.length === 0 ? "NO CHARGES"
+          : s.provider.length === 1 ? "1 CHARGE" : s.provider.length + " CHARGES",
+        statusFlag: s.provider.length === 0 ? "idle"
+          : s.provider.length === 1 ? "ok" : "bad",
+        meta: "a separate system — no shared transaction",
+        flag: s.provider.length > 1 && s.refunds.length === 0 ? "bad" : undefined,
+        rows: [
+          { label: "gross captured", value: sdidempotency_usd(s.gross),
+            flag: s.gross > sdidempotency_AMOUNT ? "bad" : "ok" },
+          { label: "refunded back", value: sdidempotency_usd(s.back),
+            flag: s.back > 0 ? "warn" : "idle" }
+        ]
+      })
+    ]);
+
+    // ---- the table, or the reason there is none --------------------------
+    var tableBlock;
+    if (!step.hasTable) {
+      tableBlock = d.note("There is no <code>idempotency_keys</code> table in " +
+        "this design, so there is no state in which a retry differs from a " +
+        "first attempt. <i>That is the whole of the failure.</i>", "bad");
+    } else if (s.rows.length === 0) {
+      tableBlock = d.note("<code>idempotency_keys</code> is empty — the key " +
+        "has not been claimed yet. Every row that appears here was written by " +
+        "a statement you can see on the wire above.", "idle");
+    } else {
+      var trows = [];
+      for (i = 0; i < s.rows.length; i++) {
+        trows.push([
+          s.rows[i].key.slice(0, 8) + "…",
+          s.rows[i].hash,
+          s.rows[i].state,
+          s.rows[i].code === "" ? "—" : s.rows[i].code,
+          s.rows[i].body === "" ? "—" : s.rows[i].body
+        ]);
+      }
+      tableBlock = d.table(
+        ["key", "request_hash", "state", "code", "response_body"], trows);
+    }
+
+    // ---- what the provider actually executed ------------------------------
+    var chargeCells = [];
+    for (i = 0; i < s.provider.length; i++) {
+      chargeCells.push({
+        label: s.provider[i].id,
+        flag: i === 0 ? "ok" : "bad",
+        title: i === 0
+          ? "the intended charge, " + sdidempotency_usd(s.provider[i].cents)
+          : "a duplicate, " + sdidempotency_usd(s.provider[i].cents)
+      });
+    }
+    for (i = 0; i < s.refunds.length; i++) {
+      chargeCells.push({
+        label: s.refunds[i].id, flag: "warn",
+        title: "compensating refund, " + sdidempotency_usd(s.refunds[i].cents) +
+          " — a new fact on the statement, not an erasure"
+      });
+    }
+    if (!chargeCells.length) {
+      chargeCells.push({ label: "—", flag: "idle", title: "no money has moved" });
+    }
+
+    return d.stack([
+      sdidempotency_phaseStrip(d, ctx),
+      head,
+      moneyBar,
+      d.mono(step.wire, step.flag === "bad" ? "bad"
+        : step.flag === "warn" ? "warn"
+        : step.flag === "idle" ? "idle" : "ok"),
+      parties,
+      tableBlock,
+      d.cells(chargeCells, { label: "movements at the provider" }),
+      step.done
+        ? d.note("Green is the one charge that was meant to happen · red is a " +
+            "duplicate · amber is compensation. <b>The retry is never the " +
+            "bug</b> — the page's framing is that the uncertainty cannot be " +
+            "removed, only its consequence.", step.flag)
+        : d.note("The client cannot distinguish \"never arrived\" from " +
+            "\"succeeded, answer lost\" at any point in this run. Every fix " +
+            "below is server-side.", "idle")
+    ]);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdindex  (index.md)
+//
+// TIME AXIS: the page's own reading order, spent. Section 4 hands out three
+// calendars — four weeks, one week, two days — and section 1 hands out the
+// seven-dimension rubric the round is scored on. So the sequence is a real
+// one: sittings are spent in the order the page prescribes, each sitting
+// turns into pages read or designs derived or reps spoken, and the rubric
+// rows go strong the moment the thing that earns them exists. Three tabs run
+// the same calendar three ways.
+//
+// The contrast the page is arguing for falls out of the arithmetic rather
+// than being asserted: the plan that reads the MOST scores the FEWEST rows.
+//
+// CONFIG — page figures used verbatim
+//   the seven rubric dimensions and their strong/weak wording  — section 1
+//   the three failure modes                                    — section 2
+//   the six sections and their reading order                   — sections 3–4
+//   four weeks / one week / two days, and what each contains   — section 4
+//   "one page a day" for Building blocks and Data & storage    — section 4
+//   "one per sitting" for the worked designs, and "design it yourself
+//     before reading"                                          — section 4 / 5
+//   "Four derived beats twelve read"                           — section 4
+//   "Reference — the week of"                                  — section 4
+//   "Twenty minutes on a blank page, out loud, with a timer"   — section 5
+//
+// CONFIG — declared here, because the page states none
+//   SECTION SIZES are this handbook's actual page counts, counted from
+//     content/*.md by the `module:` field: method 4, blocks 7, data 4,
+//     distributed 5, designs 14, reference 6 — 40 pages plus this one.
+//   The calendar unit is one SITTING (the page's own word for the designs
+//     stage). The four-week plans get 28, one a day. The two-day plan gets
+//     5, because section 4 names five activities for its two days: the
+//     framework (4 pages, two sittings), the checklist, the anti-patterns,
+//     and one design rehearsed out loud twice.
+//   A sitting's throughput is declared per stage: 2 pages for the short
+//     framework and reference stages, 1 page a day for blocks and data (the
+//     page says so), one design per sitting for the derivations.
+//   Reading-only pace is 1.5 pages a sitting — no 20-minute attempt, no
+//     speaking, so more pages fit. That is what tab 1 runs on.
+//   RUBRIC THRESHOLDS: DERIVE_BAR = 4, the page's own "four designs done
+//     properly" / "four derived beats twelve read"; COVER = 3/4 of a
+//     section's pages counts as having covered it. Each of the seven rows
+//     then names which of {framework read, sections covered, designs
+//     derived, reps spoken} it is bought with. Those mappings are this
+//     sim's declaration; the row wording is the page's.
+// ======================================================================
+
+var sdindex_SECTIONS = [
+  { key: "method",      name: "Driving the round",   pages: 4 },
+  { key: "blocks",      name: "Building blocks",     pages: 7 },
+  { key: "data",        name: "Data & storage",      pages: 4 },
+  { key: "distributed", name: "Distributed systems", pages: 5 },
+  { key: "designs",     name: "Worked designs",      pages: 14 },
+  { key: "reference",   name: "Reference",           pages: 6 }
+];
+
+var sdindex_TOTAL_PAGES = (function () {
+  var t = 0, i;
+  for (i = 0; i < sdindex_SECTIONS.length; i++) t += sdindex_SECTIONS[i].pages;
+  return t;
+})();
+
+var sdindex_WEEKS = 4;
+var sdindex_DAYS_PER_WEEK = 7;
+var sdindex_FOUR_WEEK_SITTINGS = sdindex_WEEKS * sdindex_DAYS_PER_WEEK;  // 28
+var sdindex_TWO_DAY_SITTINGS = 5;   // declared: the page's five activities
+var sdindex_READ_PACE = 1.5;        // declared: pages a sitting, reading only
+var sdindex_DERIVE_BAR = 4;         // page: "four derived beats twelve read"
+var sdindex_COVER_NUM = 3;          // declared: 3/4 of a section is "covered"
+var sdindex_COVER_DEN = 4;
+
+function sdindex_section(key) {
+  for (var i = 0; i < sdindex_SECTIONS.length; i++) {
+    if (sdindex_SECTIONS[i].key === key) return sdindex_SECTIONS[i];
+  }
+  return { key: key, name: key, pages: 0 };
+}
+function sdindex_cover(key) {
+  return Math.ceil(sdindex_section(key).pages * sdindex_COVER_NUM / sdindex_COVER_DEN);
+}
+var sdindex_COVER_BD = sdindex_cover("blocks") + sdindex_cover("data");   // 6+3
+var sdindex_COVER_DIST = sdindex_cover("distributed");                    // 4
+
+// ----------------------------------------------------------------------
+// The rubric: section 1's seven dimensions, its own strong/weak wording,
+// and the declared thing each row is bought with.
+// ----------------------------------------------------------------------
+var sdindex_RUBRIC = [
+  { name: "Scoping",
+    strong: "bounds the prompt out loud before designing",
+    weak: "starts drawing boxes in minute two",
+    buy: "framework read + 1 rep spoken",
+    f: function (x) { return x.sec.method >= sdindex_section("method").pages && x.spoken >= 1; } },
+  { name: "Structure",
+    strong: "drives the hour; never has to be prompted",
+    weak: "waits to be prompted at each step",
+    buy: "framework read + 2 reps spoken",
+    f: function (x) { return x.sec.method >= sdindex_section("method").pages && x.spoken >= 2; } },
+  { name: "Justification",
+    strong: "every choice has a because, tied to a requirement",
+    weak: "names technologies with no reason",
+    buy: sdindex_DERIVE_BAR + " designs derived",
+    f: function (x) { return x.derived >= sdindex_DERIVE_BAR; } },
+  { name: "Trade-offs",
+    strong: "volunteers the cost of its own decision",
+    weak: "presents one option as obviously right",
+    buy: sdindex_DERIVE_BAR + " derived + " + sdindex_DERIVE_BAR + " spoken",
+    f: function (x) { return x.derived >= sdindex_DERIVE_BAR && x.spoken >= sdindex_DERIVE_BAR; } },
+  { name: "Depth",
+    strong: "three levels down on at least one component",
+    weak: "stays at box-and-arrow level everywhere",
+    buy: sdindex_COVER_BD + " of the " +
+      (sdindex_section("blocks").pages + sdindex_section("data").pages) +
+      " block/data pages + 1 derived",
+    f: function (x) { return (x.sec.blocks + x.sec.data) >= sdindex_COVER_BD && x.derived >= 1; } },
+  { name: "Failure thinking",
+    strong: "asks what breaks and how it is detected",
+    weak: "designs only the happy path",
+    buy: sdindex_COVER_DIST + " of the " + sdindex_section("distributed").pages +
+      " distributed pages",
+    f: function (x) { return x.sec.distributed >= sdindex_COVER_DIST; } },
+  { name: "Communication",
+    strong: "the interviewer follows the diagram without help",
+    weak: "diagram unreadable by minute 30",
+    buy: sdindex_DERIVE_BAR + " reps spoken",
+    f: function (x) { return x.spoken >= sdindex_DERIVE_BAR; } }
+];
+
+// Section 2's three failure modes, as tests over the same run.
+var sdindex_MODES = [
+  { name: "Memorising architectures",
+    f: function (x) { return x.sec.designs > 0 && x.derived === 0; },
+    why: "write-ups read, none derived — the conclusion without the derivation" },
+  { name: "Blocks without a framework",
+    f: function (x) { return (x.sec.blocks + x.sec.data) >= sdindex_COVER_BD && x.spoken === 0; },
+    why: "knows the components, has never ordered them against a clock" },
+  { name: "Never speaking it aloud",
+    f: function (x) { return x.spoken === 0; },
+    why: "no rep, so no gap between understanding and explaining was ever felt" }
+];
+
+function sdindex_blank() {
+  var s = {}, i;
+  for (i = 0; i < sdindex_SECTIONS.length; i++) s[sdindex_SECTIONS[i].key] = 0;
+  return s;
+}
+function sdindex_copy(s) {
+  var o = {}, i;
+  for (i = 0; i < sdindex_SECTIONS.length; i++) o[sdindex_SECTIONS[i].key] = s[sdindex_SECTIONS[i].key];
+  return o;
+}
+function sdindex_sum(s) {
+  var t = 0, i;
+  for (i = 0; i < sdindex_SECTIONS.length; i++) t += s[sdindex_SECTIONS[i].key];
+  return t;
+}
+function sdindex_score(x) {
+  var n = 0, i, hits = [];
+  for (i = 0; i < sdindex_RUBRIC.length; i++) {
+    var on = !!sdindex_RUBRIC[i].f(x);
+    hits.push(on);
+    if (on) n++;
+  }
+  return { hits: hits, n: n };
+}
+
+function sdindex_join(a) {
+  if (a.length === 0) return "";
+  if (a.length === 1) return a[0];
+  return a.slice(0, a.length - 1).join(", ") + " and " + a[a.length - 1];
+}
+
+function sdindex_wantSit(st) {
+  if (st.sit !== undefined) return st.sit;
+  return Math.ceil(st.want / st.perSit);
+}
+
+// ----------------------------------------------------------------------
+// Spend the calendar. Reserved stages are subtracted up front, because the
+// page schedules Reference for "the week of" rather than leaving it to
+// whatever is left. Everything else takes sittings in order, and the stage
+// that runs out is the one that gets squeezed.
+// ----------------------------------------------------------------------
+function sdindex_runPlan(plan) {
+  var i, j, reserved = 0;
+  for (i = 0; i < plan.stages.length; i++) {
+    if (plan.stages[i].reserve) reserved += sdindex_wantSit(plan.stages[i]);
+  }
+  var avail = plan.sittings - reserved;
+  if (avail < 0) avail = 0;
+
+  var sec = sdindex_blank();
+  var derived = 0, spoken = 0, used = 0;
+  var frames = [], grid = [];
+
+  for (i = 0; i < plan.stages.length; i++) {
+    var st = plan.stages[i];
+    var want = sdindex_wantSit(st);
+    var got;
+    if (st.reserve) {
+      got = want;
+    } else {
+      got = want < avail ? want : avail;
+      avail -= got;
+    }
+    if (got < 0) got = 0;
+
+    var pages = Math.floor(got * st.perSit);
+    if (pages > st.want) pages = st.want;
+
+    // hand those pages to the stage's sections, in order, capped per section
+    var left = pages, added = 0;
+    for (j = 0; j < st.secs.length; j++) {
+      var cap = sdindex_section(st.secs[j]).pages - sec[st.secs[j]];
+      var take = left < cap ? left : cap;
+      if (take < 0) take = 0;
+      sec[st.secs[j]] += take;
+      left -= take;
+      added += take;
+    }
+    if (st.derive) derived += added;
+    spoken += st.spokenPer * got;
+    used += got;
+
+    for (j = 0; j < got; j++) {
+      grid.push({ stage: i, derive: !!st.derive, spoke: st.spokenPer > 0 });
+    }
+
+    frames.push({
+      stage: i, got: got, want: want, pages: added, cut: want - got,
+      sec: sdindex_copy(sec), derived: derived, spoken: spoken,
+      used: used, read: sdindex_sum(sec)
+    });
+  }
+
+  return {
+    plan: plan, frames: frames, grid: grid,
+    sec: sdindex_copy(sec), derived: derived, spoken: spoken,
+    used: used, read: sdindex_sum(sec)
+  };
+}
+
+// ----------------------------------------------------------------------
+function sdindex_buildScenario(plan) {
+  var run = sdindex_runPlan(plan);
+  var zero = { sec: sdindex_blank(), derived: 0, spoken: 0, read: 0, used: 0 };
+  var steps = [{
+    run: run, x: zero, stage: -1, flag: "idle",
+    caption: typeof plan.idle === "function" ? plan.idle(run) : plan.idle
+  }];
+
+  var prevScore = sdindex_score(zero);
+  var chips = ["day zero"];
+
+  for (var i = 0; i < run.frames.length; i++) {
+    var fr = run.frames[i];
+    var st = plan.stages[i];
+    chips.push(st.chip);
+    var sc = sdindex_score(fr);
+
+    var head;
+    if (fr.got === 0) {
+      head = "<b>" + st.name + " never happens.</b> The calendar was spent " +
+        "before it came up. ";
+    } else if (fr.cut > 0) {
+      head = "<b>" + st.name + " is cut to " + fr.got + " of the " + fr.want +
+        " sittings it wanted</b> — " + fr.pages + " of " + st.want +
+        " pages. ";
+    } else {
+      head = "<b>" + st.name + ": " + fr.got + " sitting" +
+        (fr.got === 1 ? "" : "s") + ", " + fr.pages + " page" +
+        (fr.pages === 1 ? "" : "s") + ".</b> ";
+    }
+
+    var gained = [];
+    for (var k = 0; k < sdindex_RUBRIC.length; k++) {
+      if (sc.hits[k] && !prevScore.hits[k]) gained.push(sdindex_RUBRIC[k].name);
+    }
+    var tail = gained.length
+      ? " <b>" + sdindex_join(gained) + "</b> " +
+        (gained.length === 1 ? "goes" : "go") + " strong here — " + sc.n +
+        " of " + sdindex_RUBRIC.length + " rubric rows now."
+      : " No rubric row moves: still " + sc.n + " of " + sdindex_RUBRIC.length +
+        ".";
+
+    steps.push({
+      run: run, x: fr, stage: i, chipsSoFar: chips.slice(0),
+      caption: head + st.say + tail,
+      flag: fr.got === 0 ? "bad"
+        : gained.length ? "ok"
+        : fr.cut > 0 ? "warn" : "idle"
+    });
+    prevScore = sc;
+  }
+
+  var final = sdindex_score(run);
+  steps.push({
+    run: run, x: run, stage: run.frames.length, verdict: true,
+    caption: plan.verdict(run, final),
+    flag: final.n >= 5 ? "ok" : final.n <= 2 ? "bad" : "warn"
+  });
+
+  var phases = ["day zero"];
+  for (var p = 0; p < plan.stages.length; p++) phases.push(plan.stages[p].chip);
+  phases.push("the round");
+
+  return { id: plan.id, label: plan.label, phases: phases, steps: steps };
+}
+
+function sdindex_pl(n, one, many) { return n === 1 ? one : many; }
+
+// ----------------------------------------------------------------------
+// TAB 1 — the page's section-2 failure mode, run at full speed: read the
+// whole handbook and never attempt anything.
+// ----------------------------------------------------------------------
+var sdindex_PLAN_READ = {
+  id: "read", label: "Read all of it",
+  sittings: sdindex_FOUR_WEEK_SITTINGS,
+  stages: [
+    { name: "Driving the round, read", chip: "method", secs: ["method"],
+      want: 4, perSit: sdindex_READ_PACE, spokenPer: 0,
+      say: "Read straight through, no attempt, no timer. " },
+    { name: "Building blocks and Data & storage, read", chip: "blocks+data",
+      secs: ["blocks", "data"], want: 11, perSit: sdindex_READ_PACE, spokenPer: 0,
+      say: "Every load-balancer, cache, queue, shard and replication page, " +
+        "understood on the way past. " },
+    { name: "Distributed systems, read", chip: "distributed",
+      secs: ["distributed"], want: 5, perSit: sdindex_READ_PACE, spokenPer: 0,
+      say: "Consistency, idempotency, failure, observability — the senior-" +
+        "signal material, all of it. " },
+    { name: "Worked designs, read", chip: "designs", secs: ["designs"],
+      want: 14, perSit: sdindex_READ_PACE, spokenPer: 0,
+      say: "Every derivation read as a conclusion, because the page's one " +
+        "rule — attempt it first — is the thing being skipped to make the " +
+        "pace work. " },
+    { name: "Reference, read", chip: "reference", secs: ["reference"],
+      want: 6, perSit: sdindex_READ_PACE, spokenPer: 0,
+      say: "The calendar runs out mid-section. " }
+  ],
+  idle: "<b>Four weeks, " + sdindex_FOUR_WEEK_SITTINGS + " sittings, and one " +
+    "decision: read, never attempt.</b> No blank page, no timer, no speaking " +
+    "out loud — so the pace is the declared " + sdindex_READ_PACE + " pages a " +
+    "sitting rather than one. This is the most material anyone in this sim " +
+    "will cover. Press Play and watch the rubric.",
+  verdict: function (run, sc) {
+    return "<b>" + run.read + " of the " + sdindex_TOTAL_PAGES + " pages read " +
+      "in " + run.used + " sittings — and " + sc.n + " of " +
+      sdindex_RUBRIC.length + " rubric rows strong.</b> The one that lands is " +
+      "<i>Failure thinking</i>, and it lands because reading really is enough " +
+      "to know what breaks. Everything else on the rubric is scored on " +
+      "behaviour in the room: bounding a prompt out loud, driving the hour, " +
+      "tracing a choice to a requirement, volunteering a cost. <b>" +
+      run.derived + "</b> designs derived and <b>" + run.spoken + "</b> reps " +
+      "spoken buy none of them. <i>All three of the page's failure modes fire " +
+      "on the plan that covered the most material — which is the argument the " +
+      "page opens with.</i>";
+  }
+};
+
+// ----------------------------------------------------------------------
+// TAB 2 — section 4's four-week order, spent exactly as written.
+// ----------------------------------------------------------------------
+var sdindex_PLAN_FOUR = {
+  id: "four", label: "Four weeks, as written",
+  sittings: sdindex_FOUR_WEEK_SITTINGS,
+  stages: [
+    { name: "Driving the round, all of it, first", chip: "framework",
+      secs: ["method"], want: 4, perSit: 2, spokenPer: 0,
+      say: "The page calls it short and calls it the spine, so it gets two " +
+        "sittings and goes first. " },
+    { name: "Building blocks and Data & storage, one page a day", chip: "one a day",
+      secs: ["blocks", "data"], want: 11, perSit: 1, spokenPer: 0,
+      say: "Eleven pages, eleven days, at the page's own pace. This is the " +
+        "biggest single block of the calendar and it buys nothing on the " +
+        "rubric by itself. " },
+    { name: "Worked designs, derived", chip: "derive", secs: ["designs"],
+      want: 14, perSit: 1, spokenPer: 1, derive: true,
+      say: "Twenty minutes on a blank page, out loud, with a timer — then " +
+        "read and mark only where you differed. This is the stage the " +
+        "calendar squeezes, and it is the one the rubric is made of. " },
+    { name: "Distributed systems, after the designs", chip: "distributed",
+      secs: ["distributed"], want: 5, perSit: 1, spokenPer: 0, reserve: true,
+      say: "Held back on purpose: the page wants these read once the problems " +
+        "they solve have become concrete. " },
+    { name: "Reference, the week of", chip: "the week of",
+      secs: ["reference"], want: 6, perSit: 2, spokenPer: 0, reserve: true,
+      say: "Reserved at the end of the calendar rather than left to chance, " +
+        "because the page schedules it for the final week. " }
+  ],
+  idle: "<b>The same " + sdindex_FOUR_WEEK_SITTINGS + " sittings, spent in " +
+    "the page's section-4 order.</b> Framework first, one page a day through " +
+    "blocks and data, designs <i>derived</i> before they are read, " +
+    "distributed systems afterwards, reference reserved for the last week. " +
+    "Watch which stage the calendar squeezes — and notice that the plan " +
+    "reads fewer pages than tab 1.",
+  verdict: function (run, sc) {
+    var unread = sdindex_TOTAL_PAGES - run.read;
+    return "<b>" + sc.n + " of " + sdindex_RUBRIC.length + " rubric rows, off " +
+      run.read + " pages — " + (sdindex_PLAN_READ.__read - run.read) +
+      " fewer than tab 1 read.</b> The difference is <b>" + run.derived +
+      "</b> derivations and <b>" + run.spoken + "</b> spoken reps, bought by " +
+      "giving the designs stage the sittings the reference and distributed " +
+      "stages did not need. The honest cost is on screen too: <b>" + unread +
+      "</b> pages were never opened, all of them design write-ups, so a shape " +
+      "this plan has not met can still turn up. <i>Coverage is what was " +
+      "traded away, and the rubric does not score coverage.</i>";
+  }
+};
+
+// ----------------------------------------------------------------------
+// TAB 3 — section 4's two-day triage.
+// ----------------------------------------------------------------------
+var sdindex_PLAN_TWO = {
+  id: "two", label: "Two days",
+  sittings: sdindex_TWO_DAY_SITTINGS,
+  stages: [
+    { name: "The framework", chip: "framework", secs: ["method"],
+      want: 4, perSit: 2, spokenPer: 0,
+      say: "All four method pages across two sittings on day one. Nothing " +
+        "else fits, and the page says this is the one thing you use in every " +
+        "question. " },
+    { name: "The checklist and the anti-patterns", chip: "checklist",
+      secs: ["reference"], want: 2, perSit: 2, spokenPer: 0,
+      say: "Two reference pages, chosen because they are the two that change " +
+        "behaviour in the room rather than add material. " },
+    { name: "Rehearse one design out loud", chip: "rehearse", secs: ["designs"],
+      want: 1, perSit: 1, spokenPer: 1, derive: true,
+      say: "One prompt, twenty minutes, blank page, timer, empty room. " },
+    { name: "Rehearse the same one again", chip: "again", secs: [],
+      want: 0, perSit: 1, sit: 1, spokenPer: 1,
+      say: "The same design a second time. No new material — the second rep " +
+        "is not for learning the design, it is for the narration. " }
+  ],
+  idle: function (run) {
+    return "<b>Two days, " + sdindex_TWO_DAY_SITTINGS + " sittings, and the " +
+      "page's triage: the framework, the checklist, the anti-patterns, and " +
+      "one design rehearsed out loud twice.</b> This plan will read <b>" +
+      run.read + "</b> pages against tab 1's <b>" + sdindex_PLAN_READ.__read +
+      "</b> — and it will spend " +
+      (sdindex_FOUR_WEEK_SITTINGS - sdindex_TWO_DAY_SITTINGS) +
+      " fewer sittings doing it. Watch the rubric anyway.";
+  },
+  verdict: function (run, sc) {
+    var readRun = sdindex_PLAN_READ.__read;
+    var readScore = sdindex_PLAN_READ.__score;
+    return "<b>" + sc.n + " of " + sdindex_RUBRIC.length + " rows, off " +
+      run.read + " pages in " + run.used + " sittings.</b> Set that beside " +
+      "tab 1: <b>" + readRun + " pages, " + sdindex_FOUR_WEEK_SITTINGS +
+      " sittings, " + readScore + " row" + sdindex_pl(readScore, "", "s") +
+      "</b>. Two days of the right activity outscores four weeks of the wrong " +
+      "one, and the reason is visible in the buy column — five of the seven " +
+      "rows are bought with derivations and reps, which reading cannot " +
+      "produce at any volume. <i>What two days genuinely cannot buy is depth " +
+      "and failure thinking: " + run.sec.blocks + " block pages and " +
+      run.sec.distributed + " distributed pages is not a deep dive, and the " +
+      "page is honest that this plan is triage.</i>";
+  }
+};
+
+var sdindex_A = sdindex_buildScenario(sdindex_PLAN_READ);
+// tab 2 and 3 quote tab 1's totals, so publish them once tab 1 has run
+sdindex_PLAN_READ.__read = sdindex_A.steps[sdindex_A.steps.length - 1].x.read;
+sdindex_PLAN_READ.__score =
+  sdindex_score(sdindex_A.steps[sdindex_A.steps.length - 1].x).n;
+var sdindex_B = sdindex_buildScenario(sdindex_PLAN_FOUR);
+var sdindex_C = sdindex_buildScenario(sdindex_PLAN_TWO);
+
+// ----------------------------------------------------------------------
+function sdindex_strip(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : "idle"
+    });
+  }
+  return d.pills(chips);
+}
+
+// ======================================================================
+S["sdindex"] = {
+  title: "Spend the reading order three ways",
+  note: "This handbook is <b>" + sdindex_TOTAL_PAGES + " pages</b> plus this " +
+    "one, counted from <code>content/*.md</code>: " +
+    (function () {
+      var a = [], i;
+      for (i = 0; i < sdindex_SECTIONS.length; i++) {
+        a.push(sdindex_SECTIONS[i].name + " " + sdindex_SECTIONS[i].pages);
+      }
+      return "<b>" + a.join(" · ") + "</b>";
+    })() +
+    ". The calendar unit is one <b>sitting</b>; the four-week plans get <b>" +
+    sdindex_FOUR_WEEK_SITTINGS + "</b>, one a day, and the two-day plan gets " +
+    "<b>" + sdindex_TWO_DAY_SITTINGS + "</b> — the five activities section 4 " +
+    "names for its two days. Throughput is the page's own where it states it " +
+    "(<i>one page a day</i> through blocks and data, <i>one design per " +
+    "sitting</i>) and <b>" + sdindex_READ_PACE + " pages a sitting</b> when " +
+    "nothing is attempted, since no twenty-minute blank page is being spent. " +
+    "The scorecard is section 1's <b>" + sdindex_RUBRIC.length +
+    " dimensions</b>, each going strong when the run has bought it: the bar " +
+    "for derivations is the page's own <b>" + sdindex_DERIVE_BAR +
+    "</b> (“four derived beats twelve read”) and a section counts as " +
+    "covered at <b>" + sdindex_COVER_NUM + "/" + sdindex_COVER_DEN +
+    "</b> of its pages. Every figure below is counted off the calendar.",
+  interval: 1600,
+
+  scenarios: [sdindex_A, sdindex_B, sdindex_C],
+
+  draw: function (step, d, ctx) {
+    var run = step.run, x = step.x, i;
+    var sc = sdindex_score(x);
+    var plan = run.plan;
+    var total = plan.sittings;
+
+    // ---- headline -------------------------------------------------------
+    var head = d.cols([
+      d.big(sc.n + " / " + sdindex_RUBRIC.length, "rubric rows strong",
+        x.used === 0 ? "idle" : sc.n >= 5 ? "ok" : sc.n <= 2 ? "bad" : "warn"),
+      d.stat({
+        label: "pages read",
+        value: x.read + " / " + sdindex_TOTAL_PAGES,
+        sub: x.used + " of " + total + " sittings spent",
+        flag: x.read === 0 ? "idle" : "ok"
+      }),
+      d.stat({
+        label: "designs derived",
+        value: x.derived + " / " + sdindex_section("designs").pages,
+        sub: "the bar is " + sdindex_DERIVE_BAR,
+        flag: x.derived === 0 ? "idle"
+          : x.derived >= sdindex_DERIVE_BAR ? "ok" : "warn"
+      }),
+      d.stat({
+        label: "reps spoken out loud",
+        value: String(x.spoken),
+        sub: "20 minutes, blank page, timer",
+        flag: x.spoken === 0 ? "idle"
+          : x.spoken >= sdindex_DERIVE_BAR ? "ok" : "warn"
+      })
+    ]);
+
+    // ---- the calendar ----------------------------------------------------
+    var cells = [];
+    for (i = 0; i < total; i++) {
+      var g = run.grid[i];
+      var spent = i < x.used;
+      if (!g) {
+        cells.push({ label: "", flag: "idle", title: "sitting " + (i + 1) + " — unallocated" });
+      } else {
+        cells.push({
+          label: "",
+          flag: !spent ? "idle" : g.derive ? "ok" : g.spoke ? "warn" : undefined,
+          title: "sitting " + (i + 1) + " — " + plan.stages[g.stage].name +
+            (g.derive ? " (derived, spoken)" : g.spoke ? " (spoken)" : " (read)")
+        });
+      }
+    }
+    var calendar = d.cells(cells, {
+      label: "the calendar — " + total + " sittings · green derived · amber " +
+        "spoken · plain read",
+      dense: true
+    });
+
+    // ---- section coverage -------------------------------------------------
+    var bars = [];
+    for (i = 0; i < sdindex_SECTIONS.length; i++) {
+      var s = sdindex_SECTIONS[i];
+      var got = x.sec[s.key];
+      bars.push(d.bar({
+        label: s.name,
+        pct: s.pages > 0 ? (got / s.pages) * 100 : 0,
+        value: got + " / " + s.pages,
+        flag: got === 0 ? "idle" : got >= s.pages ? "ok" : "warn"
+      }));
+    }
+
+    // ---- the rubric --------------------------------------------------------
+    var rows = [];
+    for (i = 0; i < sdindex_RUBRIC.length; i++) {
+      rows.push({
+        label: sdindex_RUBRIC[i].name,
+        value: sc.hits[i] ? "strong" : "not yet · " + sdindex_RUBRIC[i].buy,
+        flag: sc.hits[i] ? "ok" : x.used === 0 ? "idle" : "warn"
+      });
+    }
+    var rubric = d.node({
+      title: "the rubric — section 1",
+      status: sc.n + " of " + sdindex_RUBRIC.length,
+      statusFlag: x.used === 0 ? "idle" : sc.n >= 5 ? "ok" : sc.n <= 2 ? "bad" : "warn",
+      meta: "a row goes strong when the run has bought it",
+      rows: rows
+    });
+
+    // ---- section 2's three failure modes ------------------------------------
+    var fired = [], nf = 0;
+    for (i = 0; i < sdindex_MODES.length; i++) {
+      var on = x.used > 0 && !!sdindex_MODES[i].f(x);
+      if (on) nf++;
+      fired.push({
+        label: sdindex_MODES[i].name,
+        flag: on ? "bad" : x.used === 0 ? "idle" : "ok",
+        title: on ? sdindex_MODES[i].why : "clear on this run"
+      });
+    }
+
+    return d.stack([
+      sdindex_strip(d, ctx),
+      head,
+      calendar,
+      d.cols([rubric, d.stack(bars)]),
+      d.cells(fired, {
+        label: "section 2's three failure modes — " +
+          (x.used === 0 ? "nothing settled yet" : nf + " firing")
+      }),
+      step.verdict
+        ? d.note("Five of the seven rows are bought with derivations and " +
+            "spoken reps. <b>No amount of reading produces either</b>, which " +
+            "is why the page's one rule is to design it yourself before you " +
+            "read the answer.", step.flag)
+        : d.note("Green on the calendar is a sitting that moved the rubric. " +
+            "Plain grey is a page read — necessary, and on its own not " +
+            "scored.", "idle")
+    ]);
+  }
+};
+
+  // ====================================================================
   // ====================================================================
   // ======================================================================
   // SIM · sdloadbalancing  (load-balancing.md)
@@ -9409,6 +19438,2235 @@ S["sdapidesign"] = {
         step.flag === "bad" ? "bad" : undefined));
 
       return d.stack(out);
+    }
+  };
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdlowleveldesign  (low-level-design.md)
+//
+// TIME AXIS: one machine-coding round, section 4's six steps in order, on
+// the page's own worked example — the parking lot. The clock runs, classes
+// get written, the demo runs or does not, and then the question the page
+// says is guaranteed arrives: "now add X". Three tabs build the same parking
+// lot three ways and are asked the same five extensions.
+//
+// The measurement the round is actually about is not minutes. It is
+// HOW MANY EXISTING CLASSES EACH "NOW ADD X" EDITS — the page's own
+// definition of what "scale" means in this round: "adding a feature without
+// rewriting". Tab 1 has time to spare and still fails it.
+//
+// CONFIG — page figures used verbatim
+//   60–90 minutes for the round                            — page intro / §4
+//   the six process steps and their windows                — §4
+//     1 CLARIFY 5–10 · 2 IDENTIFY ENTITIES 5 · 3 CLASS DIAGRAM 10
+//     4 CODE THE CORE 30–40 · 5 DEMO 5 · 6 EXTENSIONS 5
+//     (the minimums sum to the page's own 60-minute floor; the maximums to 75)
+//   the six scored dimensions                              — §1
+//   the class diagram, 12 classes and interfaces           — §5
+//     ParkingLot Level ParkingSpot Vehicle Car Motorcycle Truck Ticket
+//     FeeStrategy HourlyFee FlatRateFee WeekendFee
+//   the five "Now add…" extensions, in page order          — §5
+//   the nine failure modes                                 — §8
+//   the race: two threads, findAvailableSpot, spot 42      — §6
+//   "add a class" passes, "add an elif" does not           — §2
+//
+// CONFIG — declared here, because the page states none
+//   MIN_PER_CLASS is derived, not typed: the page's CODE THE CORE window
+//     tops out at 40 minutes and its class diagram holds 12 classes, so
+//     floor(40 / 12) = 3 minutes to write one working class.
+//   MIN_PER_EXT likewise: the EXTENSIONS window is 5 minutes and the page
+//     lists 5 extensions, so 1 minute to answer one.
+//   A phase spends what its work needs, or whatever the clock has left —
+//     whichever is smaller. Leftover minutes are reported as slack, because
+//     on this page slack is the point: tab 1 is not short of time.
+//   WeekendFee is held out of the base build in tab 2 and counted as the
+//     answer to extension 1, since the page says that extension is "the
+//     question the whole design exists to answer".
+//   The classes each extension touches were walked off the page's own class
+//     diagram; they are listed in the table on screen, not summarised.
+// ======================================================================
+
+var sdlld_TOTAL = 90;                    // page: 60–90 minutes
+var sdlld_DIAGRAM_CLASSES = 12;          // page's class diagram, counted
+var sdlld_EXT_WINDOW = 5;                // page: EXTENSIONS 5 min
+
+// the page's six steps, with its own windows
+var sdlld_STEPS = [
+  { n: 1, name: "CLARIFY",           lo: 5,  hi: 10, chip: "clarify",
+    leave: "scope said out loud, with what is OUT written down" },
+  { n: 2, name: "IDENTIFY ENTITIES", lo: 5,  hi: 5,  chip: "entities",
+    leave: "the nouns, and their relationships" },
+  { n: 3, name: "CLASS DIAGRAM",     lo: 10, hi: 10, chip: "diagram",
+    leave: "interfaces, classes, key methods — shown BEFORE code" },
+  { n: 4, name: "CODE THE CORE",     lo: 30, hi: 40, chip: "code",
+    leave: "the main flow, working, in memory" },
+  { n: 5, name: "DEMO",              lo: 5,  hi: 5,  chip: "demo",
+    leave: "a main() that exercises it" },
+  { n: 6, name: "EXTENSIONS",        lo: 5,  hi: 5,  chip: "extensions",
+    leave: "“how would you add X?” answered in classes" }
+];
+var sdlld_FLOOR = (function () {
+  var t = 0, i;
+  for (i = 0; i < sdlld_STEPS.length; i++) t += sdlld_STEPS[i].lo;
+  return t;                              // 60 — the page's own lower bound
+})();
+var sdlld_CEIL = (function () {
+  var t = 0, i;
+  for (i = 0; i < sdlld_STEPS.length; i++) t += sdlld_STEPS[i].hi;
+  return t;                              // 75
+})();
+
+// derived, not typed — see the config note above
+var sdlld_MIN_PER_CLASS = Math.floor(sdlld_STEPS[3].hi / sdlld_DIAGRAM_CLASSES);
+
+// ----------------------------------------------------------------------
+// The page's five extensions, in page order.
+// ----------------------------------------------------------------------
+var sdlld_EXT_NAMES = [
+  "Weekend pricing",
+  "Electric vehicles with charging",
+  "Multiple entrances",
+  "A display board of free spots",
+  "Monthly passes"
+];
+var sdlld_MIN_PER_EXT = Math.floor(sdlld_EXT_WINDOW / sdlld_EXT_NAMES.length);
+
+// ----------------------------------------------------------------------
+// Three parking lots. `base` is what gets written during CODE THE CORE;
+// `ext` is what each of the page's five questions costs, walked off the
+// page's class diagram.
+// ----------------------------------------------------------------------
+var sdlld_DESIGNS = {
+
+  // §2's BAD block: the fee rule is a conditional inside ParkingLot.
+  ifelif: {
+    key: "ifelif",
+    strategy: false,
+    base: ["ParkingLot", "Level", "ParkingSpot", "Vehicle", "Car",
+           "Motorcycle", "Truck", "Ticket"],
+    singleImpl: 0,
+    ext: [
+      { add: [], edit: ["ParkingLot"],
+        why: "another branch in calculateFee" },
+      { add: ["ElectricVehicle"], edit: ["Vehicle", "ParkingSpot", "ParkingLot"],
+        why: "new type, new size check, new rate branch" },
+      { add: [], edit: ["ParkingLot"],
+        why: "the lock lives inside park()" },
+      { add: ["DisplayBoard"], edit: ["ParkingSpot", "ParkingLot"],
+        why: "spots must push state and the lot must own the board" },
+      { add: ["Customer"], edit: ["ParkingLot"],
+        why: "another branch in calculateFee" }
+    ]
+  },
+
+  // §5's class diagram, with WeekendFee held back as extension 1's answer.
+  strategy: {
+    key: "strategy",
+    strategy: true,
+    base: ["ParkingLot", "Level", "ParkingSpot", "Vehicle", "Car",
+           "Motorcycle", "Truck", "Ticket", "FeeStrategy", "HourlyFee",
+           "FlatRateFee"],
+    singleImpl: 0,
+    ext: [
+      { add: ["WeekendFee"], edit: [],
+        why: "a new FeeStrategy — the page's one-sentence answer" },
+      { add: ["ElectricVehicle"], edit: [],
+        why: "new VehicleType and SpotSize values; canFit already handles it" },
+      { add: [], edit: ["ParkingSpot", "ParkingLot"],
+        why: "§6 — the lot-wide lock becomes compare-and-set on the spot" },
+      { add: ["SpotObserver", "DisplayBoard"], edit: ["ParkingSpot"],
+        why: "Observer — the spot gains subscribers" },
+      { add: ["MonthlyPassFee"], edit: [],
+        why: "another FeeStrategy" }
+    ]
+  },
+
+  // §8's over-scoping row, built out of §3's warning against forcing
+  // patterns in. Everything the strategy design has, plus twelve
+  // abstractions nothing has asked for.
+  overbuilt: {
+    key: "overbuilt",
+    strategy: true,
+    base: ["ParkingLot", "Level", "ParkingSpot", "Vehicle", "Car",
+           "Motorcycle", "Truck", "Ticket", "FeeStrategy", "HourlyFee",
+           "FlatRateFee",
+           "VehicleFactory", "CarFactory", "MotorcycleFactory", "TruckFactory",
+           "SpotAllocationStrategy", "NearestSpotStrategy",
+           "TicketRepository", "InMemoryTicketRepository",
+           "ParkingLotConfig", "EventBus", "SpotEvent", "ParkingLotBuilder"],
+    // SpotAllocationStrategy and TicketRepository each have exactly one
+    // implementation — §8's last row, "abstraction with no purpose is noise"
+    singleImpl: 2,
+    ext: [
+      { add: ["WeekendFee"], edit: [], why: "a new FeeStrategy" },
+      { add: ["ElectricVehicle"], edit: [], why: "a new factory product" },
+      { add: [], edit: ["ParkingSpot", "ParkingLot"], why: "§6, as above" },
+      { add: ["SpotObserver", "DisplayBoard"], edit: [],
+        why: "the EventBus is already there" },
+      { add: ["MonthlyPassFee"], edit: [], why: "another FeeStrategy" }
+    ]
+  }
+};
+
+// ----------------------------------------------------------------------
+// §1's six scored dimensions. Each is decided by the run, never asserted.
+// ----------------------------------------------------------------------
+var sdlld_SCORED = [
+  { name: "Requirement handling", buy: "at least the page's 5 clarifying minutes",
+    f: function (r) { return r.min[0] >= sdlld_STEPS[0].lo; } },
+  { name: "Class modelling", buy: "the diagram shown before any code",
+    f: function (r) { return r.min[2] >= sdlld_STEPS[2].lo && !r.godClass; } },
+  { name: "Extensibility", buy: "\"add weekend pricing\" edits nothing",
+    f: function (r) {
+      return r.answered >= 1 && r.perExt[0].edit.length === 0;
+    } },
+  { name: "Correctness", buy: "a main() that actually runs",
+    f: function (r) { return r.demoRan; } },
+  { name: "Code quality", buy: "no god class, no interface with one impl",
+    f: function (r) { return !r.godClass && r.design.singleImpl === 0; } },
+  { name: "Concurrency", buy: "the two-threads race raised unprompted",
+    f: function (r) { return r.traits.race; } }
+];
+
+// §8's nine failure modes, as tests over the run.
+var sdlld_FAILS = [
+  { name: "Coding before showing a class model",
+    f: function (r) { return r.min[2] < sdlld_STEPS[2].lo; } },
+  { name: "A god class doing everything",
+    f: function (r) { return r.godClass; } },
+  { name: "if/elif chains over types",
+    f: function (r) { return !r.design.strategy; } },
+  { name: "Forcing patterns in",
+    f: function (r) { return r.traits.forces; } },
+  { name: "Discussing sharding or CAP",
+    f: function (r) { return r.traits.hld; } },
+  { name: "Ignoring concurrency entirely",
+    f: function (r) { return !r.traits.race; } },
+  { name: "Not running the code",
+    f: function (r) { return !r.demoRan; } },
+  { name: "Over-scoping",
+    f: function (r) { return r.design.base.length > sdlld_DIAGRAM_CLASSES; } },
+  { name: "Interfaces for things with one implementation",
+    f: function (r) { return r.design.singleImpl > 0; } }
+];
+
+// ----------------------------------------------------------------------
+// Run the clock. A step spends what its work needs or what is left.
+// ----------------------------------------------------------------------
+function sdlld_run(cfg) {
+  var design = sdlld_DESIGNS[cfg.design];
+  var need = design.base.length * sdlld_MIN_PER_CLASS;
+  var wantExt = sdlld_EXT_NAMES.length * sdlld_MIN_PER_EXT;
+  var want = [cfg.clarify, cfg.entities, cfg.diagram, need, sdlld_STEPS[4].hi,
+              wantExt];
+
+  var min = [], endAt = [], t = 0, i;
+  for (i = 0; i < want.length; i++) {
+    var left = sdlld_TOTAL - t;
+    var got = want[i] < left ? want[i] : left;
+    if (got < 0) got = 0;
+    t += got;
+    min.push(got);
+    endAt.push(t);
+  }
+
+  var written = Math.floor(min[3] / sdlld_MIN_PER_CLASS);
+  if (written > design.base.length) written = design.base.length;
+  var missing = design.base.length - written;
+  var demoRan = min[4] >= sdlld_STEPS[4].hi && missing === 0;
+  var answered = Math.floor(min[5] / sdlld_MIN_PER_EXT);
+  if (answered > sdlld_EXT_NAMES.length) answered = sdlld_EXT_NAMES.length;
+
+  // what the answered extensions cost, walked off the design
+  var perExt = [], added = [], editCount = {}, edits = 0, adds = 0;
+  for (i = 0; i < sdlld_EXT_NAMES.length; i++) {
+    var e = design.ext[i];
+    var on = i < answered;
+    perExt.push({ on: on, add: e.add, edit: e.edit, why: e.why });
+    if (!on) continue;
+    var j;
+    for (j = 0; j < e.add.length; j++) { added.push(e.add[j]); adds++; }
+    for (j = 0; j < e.edit.length; j++) {
+      editCount[e.edit[j]] = (editCount[e.edit[j]] || 0) + 1;
+      edits++;
+    }
+  }
+  var worst = "", worstN = 0;
+  for (var k in editCount) {
+    if (editCount[k] > worstN) { worstN = editCount[k]; worst = k; }
+  }
+  // a god class: one class carrying more than half the extensions asked
+  var godClass = answered > 0 && worstN * 2 > answered;
+
+  var r = {
+    cfg: cfg, design: design, traits: cfg.traits,
+    want: want, min: min, endAt: endAt, spent: t, slack: sdlld_TOTAL - t,
+    needCode: need, written: written, missing: missing,
+    demoRan: demoRan, answered: answered, perExt: perExt,
+    added: added, adds: adds, edits: edits,
+    editCount: editCount, worst: worst, worstN: worstN, godClass: godClass
+  };
+
+  var hits = [], n = 0;
+  for (i = 0; i < sdlld_SCORED.length; i++) {
+    var on2 = !!sdlld_SCORED[i].f(r);
+    hits.push(on2);
+    if (on2) n++;
+  }
+  r.hits = hits; r.score = n;
+
+  var fired = [], nf = 0;
+  for (i = 0; i < sdlld_FAILS.length; i++) {
+    var on3 = !!sdlld_FAILS[i].f(r);
+    fired.push(on3);
+    if (on3) nf++;
+  }
+  r.fired = fired; r.nFired = nf;
+  return r;
+}
+
+// ----------------------------------------------------------------------
+function sdlld_scenario(cfg) {
+  var r = sdlld_run(cfg);
+  var steps = [{ r: r, p: 0, flag: "idle", caption: cfg.idle }];
+
+  for (var i = 0; i < sdlld_STEPS.length; i++) {
+    var st = sdlld_STEPS[i];
+    var got = r.min[i];
+    var head;
+    if (got === 0) {
+      head = "<b>Step " + st.n + ", " + st.name + ": skipped.</b> ";
+    } else if (got < st.lo) {
+      head = "<b>Step " + st.n + ", " + st.name + ": " + got + " of the " +
+        st.lo + " minutes the page gives it</b> (clock at " + r.endAt[i] +
+        "). ";
+    } else {
+      head = "<b>Step " + st.n + ", " + st.name + ": " + got +
+        " minutes, clock at " + r.endAt[i] + " of " + sdlld_TOTAL + ".</b> ";
+    }
+    steps.push({
+      r: r, p: i + 1,
+      caption: head + cfg.say[i],
+      flag: got === 0 ? "bad" : got < st.lo ? "bad" : "ok"
+    });
+  }
+
+  steps.push({
+    r: r, p: sdlld_STEPS.length + 1, verdict: true,
+    caption: cfg.verdict(r),
+    flag: r.score >= 5 ? "ok" : r.score <= 2 ? "bad" : "warn"
+  });
+
+  var phases = ["brief"];
+  for (var k = 0; k < sdlld_STEPS.length; k++) phases.push(sdlld_STEPS[k].chip);
+  phases.push("scored");
+
+  return { id: cfg.id, label: cfg.label, phases: phases, steps: steps };
+}
+
+function sdlld_list(a) { return a.length ? a.join(", ") : "—"; }
+
+// ----------------------------------------------------------------------
+// TAB 1 — §2's BAD block, built by someone who starts typing at minute one.
+// ----------------------------------------------------------------------
+var sdlld_A = sdlld_scenario({
+  id: "ifelif", label: "Straight to code (if/elif)",
+  design: "ifelif",
+  clarify: 2, entities: 0, diagram: 0,
+  traits: { race: false, forces: false, hld: false },
+  idle: "<b>The parking lot, " + sdlld_TOTAL + " minutes, and a candidate who " +
+    "starts typing at minute two.</b> No entity pass, no class diagram, and " +
+    "the fee rule written where it is easiest to write it — an " +
+    "<code>if/elif</code> on vehicle type inside <code>ParkingLot</code>. The " +
+    "code will work. Press Play and watch what the five \"now add\" questions " +
+    "cost.",
+  say: [
+    "Two questions and straight in. Nothing written down as out of scope, so " +
+      "there is no agreed boundary to design against.",
+    "Skipped — the nouns are never listed, which is how fee calculation ends " +
+      "up living inside the class that parks cars.",
+    "Skipped. The page's warning is that three minutes here is the only cheap " +
+      "chance to correct a wrong model; the alternative is finding it later, " +
+      "at full price.",
+    "Eight classes at " + sdlld_MIN_PER_CLASS + " minutes each. It compiles, " +
+      "it parks vehicles, it charges them. Nothing in this step is wrong.",
+    "A <code>main()</code> parks a car, a motorcycle and a truck, and unparks " +
+      "them. It runs — the page's hard requirement for a machine-coding " +
+      "round, and this candidate meets it.",
+    "All five \"now add\" questions arrive, and every one of them is answered " +
+      "with an edit to a file that already exists."
+  ],
+  verdict: function (r) {
+    return "<b>" + r.score + " of " + sdlld_SCORED.length + " scored " +
+      "dimensions, with <b>" + r.slack + " minutes of the " + sdlld_TOTAL +
+      " left unused</b>.</b> That is the finding: this candidate was never " +
+      "short of time. The five extensions cost <b>" + r.edits +
+      " edits to existing classes</b> against <b>" + r.adds + "</b> new ones, " +
+      "and <b>" + r.worst + "</b> alone is opened " + r.worstN + " times — " +
+      "one class carrying " + r.worstN + " of " + r.answered +
+      " requirement changes is the page's god class, arrived at honestly. " +
+      "<i>\"Add a class\" passes and \"add an elif\" does not, and the " +
+      "difference was decided in the three minutes that were skipped, not in " +
+      "the " + r.min[3] + " spent coding.</i>";
+  }
+});
+
+// ----------------------------------------------------------------------
+// TAB 2 — §4's process, on §5's class diagram.
+// ----------------------------------------------------------------------
+var sdlld_B = sdlld_scenario({
+  id: "strategy", label: "The process, as written",
+  design: "strategy",
+  clarify: 10, entities: 5, diagram: 10,
+  traits: { race: true, forces: false, hld: false },
+  idle: "<b>The same problem and the same clock, run through section 4's six " +
+    "steps.</b> Scope stated out loud, entities listed, class diagram shown " +
+    "<i>before</i> any code, and fee calculation put behind " +
+    "<code>FeeStrategy</code> because that is the axis the requirements will " +
+    "move along. <code>WeekendFee</code> is deliberately not built — it is " +
+    "extension 1's answer.",
+  say: [
+    "Ten minutes of scoping, and the out-of-scope list said out loud: no " +
+      "persistence, no UI, no payment gateway, in-memory, single process. " +
+      "Nobody expects a database, and saying so buys the modelling time.",
+    "The nouns, and their relationships: a lot has levels, a level has spots, " +
+      "a spot may hold a vehicle, a ticket carries the spot and the entry time.",
+    "The diagram goes on the board before a line is typed. Three minutes of " +
+      "it is the argument for <code>FeeStrategy</code> as an interface, and " +
+      "that argument is the whole round.",
+    "Eleven classes at " + sdlld_MIN_PER_CLASS + " minutes each, inside the " +
+      "page's " + sdlld_STEPS[3].lo + "–" + sdlld_STEPS[3].hi + " minute " +
+      "window. <code>feeStrategy</code> is injected, so a fake clock and a " +
+      "fake rate table make it testable.",
+    "It runs. Then, unprompted: two threads can both read spot 42 as free. " +
+      "<code>synchronized</code> on the lot is correct and simple, and it " +
+      "serialises every entrance — with several gates it becomes a " +
+      "compare-and-set on the spot itself.",
+    "The same five questions. Four of them are answered with new files only."
+  ],
+  verdict: function (r) {
+    return "<b>" + r.score + " of " + sdlld_SCORED.length + ", and the number " +
+      "that matters is <b>" + r.edits + " existing-class edits across all " +
+      r.answered + " extensions</b>.</b> Tab 1 paid " +
+      sdlld_A.steps[0].r.edits + ". \"Add weekend pricing\" — the question " +
+      "the page says the design exists to answer — costs exactly one new " +
+      "file and touches nothing. The honest exception is on screen: " +
+      "<b>multiple entrances</b> still edits <b>" +
+      r.perExt[2].edit.length + "</b> classes, because concurrency is not an " +
+      "axis <code>FeeStrategy</code> covers, and the page says so itself in " +
+      "§6. <i>Open/closed is not a property of a codebase; it is a property " +
+      "of one named axis, and you only get the axes you predicted.</i>";
+  }
+});
+
+// ----------------------------------------------------------------------
+// TAB 3 — §8's over-scoping and §3's warning against forcing patterns in.
+// ----------------------------------------------------------------------
+var sdlld_C = sdlld_scenario({
+  id: "overbuilt", label: "Patterns first, never runs",
+  design: "overbuilt",
+  clarify: 10, entities: 5, diagram: 18,
+  traits: { race: true, forces: true, hld: true },
+  idle: "<b>The strongest modeller of the three, and the worst result.</b> " +
+    "Same scoping, same entity pass, then a diagram that keeps growing: a " +
+    "factory per vehicle, an allocation strategy, a repository interface, a " +
+    "config singleton, an event bus, a builder. Every one of them is a real " +
+    "pattern, correctly applied. Watch the clock.",
+  say: [
+    "Ten clean minutes, and one sentence that does not belong: \"at scale " +
+      "we'd shard the lot registry\". Wrong round — the page is explicit that " +
+      "this reads as pattern-matching rather than listening.",
+    "The nouns, correctly. Nothing wrong here either.",
+    "Eighteen minutes, eight past the page's window, and the diagram now " +
+      "holds " + sdlld_DESIGNS.overbuilt.base.length + " classes against the " +
+      "page's " + sdlld_DIAGRAM_CLASSES + ". Announcing the Abstract Factory " +
+      "before anything needs one is the negative signal §3 warns about.",
+    "The clock hands over whatever is left, and it is not enough: " +
+      "<code>ParkingLotBuilder</code>, <code>EventBus</code> and the " +
+      "repository implementations are still stubs when minute " +
+      sdlld_TOTAL + " arrives.",
+    "There is no demo, because there is nothing complete to demo. " +
+      "\"Machine coding\" means it must run, and this does not.",
+    "The five \"now add\" questions are never reached — and this is the " +
+      "design that would have answered four of them with new files alone."
+  ],
+  verdict: function (r) {
+    return "<b>" + r.score + " of " + sdlld_SCORED.length + " — below tab 2's " +
+      sdlld_B.steps[0].r.score + " and above tab 1's " +
+      sdlld_A.steps[0].r.score + " — from the best class model in the " +
+      "sim.</b> " + r.written + " of " + r.design.base.length +
+      " classes written, <b>" + r.missing + " unfinished</b>, <b>" +
+      r.answered + "</b> extensions answered. The design needed <b>" +
+      r.needCode + "</b> coding minutes and the clock had <b>" + r.min[3] +
+      "</b> left after " + r.min[2] + " minutes of diagram. <i>" +
+      r.design.singleImpl + " of its interfaces have exactly one " +
+      "implementation, which is abstraction with no purpose — and the " +
+      "extensibility it was all for is the one thing it never got to " +
+      "demonstrate.</i>";
+  }
+});
+
+// ----------------------------------------------------------------------
+function sdlld_strip(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : "idle"
+    });
+  }
+  return d.pills(chips);
+}
+
+// ======================================================================
+S["sdlowleveldesign"] = {
+  title: "Build the parking lot three ways, then add weekend pricing",
+  note: "One machine-coding round of <b>" + sdlld_TOTAL + " minutes</b> " +
+    "against section 4's six steps — <b>clarify " + sdlld_STEPS[0].lo + "–" +
+    sdlld_STEPS[0].hi + " · entities " + sdlld_STEPS[1].lo + " · diagram " +
+    sdlld_STEPS[2].lo + " · code " + sdlld_STEPS[3].lo + "–" +
+    sdlld_STEPS[3].hi + " · demo " + sdlld_STEPS[4].hi + " · extensions " +
+    sdlld_STEPS[5].hi + "</b>, whose minimums sum to the page's own <b>" +
+    sdlld_FLOOR + "-minute</b> floor and whose maximums sum to <b>" +
+    sdlld_CEIL + "</b>. Two rates are derived rather than typed: the page's " +
+    "class diagram holds <b>" + sdlld_DIAGRAM_CLASSES + "</b> classes and its " +
+    "coding window tops out at " + sdlld_STEPS[3].hi + " minutes, so a class " +
+    "costs <b>" + sdlld_MIN_PER_CLASS + " minutes</b>; its extensions table " +
+    "holds <b>" + sdlld_EXT_NAMES.length + "</b> rows in a " + sdlld_EXT_WINDOW +
+    "-minute window, so an answer costs <b>" + sdlld_MIN_PER_EXT +
+    " minute</b>. A step spends what its work needs or what the clock has " +
+    "left. Everything else on screen is counted off the run: classes written, " +
+    "whether the demo runs, and — the measurement this round is really about " +
+    "— <b>how many existing classes each “now add X” edits</b>, " +
+    "walked off the page's own class diagram. Scoring is section 1's <b>" +
+    sdlld_SCORED.length + "</b> dimensions and section 8's <b>" +
+    sdlld_FAILS.length + "</b> failure modes.",
+  interval: 1600,
+
+  scenarios: [sdlld_A, sdlld_B, sdlld_C],
+
+  draw: function (step, d, ctx) {
+    var r = step.r, p = step.p, i;
+    var design = r.design;
+    var shown = p === 0 ? -1 : p - 1;          // index of the step on screen
+    var settled = p === 0 ? -1 : (p > sdlld_STEPS.length ? sdlld_STEPS.length - 1 : p - 1);
+    var clock = p === 0 ? 0 : r.endAt[settled];
+    var codeDone = settled >= 3;
+    var written = codeDone ? r.written : 0;
+    var extDone = settled >= 5;
+    var answered = extDone ? r.answered : 0;
+
+    // ---- headline ---------------------------------------------------------
+    var head = d.cols([
+      d.big(clock + " min", p === 0 ? "the round has not started"
+        : "of " + sdlld_TOTAL + " spent",
+        p === 0 ? "idle" : clock >= sdlld_TOTAL ? "bad" : "ok"),
+      d.stat({
+        label: "classes written",
+        value: written + " / " + design.base.length,
+        sub: !codeDone ? "code step not reached"
+          : r.missing > 0 ? r.missing + " unfinished at minute " + sdlld_TOTAL
+          : "complete, at " + sdlld_MIN_PER_CLASS + " min each",
+        flag: !codeDone ? "idle" : r.missing > 0 ? "bad" : "ok"
+      }),
+      d.stat({
+        label: "existing classes edited",
+        value: extDone ? String(r.edits) : "—",
+        sub: !extDone ? "the extensions have not been asked"
+          : r.edits === 0 ? "nothing already written was touched"
+          : r.worst + " opened " + r.worstN + " times",
+        flag: !extDone ? "idle" : r.edits === 0 ? "ok" : r.edits > answered ? "bad" : "warn"
+      }),
+      d.stat({
+        label: "demo",
+        value: settled < 4 ? "—" : r.demoRan ? "runs" : "never runs",
+        sub: settled < 4 ? "not reached yet" : "machine coding means it must run",
+        flag: settled < 4 ? "idle" : r.demoRan ? "ok" : "bad"
+      })
+    ]);
+
+    // ---- the step on screen -----------------------------------------------
+    var curNode;
+    if (p === 0) {
+      curNode = d.node({
+        title: "the round has not started",
+        status: "0 of " + sdlld_STEPS.length,
+        statusFlag: "idle",
+        meta: "section 4, six steps, " + sdlld_TOTAL + " minutes",
+        rows: [
+          { label: "the design this tab builds", value: design.base.length + " classes" },
+          { label: "fee rule lives", value: design.strategy ? "behind an interface" : "in a conditional",
+            flag: design.strategy ? "ok" : "bad" },
+          { label: "extensions waiting", value: String(sdlld_EXT_NAMES.length) }
+        ]
+      });
+    } else if (shown < sdlld_STEPS.length) {
+      var cs = sdlld_STEPS[shown];
+      var got2 = r.min[shown];
+      curNode = d.node({
+        title: "step " + cs.n + " — " + cs.name,
+        status: got2 === 0 ? "SKIPPED" : got2 + " min",
+        statusFlag: got2 === 0 ? "bad" : got2 < cs.lo ? "bad" : "ok",
+        meta: "the page's window: " + (cs.lo === cs.hi ? cs.lo : cs.lo + "–" + cs.hi) + " min",
+        flag: got2 < cs.lo ? "bad" : undefined,
+        rows: [
+          { label: "wanted", value: r.want[shown] + " min" },
+          { label: "the clock allowed", value: got2 + " min",
+            flag: got2 < cs.lo ? "bad" : "ok" },
+          { label: "leaves behind", value: cs.leave,
+            flag: got2 >= cs.lo ? "ok" : "bad" },
+          { label: "produced?", value: got2 >= cs.lo ? "yes" : "no",
+            flag: got2 >= cs.lo ? "ok" : "bad" }
+        ]
+      });
+    } else {
+      curNode = d.node({
+        title: "the round is over",
+        status: r.spent + " / " + sdlld_TOTAL + " min",
+        statusFlag: r.slack > 0 ? "warn" : "bad",
+        meta: "six steps done, the interviewer is writing",
+        rows: [
+          { label: "minutes unused", value: String(r.slack),
+            flag: r.slack === 0 ? "bad" : "warn" },
+          { label: "steps that produced their deliverable",
+            value: (function () {
+              var c = 0, q;
+              for (q = 0; q < sdlld_STEPS.length; q++) {
+                if (r.min[q] >= sdlld_STEPS[q].lo) c++;
+              }
+              return c + " of " + sdlld_STEPS.length;
+            })() },
+          { label: "existing classes edited", value: String(r.edits),
+            flag: r.edits === 0 ? "ok" : "bad" },
+          { label: "new files added", value: String(r.adds),
+            flag: r.adds > 0 ? "ok" : "idle" }
+        ]
+      });
+    }
+
+    // ---- the clock, one cell per five minutes -----------------------------
+    var tick = 5, cells = [], m;
+    for (m = 0; m < sdlld_TOTAL / tick; m++) {
+      var at = m * tick;
+      var owner = -1, k;
+      for (k = 0; k < sdlld_STEPS.length; k++) {
+        var lo = k === 0 ? 0 : r.endAt[k - 1];
+        if (at >= lo && at < r.endAt[k]) { owner = k; break; }
+      }
+      cells.push({
+        label: owner < 0 ? "" : String(owner + 1),
+        flag: at >= clock ? "idle"
+          : owner === 3 ? "ok"
+          : owner === 5 ? "warn" : undefined,
+        title: owner < 0
+          ? "minute " + at + " — unused"
+          : "minute " + at + " — step " + (owner + 1) + ", " + sdlld_STEPS[owner].name
+      });
+    }
+    var clockRow = d.cells(cells, {
+      label: "the clock — " + sdlld_TOTAL + " minutes, one cell per " + tick +
+        " · green is coding · amber is the extension questions · grey is unspent",
+      dense: true
+    });
+
+    // ---- the classes -------------------------------------------------------
+    var ccells = [];
+    for (i = 0; i < design.base.length; i++) {
+      ccells.push({
+        label: design.base[i],
+        flag: i < written
+          ? (r.editCount[design.base[i]] ? "bad" : "ok")
+          : codeDone ? "warn" : "idle",
+        title: i >= written
+          ? (codeDone ? "still a stub when the clock ran out" : "not written yet")
+          : r.editCount[design.base[i]]
+            ? "reopened " + r.editCount[design.base[i]] + " time(s) by the extensions"
+            : "written and never reopened"
+      });
+    }
+    for (i = 0; i < r.added.length && extDone; i++) {
+      ccells.push({
+        label: "+ " + r.added[i], flag: "ok",
+        title: "added by an extension — no existing file touched to create it"
+      });
+    }
+    var classGrid = d.cells(ccells, {
+      label: "the class model — green written and untouched · red reopened by " +
+        "an extension · amber unfinished"
+    });
+
+    // ---- the extension table ------------------------------------------------
+    var trows = [];
+    for (i = 0; i < sdlld_EXT_NAMES.length; i++) {
+      var e = r.perExt[i];
+      var on = extDone && e.on;
+      trows.push([
+        sdlld_EXT_NAMES[i],
+        !on ? "not reached" : (e.add.length ? "+" + e.add.length + "  " + sdlld_list(e.add) : "0"),
+        !on ? "—" : (e.edit.length ? e.edit.length + "  " + sdlld_list(e.edit) : "0 — nothing"),
+        !on ? "—" : e.why
+      ]);
+    }
+    var extTable = d.table(
+      ["now add…", "new files", "existing classes edited", "why"], trows);
+
+    // ---- scored dimensions ---------------------------------------------------
+    var srows = [];
+    for (i = 0; i < sdlld_SCORED.length; i++) {
+      var got = step.verdict ? r.hits[i] : false;
+      srows.push({
+        label: sdlld_SCORED[i].name,
+        value: step.verdict ? (got ? "scored" : "missed · " + sdlld_SCORED[i].buy)
+          : sdlld_SCORED[i].buy,
+        flag: !step.verdict ? "idle" : got ? "ok" : "bad"
+      });
+    }
+    var card = d.node({
+      title: "section 1 — what is scored",
+      status: step.verdict ? r.score + " of " + sdlld_SCORED.length : "open",
+      statusFlag: !step.verdict ? "idle" : r.score >= 5 ? "ok" : r.score <= 2 ? "bad" : "warn",
+      meta: step.verdict ? "decided by the run above" : "nothing settled until the round ends",
+      rows: srows
+    });
+
+    // ---- section 8's failure modes --------------------------------------------
+    var fcells = [], nf = 0;
+    for (i = 0; i < sdlld_FAILS.length; i++) {
+      var fon = step.verdict && r.fired[i];
+      if (fon) nf++;
+      fcells.push({
+        label: sdlld_FAILS[i].name,
+        flag: !step.verdict ? "idle" : fon ? "bad" : "ok",
+        title: !step.verdict ? "settled at the end of the round"
+          : fon ? "fired on this run" : "clear on this run"
+      });
+    }
+
+    return d.stack([
+      sdlld_strip(d, ctx),
+      head,
+      curNode,
+      clockRow,
+      classGrid,
+      p >= 6 ? extTable : d.note("The five “now add…” questions " +
+        "arrive in step 6. The page guarantees them, and the page's own " +
+        "definition of scale in this round is how much of what is already " +
+        "written has to change to answer them.", "idle"),
+      d.cols([card, d.cells(fcells, {
+        label: "section 8 — failure modes" +
+          (step.verdict ? " · " + nf + " of " + sdlld_FAILS.length + " firing"
+            : " · settled at the end")
+      })]),
+      step.verdict
+        ? d.note("The interviewer's follow-up is <b>always a new type</b>. " +
+            "Everything above only matters because of what it costs in the " +
+            "last five minutes.", step.flag)
+        : d.note("Step numbers on the clock are section 4's own: <b>1</b> " +
+            "clarify · <b>2</b> entities · <b>3</b> diagram · <b>4</b> code · " +
+            "<b>5</b> demo · <b>6</b> extensions.", "idle")
+    ]);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdmockkit  (mock-kit.md)
+//
+// TIME AXIS: section 6's four-week schedule, run attempt by attempt. Twelve
+// 45-minute self-mocks, three a week, each one scored on section 3's
+// eight-row card, each score choosing what the next attempt fixes. The
+// sequence is the page's own loop — attempt, score, watch, fix one thing,
+// attempt again — and the thing that moves is the scorecard.
+//
+// Three tabs run the same twelve attempts under three of the page's rules:
+//   1. the attempts happen and are never scored — section 1's "that felt
+//      okay is not information"
+//   2. the protocol: score every attempt, fix exactly one row
+//   3. rule 1 broken — the same prompt every time, which the page says is
+//      testing recall rather than the skill. The tracker climbs anyway.
+//
+// CONFIG — page figures used verbatim
+//   the eight scorecard rows, 0–3, maximum 24, and every one of the
+//     thirty-two descriptors quoted on screen           — §3
+//   the four bands and their "do next"                  — §3
+//     0–8 · 9–14 · 15–19 · 20–24
+//   targets from the recording checklist: first box ~13 min, deep dive
+//     ~25 min, first mention of failure ~40 min          — §4
+//   "First box after minute 20 → over-scoping"           — §5
+//   twelve attempts, three a week, four weeks            — §6
+//   the four rules, including "never the same prompt twice in a week —
+//     you are testing recall, not memory of yesterday" and
+//     "one fix per attempt. Chasing all eight rows at once fixes none."  — §6
+//   the twelve prompts, in page order                    — §7
+//   the five stop-condition boxes                        — §9
+//   "row 6 at a 3 is the single strongest predictor"     — §3
+//   "Self-mocks train structure, depth and narration"    — §9
+//   45-minute round                                      — §2
+//
+// CONFIG — declared here, because the page states none
+//   START is one cold attempt by someone who has read the handbook and never
+//     spoken it aloud, written in the page's own 0–3 words:
+//       1 Scoping 1 · 2 Estimation 0 · 3 Structure 1 · 4 Justification 1
+//       5 Depth 1 · 6 Trade-offs 0 · 7 Failure 0 · 8 Communication 1  = 5/24
+//   A FIX lands when one row gets an attempt's undivided attention: +1 to
+//     the lowest row on the card, ties to the lower row number. Split the
+//     attention eight ways and no row ever gets a whole unit, which is the
+//     page's "chasing all eight rows at once fixes none".
+//   A REP GAIN: once a week, +1 to the lowest of rows 3, 5 and 8 — the page
+//     says self-mocks train structure, depth and narration, and those three
+//     move on repetition alone whether or not anyone scored.
+//   TRANSFER: a fix earned on a prompt you have already attempted raises
+//     your score on THAT prompt and does not transfer to an unseen one.
+//     That is what "testing recall, not the skill" means, made countable.
+//   The four observables are linear in the rows that produce them, anchored
+//     on the page's own numbers:
+//       first box  = 13 + 3·(3 − row1)   — 13 is the page's target, and 3 is
+//                    the smallest step that puts row1 = 0 past the page's
+//                    over-scoping threshold of minute 20 (it lands on 22)
+//       deep dive  = 25 + 3·(3 − row3)   — 25 is the page's target
+//       failure at = 40 + 3·(3 − row7)   — 40 is the page's target; past the
+//                    45-minute round it was never reached
+//       silences   = 8 − 2·row8          — the 8 is forced by the page's own
+//                    stop condition of fewer than three at row8 = 3
+// ======================================================================
+
+var sdmockkit_ROUND = 45;          // page: 45-minute attempt
+var sdmockkit_WEEKS = 4;           // page §6
+var sdmockkit_PER_WEEK = 3;        // page §6: 3 attempts a week
+var sdmockkit_ATTEMPTS = sdmockkit_WEEKS * sdmockkit_PER_WEEK;   // 12
+var sdmockkit_MAXROW = 3;          // page §3: each row 0–3
+
+// §3's eight rows, with the page's own wording for every level.
+var sdmockkit_ROWS = [
+  { n: 1, name: "Scoping", short: "scope",
+    w: ["Started designing immediately", "Asked one or two questions",
+        "Asked about scale and core actions",
+        "Wrote in/out on the board and confirmed it"] },
+  { n: 2, name: "Estimation", short: "estimate",
+    w: ["Skipped it", "Did maths that changed nothing",
+        "One number changed a decision",
+        "Numbers drove ≥2 decisions, stated aloud"] },
+  { n: 3, name: "Structure", short: "structure",
+    w: ["Interviewer would have had to steer", "Drifted, recovered",
+        "Followed the phases loosely",
+        "Ran the clock; announced each transition"] },
+  { n: 4, name: "Justification", short: "because",
+    w: ["Named technologies, no reasons", "Some choices justified",
+        "Most choices tied to a requirement",
+        "Every major choice traced to a stated requirement"] },
+  { n: 5, name: "Depth", short: "depth",
+    w: ["Stayed at box level", "One component at level 2", "One at level 3",
+        "Level 3 on two, and offered the interviewer a choice"] },
+  { n: 6, name: "Trade-offs", short: "cost",
+    w: ["None stated", "Named without resolving", "Resolved with a reason",
+        "Volunteered the cost of your own choice, unprompted"] },
+  { n: 7, name: "Failure", short: "failure",
+    w: ["Never reached it", "Mentioned redundancy",
+        "Walked the diagram killing boxes",
+        "Also named the assumption the design leans on hardest"] },
+  { n: 8, name: "Communication", short: "narration",
+    w: ["Board unreadable; long silences", "Followable with effort",
+        "Clear, mostly narrated",
+        "Narrated throughout; board readable at minute " + sdmockkit_ROUND] }
+];
+var sdmockkit_MAX = sdmockkit_ROWS.length * sdmockkit_MAXROW;    // 24
+
+// declared: the cold first attempt, in the page's own words
+var sdmockkit_START = [1, 0, 1, 1, 1, 0, 0, 1];
+
+// page §9: "self-mocks train structure, depth and narration" — rows 3, 5, 8
+var sdmockkit_REP_ROWS = [2, 4, 7];
+
+// §3's bands
+var sdmockkit_BANDS = [
+  { lo: 0,  hi: 8,  name: "Not yet a round",
+    next: "Drill the framework alone. Re-run the same prompt tomorrow" },
+  { lo: 9,  hi: 14, name: "Recognisable, thin",
+    next: "You are reciting. Attack depth (5) and justification (4)" },
+  { lo: 15, hi: 19, name: "Would pass some loops",
+    next: "Push trade-offs (6) and failure (7) — the two most-skipped" },
+  { lo: 20, hi: 24, name: "Above the bar",
+    next: "New shapes, not repeat prompts. Book a real mock" }
+];
+
+// §7's twelve prompts, in page order
+var sdmockkit_PROMPTS = [
+  "URL shortener", "Rate limiter", "News feed", "Chat", "Ticket booking",
+  "Web crawler", "Video platform", "Ride-sharing", "E-commerce",
+  "Key-value store", "Logging & monitoring", "Collaborative editor"
+];
+
+// §4's targets, and the §5 threshold the drift step is fixed by
+var sdmockkit_T_BOX = 13;
+var sdmockkit_T_DIVE = 25;
+var sdmockkit_T_FAIL = 40;
+var sdmockkit_OVERSCOPE = 20;
+// smallest whole-minute step per point that pushes row1 = 0 past minute 20
+var sdmockkit_DRIFT = Math.floor((sdmockkit_OVERSCOPE - sdmockkit_T_BOX) /
+  sdmockkit_MAXROW) + 1;                                          // 3
+// forced by §9's "fewer than three silences" at row 8 = 3
+var sdmockkit_SIL_PER = 2;
+var sdmockkit_SIL_MAXOK = 2;
+var sdmockkit_SIL_BASE = sdmockkit_SIL_MAXOK + sdmockkit_SIL_PER * sdmockkit_MAXROW; // 8
+
+// §9's stop condition
+var sdmockkit_STOP_TOTAL = 18;
+var sdmockkit_STOP_BOX = 15;
+var sdmockkit_STOP_ROW6 = 2;
+var sdmockkit_STOP_SIL = 3;
+
+function sdmockkit_total(v) {
+  var t = 0, i;
+  for (i = 0; i < v.length; i++) t += v[i];
+  return t;
+}
+function sdmockkit_band(t) {
+  for (var i = 0; i < sdmockkit_BANDS.length; i++) {
+    if (t >= sdmockkit_BANDS[i].lo && t <= sdmockkit_BANDS[i].hi) return sdmockkit_BANDS[i];
+  }
+  return sdmockkit_BANDS[sdmockkit_BANDS.length - 1];
+}
+function sdmockkit_lowest(v, only) {
+  var best = -1, i;
+  for (i = 0; i < v.length; i++) {
+    if (only && only.indexOf(i) < 0) continue;
+    if (v[i] >= sdmockkit_MAXROW) continue;
+    if (best < 0 || v[i] < v[best]) best = i;
+  }
+  return best;
+}
+function sdmockkit_obs(v) {
+  var fail = sdmockkit_T_FAIL + sdmockkit_DRIFT * (sdmockkit_MAXROW - v[6]);
+  return {
+    box: sdmockkit_T_BOX + sdmockkit_DRIFT * (sdmockkit_MAXROW - v[0]),
+    dive: sdmockkit_T_DIVE + sdmockkit_DRIFT * (sdmockkit_MAXROW - v[2]),
+    fail: fail,
+    reached: fail <= sdmockkit_ROUND,
+    sil: sdmockkit_SIL_BASE - sdmockkit_SIL_PER * v[7]
+  };
+}
+
+// §9's five boxes, each checked against one unseen attempt
+var sdmockkit_STOP = [
+  { name: "total ≥ " + sdmockkit_STOP_TOTAL + " every time",
+    f: function (v, o) { return sdmockkit_total(v) >= sdmockkit_STOP_TOTAL; } },
+  { name: "first box before minute " + sdmockkit_STOP_BOX,
+    f: function (v, o) { return o.box < sdmockkit_STOP_BOX; } },
+  { name: "reached failure analysis",
+    f: function (v, o) { return o.reached; } },
+  { name: "row 6 (trade-off costs) ≥ " + sdmockkit_STOP_ROW6,
+    f: function (v, o) { return v[5] >= sdmockkit_STOP_ROW6; } },
+  { name: "fewer than " + sdmockkit_STOP_SIL + " silences over 10 s",
+    f: function (v, o) { return o.sil < sdmockkit_STOP_SIL; } }
+];
+
+// ----------------------------------------------------------------------
+// Twelve attempts. `tracked` is the number the candidate writes in the
+// tracker; `real` is the level that would show on a prompt they have not
+// met. They are the same vector unless a rule is broken.
+// ----------------------------------------------------------------------
+function sdmockkit_run(cfg) {
+  var tracked = sdmockkit_START.slice(0);
+  var real = sdmockkit_START.slice(0);
+  var done = {}, log = [], weeks = [], a, i;
+
+  for (a = 0; a < sdmockkit_ATTEMPTS; a++) {
+    var p = cfg.prompts[a];
+    var fresh = !done[p];
+    done[p] = true;
+
+    log.push({
+      n: a + 1, prompt: p, fresh: fresh, scored: cfg.scored,
+      recorded: cfg.scored ? sdmockkit_total(tracked) : -1,
+      real: sdmockkit_total(real),
+      lowRow: cfg.scored ? sdmockkit_lowest(tracked) : -1
+    });
+
+    if (cfg.scored && cfg.oneFix) {
+      var t = sdmockkit_lowest(tracked);
+      if (t >= 0) {
+        tracked[t] = tracked[t] + 1;
+        // a fix on a prompt already attempted does not transfer
+        if (fresh && real[t] < sdmockkit_MAXROW) real[t] = real[t] + 1;
+      }
+    }
+
+    if ((a + 1) % sdmockkit_PER_WEEK === 0) {
+      var rt = sdmockkit_lowest(tracked, sdmockkit_REP_ROWS);
+      if (rt >= 0) tracked[rt] = tracked[rt] + 1;
+      var rr = sdmockkit_lowest(real, sdmockkit_REP_ROWS);
+      if (rr >= 0) real[rr] = real[rr] + 1;
+      weeks.push({
+        week: (a + 1) / sdmockkit_PER_WEEK,
+        attempts: a + 1,
+        tracked: tracked.slice(0), real: real.slice(0),
+        repRow: rr
+      });
+    }
+  }
+
+  // §8's point: sort by column, not by total. Replay the TRANSFERABLE level
+  // and count how many consecutive attempts opened with row 6 at 0 or 1 —
+  // the page's own example of the pattern an average hides.
+  var stuck = 0, replay = sdmockkit_START.slice(0), replayDone = {};
+  for (a = 0; a < sdmockkit_ATTEMPTS; a++) {
+    if (replay[5] <= 1) stuck++; else break;
+    var pr = cfg.prompts[a];
+    var prFresh = !replayDone[pr];
+    replayDone[pr] = true;
+    if (cfg.scored && cfg.oneFix && prFresh) {
+      var t2 = sdmockkit_lowest(replay);
+      if (t2 >= 0) replay[t2] = replay[t2] + 1;
+    }
+    if ((a + 1) % sdmockkit_PER_WEEK === 0) {
+      var rt2 = sdmockkit_lowest(replay, sdmockkit_REP_ROWS);
+      if (rt2 >= 0) replay[rt2] = replay[rt2] + 1;
+    }
+  }
+
+  return {
+    cfg: cfg, log: log, weeks: weeks,
+    tracked: tracked, real: real, stuck: stuck
+  };
+}
+
+// ----------------------------------------------------------------------
+function sdmockkit_scenario(cfg) {
+  var r = sdmockkit_run(cfg);
+  var steps = [{
+    r: r, phase: 0, v: sdmockkit_START.slice(0), attempts: 0,
+    flag: "idle", caption: cfg.idle
+  }];
+
+  // frame 1 — attempt 1, scored (or not) cold
+  steps.push({
+    r: r, phase: 1, v: sdmockkit_START.slice(0), attempts: 1,
+    flag: cfg.scored ? "warn" : "bad",
+    caption: cfg.first(r)
+  });
+
+  for (var w = 0; w < r.weeks.length; w++) {
+    var wk = r.weeks[w];
+    var tt = sdmockkit_total(wk.tracked);
+    var rr2 = sdmockkit_total(wk.real);
+    var head = "<b>Week " + wk.week + " done — " + wk.attempts + " of " +
+      sdmockkit_ATTEMPTS + " attempts.</b> ";
+    var num = cfg.scored
+      ? "The tracker reads <b>" + tt + " / " + sdmockkit_MAX + "</b> (" +
+        sdmockkit_band(tt).name.toLowerCase() + ")" +
+        (tt === rr2 ? ". " : ", and the level that would show on a prompt " +
+          "you have not met is <b>" + rr2 + "</b>. ")
+      : "Nothing is written down, so the level is <b>" + rr2 + " / " +
+        sdmockkit_MAX + "</b> and nobody in the room knows it. ";
+    steps.push({
+      r: r, phase: 2 + w, v: wk.real.slice(0), tracked: wk.tracked.slice(0),
+      attempts: wk.attempts, week: wk.week,
+      caption: head + num + cfg.say[w],
+      flag: cfg.scored ? (rr2 >= 15 ? "ok" : rr2 >= 9 ? "warn" : "bad")
+        : "bad"
+    });
+  }
+
+  var obs = sdmockkit_obs(r.real);
+  var boxes = [], nOk = 0;
+  for (var b = 0; b < sdmockkit_STOP.length; b++) {
+    var on = !!sdmockkit_STOP[b].f(r.real, obs);
+    boxes.push(on);
+    if (on) nOk++;
+  }
+  steps.push({
+    r: r, phase: 2 + r.weeks.length, v: r.real.slice(0),
+    tracked: r.tracked.slice(0), attempts: sdmockkit_ATTEMPTS,
+    stop: true, boxes: boxes, nOk: nOk,
+    caption: cfg.verdict(r, nOk, obs),
+    flag: nOk === sdmockkit_STOP.length ? "ok" : nOk >= 3 ? "warn" : "bad"
+  });
+
+  var phases = ["setup", "attempt 1"];
+  for (var k = 0; k < r.weeks.length; k++) phases.push("week " + (k + 1));
+  phases.push("three unseen prompts");
+
+  return { id: cfg.id, label: cfg.label, phases: phases, steps: steps };
+}
+
+// the page's twelve prompts, one each, in order
+var sdmockkit_ORDER = (function () {
+  var a = [], i;
+  for (i = 0; i < sdmockkit_ATTEMPTS; i++) a.push(i);
+  return a;
+})();
+// the same prompt, twelve times
+var sdmockkit_SAME = (function () {
+  var a = [], i;
+  for (i = 0; i < sdmockkit_ATTEMPTS; i++) a.push(0);
+  return a;
+})();
+
+// ----------------------------------------------------------------------
+// TAB 1 — §1's opening argument: twelve attempts, never scored.
+// ----------------------------------------------------------------------
+var sdmockkit_A = sdmockkit_scenario({
+  id: "unscored", label: "Twelve attempts, never scored",
+  prompts: sdmockkit_ORDER, scored: false, oneFix: false,
+  idle: "<b>" + sdmockkit_ATTEMPTS + " genuine attempts: " + sdmockkit_ROUND +
+    " minutes each, whiteboard, timer running, spoken out loud to an empty " +
+    "room.</b> Everything in section 2's setup list except the last two " +
+    "lines — no recording, no scorecard. The work is real; the measurement " +
+    "is missing. Press Play.",
+  first: function () {
+    return "<b>Attempt 1 is over and it felt okay.</b> That is the entire " +
+      "output. The level underneath it is <b>" +
+      sdmockkit_total(sdmockkit_START) + " / " + sdmockkit_MAX +
+      "</b> — trade-offs at 0, failure at 0, estimation skipped — but " +
+      "nothing on this run will ever reveal that, because no number was " +
+      "written down and no recording was watched.";
+  },
+  say: [
+    "Three attempts, three prompts, three shrugs. Structure improves because " +
+      "repetition improves it, which is the one thing practice gives you for " +
+      "free.",
+    "Depth follows, for the same reason. Rows 6 and 7 have not moved and " +
+      "cannot, because nothing has identified them as the low ones.",
+    "Narration improves. The gap between this run and the next tab is now " +
+      "visible from outside and still invisible from inside.",
+    "Twelve attempts of real, effortful practice. Rows 2, 6 and 7 are " +
+      "exactly where they started."
+  ],
+  verdict: function (r, nOk, obs) {
+    return "<b>" + sdmockkit_total(r.real) + " / " + sdmockkit_MAX + " after " +
+      sdmockkit_ATTEMPTS + " attempts, and <b>" + nOk + " of " +
+      sdmockkit_STOP.length + "</b> stop-condition boxes.</b> Three rows " +
+      "moved, and they are the three the page says repetition trains anyway " +
+      "— structure, depth, narration. The three that did not move are the " +
+      "three that need to be <i>seen</i> first: estimation, trade-off cost, " +
+      "failure. Row 6 opened at 0 or 1 for <b>" + r.stuck + "</b> consecutive " +
+      "attempts. <i>An unscored attempt is not a wasted hour — it is an " +
+      "hour that cannot tell you which hour to spend next.</i>";
+  }
+});
+
+// ----------------------------------------------------------------------
+// TAB 2 — the protocol, followed.
+// ----------------------------------------------------------------------
+var sdmockkit_B = sdmockkit_scenario({
+  id: "protocol", label: "Scored, one fix per attempt",
+  prompts: sdmockkit_ORDER, scored: true, oneFix: true,
+  idle: "<b>The same twelve attempts, plus the two lines tab 1 skipped: a " +
+    "recording, and a score before watching it.</b> Then section 6's fourth " +
+    "rule — <i>one</i> fix per attempt, aimed at the lowest row on the card. " +
+    "Twelve prompts, never repeated. Watch which rows move and in what order.",
+  first: function () {
+    var o = sdmockkit_obs(sdmockkit_START);
+    return "<b>Attempt 1 scores " + sdmockkit_total(sdmockkit_START) + " / " +
+      sdmockkit_MAX + " — “" +
+      sdmockkit_band(sdmockkit_total(sdmockkit_START)).name +
+      "”.</b> Watched back at 1.5× it is worse than it felt: first " +
+      "box at minute <b>" + o.box + "</b> against a target of " +
+      sdmockkit_T_BOX + ", failure analysis never reached inside " +
+      sdmockkit_ROUND + " minutes, <b>" + o.sil + "</b> silences over ten " +
+      "seconds. The lowest row is <b>" +
+      sdmockkit_ROWS[sdmockkit_lowest(sdmockkit_START)].n + " " +
+      sdmockkit_ROWS[sdmockkit_lowest(sdmockkit_START)].name +
+      "</b>, so that is the only thing attempt 2 tries to change.";
+  },
+  say: [
+    "Estimation, trade-offs and failure all move off zero — because the card " +
+      "pointed at them, in that order, without anyone having to decide.",
+    "The floor is now 1 everywhere, so the fixes start raising rows rather " +
+      "than rescuing them. This is the band the page calls reciting.",
+    "Every row is at 2 or better. Failure analysis now happens inside the " +
+      sdmockkit_ROUND + " minutes, which it did not in week 1.",
+    "The last three fixes go to the rows that are still cheapest to raise, " +
+      "and one row's worth of narration is bought by repetition."
+  ],
+  verdict: function (r, nOk, obs) {
+    var t = sdmockkit_total(r.real);
+    return "<b>" + t + " / " + sdmockkit_MAX + " — “" +
+      sdmockkit_band(t).name + "” — and <b>" + nOk + " of " +
+      sdmockkit_STOP.length + "</b> boxes on three unseen prompts.</b> The " +
+      "one it misses is the silences: row 8 reached " +
+      r.real[7] + " of " + sdmockkit_MAXROW + ", which the declared mapping " +
+      "turns into <b>" + obs.sil + "</b> silences over ten seconds against a " +
+      "bar of fewer than " + sdmockkit_STOP_SIL + ". Twelve attempts at one " +
+      "fix each does not buy the last point. <i>The page's own prescription " +
+      "for this band is the honest ending: new shapes, and book a real " +
+      "mock — nothing here trains being interrupted.</i>";
+  }
+});
+
+// ----------------------------------------------------------------------
+// TAB 3 — §6's rule 1, broken. Everything else done right.
+// ----------------------------------------------------------------------
+var sdmockkit_C = sdmockkit_scenario({
+  id: "repeat", label: "Scored — same prompt every time",
+  prompts: sdmockkit_SAME, scored: true, oneFix: true,
+  idle: "<b>Recording, scorecard, one fix per attempt — every rule " +
+    "followed but the first.</b> All twelve attempts are the page's prompt " +
+    "1, <i>" + sdmockkit_PROMPTS[0] + "</i>, because repeating it is " +
+    "comfortable and the numbers go up. The tracker will read exactly what " +
+    "tab 2's does. Watch the second number.",
+  first: function () {
+    return "<b>Attempt 1 scores " + sdmockkit_total(sdmockkit_START) + " / " +
+      sdmockkit_MAX + ", identical to tab 2 — because on attempt 1 this " +
+      "prompt is unseen.</b> Everything learned here is real. It is the next " +
+      "eleven attempts, on a prompt whose answer is now remembered, where " +
+      "the tracker and the skill come apart.";
+  },
+  say: [
+    "The tracker moves exactly as tab 2's did. Two of the three fixes landed " +
+      "on a design already attempted, so they raised the score on <i>this " +
+      "prompt</i> and nothing else.",
+    "Halfway, and the two numbers have separated by a full band. Nothing on " +
+      "the tracker shows this, because the tracker only has one column for " +
+      "score.",
+    "The line on the spreadsheet is beautiful. The page's third rule — " +
+      "mark only where you differed — has nothing left to mark, because " +
+      "there is nothing left to differ from.",
+    "Twelve attempts, a rising chart, and a level that has moved by what one " +
+      "unseen attempt and four weeks of repetition are worth."
+  ],
+  verdict: function (r, nOk, obs) {
+    var tr = sdmockkit_total(r.tracked), re = sdmockkit_total(r.real);
+    return "<b>The tracker says " + tr + " / " + sdmockkit_MAX +
+      ". Three unseen prompts say " + re + ", and <b>" + nOk + " of " +
+      sdmockkit_STOP.length + "</b> boxes.</b> That gap of <b>" + (tr - re) +
+      " points</b> is not dishonesty — every score was recorded accurately " +
+      "against the attempt it measured. The attempt was just measuring " +
+      "recall. First box at minute <b>" + obs.box + "</b>, failure " +
+      (obs.reached ? "reached at " + obs.fail : "never reached inside " +
+        sdmockkit_ROUND + " minutes") + ", row 6 at <b>" + r.real[5] +
+      "</b>. <i>The page's stop condition says “unseen” three " +
+      "times in five lines, and this is the whole reason it does.</i>";
+  }
+});
+
+// ----------------------------------------------------------------------
+function sdmockkit_strip(d, ctx) {
+  var names = (ctx.scenario && ctx.scenario.phases) || [];
+  if (!names.length) return "";
+  var chips = [], i;
+  for (i = 0; i < names.length; i++) {
+    chips.push({
+      label: names[i],
+      flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : "idle"
+    });
+  }
+  return d.pills(chips);
+}
+
+// ======================================================================
+S["sdmockkit"] = {
+  title: "Run twelve self-mocks three ways",
+  note: "Section 6's schedule, executed: <b>" + sdmockkit_ATTEMPTS +
+    " attempts</b>, <b>" + sdmockkit_PER_WEEK + " a week</b> for <b>" +
+    sdmockkit_WEEKS + " weeks</b>, each one " + sdmockkit_ROUND +
+    " minutes and scored on section 3's <b>" + sdmockkit_ROWS.length +
+    " rows</b>, 0–3, maximum <b>" + sdmockkit_MAX + "</b>. Every " +
+    "candidate starts from the same cold card, written in the page's own " +
+    "words — <b>" + sdmockkit_START.join(" · ") + " = " +
+    sdmockkit_total(sdmockkit_START) + "</b>. One fix raises the lowest row " +
+    "by 1 (“one fix per attempt”); once a week, repetition alone " +
+    "raises the lowest of rows 3, 5 and 8, the three the page says a " +
+    "self-mock trains. A fix earned on a prompt you have already attempted " +
+    "does not transfer to an unseen one — that is “testing recall, " +
+    "not the skill”, made countable. The four observables come off the " +
+    "rows, anchored on section 4's targets: first box <b>" + sdmockkit_T_BOX +
+    "</b>, deep dive <b>" + sdmockkit_T_DIVE + "</b>, failure <b>" +
+    sdmockkit_T_FAIL + "</b>, and <b>" + sdmockkit_DRIFT +
+    "</b> minutes of drift per point — the smallest step that puts a " +
+    "zero in row 1 past section 5's minute-" + sdmockkit_OVERSCOPE +
+    " threshold. Silences are <b>" + sdmockkit_SIL_BASE + " − " +
+    sdmockkit_SIL_PER + "×row 8</b>, forced by section 9's bar of fewer " +
+    "than " + sdmockkit_STOP_SIL + " at a perfect row 8.",
+  interval: 1700,
+
+  scenarios: [sdmockkit_A, sdmockkit_B, sdmockkit_C],
+
+  draw: function (step, d, ctx) {
+    var r = step.r, v = step.v, i;
+    var scored = r.cfg.scored;
+    var tracked = step.tracked || v;
+    var real = sdmockkit_total(v);
+    var trk = sdmockkit_total(tracked);
+    var band = sdmockkit_band(real);
+    var obs = sdmockkit_obs(v);
+    var started = step.attempts > 0;
+
+    // ---- headline ---------------------------------------------------------
+    var head = d.cols([
+      d.big(real + " / " + sdmockkit_MAX, "the level on an unseen prompt",
+        !started ? "idle" : real >= 20 ? "ok" : real >= 15 ? "warn" : "bad"),
+      d.stat({
+        label: "what the tracker says",
+        value: !scored ? "nothing" : trk + " / " + sdmockkit_MAX,
+        sub: !scored ? "no attempt was ever scored"
+          : trk === real ? "matches the real level"
+          : trk - real + " points above the real level",
+        flag: !scored ? "bad" : trk === real ? "ok" : "bad"
+      }),
+      d.stat({
+        label: "band",
+        value: !started ? "—" : band.name,
+        sub: !started ? "nothing attempted yet" : band.next,
+        flag: !started ? "idle" : real >= 20 ? "ok" : real >= 15 ? "warn" : "bad"
+      }),
+      d.stat({
+        label: "attempts done",
+        value: step.attempts + " / " + sdmockkit_ATTEMPTS,
+        sub: sdmockkit_PER_WEEK + " a week for " + sdmockkit_WEEKS + " weeks",
+        flag: step.attempts === 0 ? "idle" : "ok"
+      })
+    ]);
+
+    // ---- the twelve attempts -----------------------------------------------
+    var cells = [];
+    for (i = 0; i < r.log.length; i++) {
+      var L = r.log[i];
+      var doneNow = i < step.attempts;
+      cells.push({
+        label: String(L.prompt + 1),
+        flag: !doneNow ? "idle"
+          : !L.scored ? "warn"
+          : !L.fresh ? "bad" : "ok",
+        title: "attempt " + L.n + " — " + sdmockkit_PROMPTS[L.prompt] +
+          (!doneNow ? " (not yet)"
+            : !L.scored ? " — attempted, never scored"
+            : !L.fresh ? " — already attempted; this is recall"
+            : " — unseen prompt, scored " + L.recorded + "/" + sdmockkit_MAX)
+      });
+    }
+    var grid = d.cells(cells, {
+      label: "the " + sdmockkit_ATTEMPTS + " attempts — numbers are " +
+        "section 7's prompts · green unseen and scored · amber " +
+        "unscored · red a prompt already attempted"
+    });
+
+    // ---- the scorecard -------------------------------------------------------
+    var srows = [];
+    for (i = 0; i < sdmockkit_ROWS.length; i++) {
+      var lvl = v[i];
+      srows.push({
+        label: sdmockkit_ROWS[i].n + " " + sdmockkit_ROWS[i].name,
+        value: lvl + " / " + sdmockkit_MAXROW + " — " + sdmockkit_ROWS[i].w[lvl],
+        flag: lvl === sdmockkit_MAXROW ? "ok" : lvl === 0 ? "bad" : "warn"
+      });
+    }
+    var card = d.node({
+      title: "section 3's scorecard" + (scored ? "" : " — never filled in"),
+      status: real + " / " + sdmockkit_MAX,
+      statusFlag: !started ? "idle" : real >= 20 ? "ok" : real >= 15 ? "warn" : "bad",
+      meta: scored ? "the level an unseen prompt would show"
+        : "computed here; the candidate has no copy of this",
+      rows: srows
+    });
+
+    // ---- what the recording would show -----------------------------------------
+    var watch = d.stack([
+      d.bar({
+        label: "first box drawn (target " + sdmockkit_T_BOX + ")",
+        pct: (obs.box / sdmockkit_ROUND) * 100,
+        value: "min " + obs.box,
+        flag: obs.box <= sdmockkit_T_BOX ? "ok"
+          : obs.box < sdmockkit_STOP_BOX ? "warn" : "bad"
+      }),
+      d.bar({
+        label: "deep dive started (target " + sdmockkit_T_DIVE + ")",
+        pct: (obs.dive / sdmockkit_ROUND) * 100,
+        value: "min " + obs.dive,
+        flag: obs.dive <= sdmockkit_T_DIVE ? "ok"
+          : obs.dive <= sdmockkit_T_FAIL ? "warn" : "bad"
+      }),
+      d.bar({
+        label: "failure first mentioned (target " + sdmockkit_T_FAIL + ")",
+        pct: obs.reached ? (obs.fail / sdmockkit_ROUND) * 100 : 100,
+        value: obs.reached ? "min " + obs.fail : "never",
+        flag: obs.fail <= sdmockkit_T_FAIL ? "ok" : obs.reached ? "warn" : "bad"
+      }),
+      d.bar({
+        label: "silences over 10 s (bar is fewer than " + sdmockkit_STOP_SIL + ")",
+        pct: (obs.sil / sdmockkit_SIL_BASE) * 100,
+        value: String(obs.sil),
+        flag: obs.sil < sdmockkit_STOP_SIL ? "ok"
+          : obs.sil <= sdmockkit_SIL_BASE / 2 ? "warn" : "bad"
+      })
+    ]);
+
+    // ---- section 9's stop condition ---------------------------------------------
+    var scells = [];
+    for (i = 0; i < sdmockkit_STOP.length; i++) {
+      var on = step.stop ? step.boxes[i] : false;
+      scells.push({
+        label: sdmockkit_STOP[i].name,
+        flag: !step.stop ? "idle" : on ? "ok" : "bad",
+        title: !step.stop ? "checked on three consecutive unseen prompts"
+          : on ? "met" : "not met"
+      });
+    }
+
+    return d.stack([
+      sdmockkit_strip(d, ctx),
+      head,
+      grid,
+      d.cols([card, watch]),
+      d.cells(scells, {
+        label: "section 9 — stop practising when all five hold on three " +
+          "consecutive unseen prompts" +
+          (step.stop ? " · " + step.nOk + " of " + sdmockkit_STOP.length
+            : " · not checked yet")
+      }),
+      step.stop
+        ? d.note("Row 6 — volunteering the cost of your own choice — " +
+            "is the page's single strongest predictor, and it is the row a " +
+            "total hides: on this run it opened at 0 or 1 for <b>" + r.stuck +
+            "</b> consecutive attempts. <b>Sort by column, not by total.</b>",
+            step.flag)
+        : d.note("The scorecard on the left is the level an <i>unseen</i> " +
+            "prompt would show. The bars on the right are what the recording " +
+            "would reveal — the three timestamps are the most diagnostic " +
+            "thing on the page.", "idle")
+    ]);
+  }
+};
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sdnetworking  (networking.md)
+  // The page's §1 list — BROWSER CACHE, DNS, TCP, TLS, REQUEST, SERVER,
+  // RESPONSE, RENDER — run with a stopwatch, three times over the same HTML:
+  // the 2010 stack across an ocean, the same page behind a CDN on HTTP/2 +
+  // TLS 1.3, and the failure the page says is the whole reason HTTP/3 exists
+  // — one dropped packet under HTTP/2 over TCP.
+  //
+  // The eight-step strip under the headline numbers IS the frame strip: every
+  // frame lights a different step of the page's own list, and the ledger table
+  // gains a line, so no two frames render alike.
+  //
+  // CONFIG — the page's figures, quoted:
+  //   RTT across an ocean     150 ms      §1 note
+  //   TCP handshake           1 RTT       §1 step 3 (SYN, SYN-ACK, ACK)
+  //   TLS 1.2                 2 RTT       §1 step 4, §6
+  //   TLS 1.3                 1 RTT       §1 step 4, §6
+  //   TLS 1.3 resumption      0 RTT       §6 (idempotent requests only —
+  //                                       0-RTT data is replayable)
+  //   HTTP/1.1                one request at a time per connection, browsers
+  //                           opened ~6 connections per origin        §4
+  //   HTTP/2                  every stream on one connection          §4
+  //   HTTP/3                  loss in one stream blocks no other      §4
+  //   DNS walk                browser -> OS -> resolver -> root -> TLD ->
+  //                           authoritative, each layer caching       §1, §2
+  //   "300-450 ms of pure latency"  §1 — recomputed on screen as
+  //                           (1 + 1 or 2) × 150 ms, never transcribed.
+  //
+  // DECLARED HERE, because the page does not publish them:
+  //   subresources named by the HTML   24
+  //   one uncached DNS query           30 ms, and a cold walk is 4 of them
+  //   RTT to a CDN PoP                 15 ms
+  //   origin server work               40 ms  (§1 step 6: LB -> app -> cache/DB)
+  //   edge cache hit                   5 ms
+  //   fast retransmit                  1 RTT
+  //   the lost segment belongs to      stream 7 of 24
+  // Every figure on screen is computed from those constants — including the
+  // 1,810 ms, the 27.8×, the 2.2% and the 3,600 stream-milliseconds.
+  // ======================================================================
+  var sdnetworking_RTT_OCEAN = 150;    // §1
+  var sdnetworking_RTT_EDGE = 15;      // declared
+  var sdnetworking_DNSQ = 30;          // declared, per uncached query
+  var sdnetworking_DNS_HOPS = 4;       // declared: resolver, root, TLD, authoritative
+  var sdnetworking_SUBRES = 24;        // declared
+  var sdnetworking_CONNS11 = 6;        // §4, "browsers opened ~6 connections"
+  var sdnetworking_SRV_ORIGIN = 40;    // declared
+  var sdnetworking_SRV_EDGE = 5;       // declared
+  var sdnetworking_DROPPED = 7;        // declared: which stream loses a segment
+
+  var sdnetworking_STAGES = [
+    "1 cache", "2 DNS", "3 TCP", "4 TLS",
+    "5 request", "6 server", "7 response", "8 render"
+  ];
+
+  function sdnetworking_ms(v) { return Math.round(v) + " ms"; }
+  function sdnetworking_num(n) {
+    return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+  function sdnetworking_msn(v) { return sdnetworking_num(v) + " ms"; }
+  function sdnetworking_p1(a, b) {
+    return b > 0 ? ((a / b) * 100).toFixed(1) + "%" : "—";
+  }
+  function sdnetworking_x(a, b) {
+    return b > 0 ? (a / b).toFixed(1) + "×" : "—";
+  }
+
+  /**
+   * One run's whole ledger. Nothing is typed: each line states its arithmetic
+   * and the running total is the sum of the lines above it.
+   * cfg: { rtt, tlsRtt, tlsName, dnsHops, srv, http (11|2), loss, where, cacheNote }
+   */
+  function sdnetworking_plan(cfg) {
+    var L = [], ms = 0, rt = 0;
+    var rounds = cfg.http === 11
+      ? Math.ceil(sdnetworking_SUBRES / sdnetworking_CONNS11)
+      : 1;
+
+    function line(label, arith, addMs, addRt) {
+      ms += addMs;
+      rt += addRt;
+      L.push({ label: label, arith: arith, ms: addMs, rt: addRt, at: ms, rtAt: rt });
+    }
+
+    line("1 browser cache", cfg.cacheNote, 0, 0);
+
+    var dnsMs = cfg.dnsHops * sdnetworking_DNSQ;
+    line("2 DNS",
+      cfg.dnsHops
+        ? cfg.dnsHops + " uncached queries × " + sdnetworking_DNSQ + " ms"
+        : "still cached below the resolver — 0 queries",
+      dnsMs, cfg.dnsHops);
+
+    line("3 TCP", "1 RTT × " + cfg.rtt + " ms", cfg.rtt, 1);
+
+    line("4 TLS " + cfg.tlsName,
+      cfg.tlsRtt + " RTT × " + cfg.rtt + " ms", cfg.tlsRtt * cfg.rtt, cfg.tlsRtt);
+
+    line("5-7 request, server, response",
+      "1 RTT × " + cfg.rtt + " ms + " + cfg.srv + " ms of server work",
+      cfg.rtt + cfg.srv, 1);
+
+    var firstByte = ms, firstByteRt = rt;
+
+    if (cfg.http === 11) {
+      line("8 render: " + (sdnetworking_CONNS11 - 1) + " more connections",
+        "TCP + TLS = " + (1 + cfg.tlsRtt) + " RTT × " + cfg.rtt +
+        " ms, opened in parallel",
+        (1 + cfg.tlsRtt) * cfg.rtt, 1 + cfg.tlsRtt);
+      line("8 render: " + sdnetworking_SUBRES + " subresources",
+        rounds + " rounds of " + sdnetworking_CONNS11 + " × " + cfg.rtt + " ms",
+        rounds * cfg.rtt, rounds);
+    } else {
+      line("8 render: " + sdnetworking_SUBRES + " subresources",
+        "all " + sdnetworking_SUBRES + " multiplexed on the open connection — " +
+        "1 RTT × " + cfg.rtt + " ms",
+        cfg.rtt, 1);
+    }
+
+    if (cfg.loss) {
+      line("one segment lost",
+        "fast retransmit = 1 RTT × " + cfg.rtt + " ms, and every stream waits",
+        cfg.rtt, 1);
+    }
+
+    return {
+      cfg: cfg, lines: L, total: ms, rt: rt,
+      firstByte: firstByte, firstByteRt: firstByteRt,
+      dnsMs: dnsMs, rounds: rounds,
+      handshakeMs: cfg.rtt + cfg.tlsRtt * cfg.rtt,
+      subMs: cfg.http === 11 ? L[5].ms + L[6].ms : L[5].ms
+    };
+  }
+
+  /** The ledger as revealed after the first cut lines. */
+  function sdnetworking_upto(p, cut) {
+    var ms = 0, rt = 0, rows = [], i;
+    for (i = 0; i < p.lines.length && i < cut; i++) {
+      ms = p.lines[i].at;
+      rt = p.lines[i].rtAt;
+      rows.push([
+        p.lines[i].label, p.lines[i].arith,
+        "+" + p.lines[i].ms, sdnetworking_num(ms)
+      ]);
+    }
+    return { ms: ms, rt: rt, rows: rows, n: i };
+  }
+
+  // --- the three runs ----------------------------------------------------
+  var sdnetworking_COLD = sdnetworking_plan({
+    rtt: sdnetworking_RTT_OCEAN, tlsRtt: 2, tlsName: "1.2",
+    dnsHops: sdnetworking_DNS_HOPS, srv: sdnetworking_SRV_ORIGIN,
+    http: 11, loss: false,
+    where: "origin across an ocean", proto: "HTTP/1.1",
+    cacheNote: "miss — first visit, nothing to reuse"
+  });
+
+  var sdnetworking_EDGE = sdnetworking_plan({
+    rtt: sdnetworking_RTT_EDGE, tlsRtt: 1, tlsName: "1.3",
+    dnsHops: 0, srv: sdnetworking_SRV_EDGE,
+    http: 2, loss: false,
+    where: "CDN PoP", proto: "HTTP/2",
+    cacheNote: "miss on the HTML itself — it must not be stale"
+  });
+
+  // the same edge run on a repeat visit: TLS 1.3 resumption sends data in the
+  // first flight, so the handshake leg costs nothing at all
+  var sdnetworking_RESUMED = sdnetworking_plan({
+    rtt: sdnetworking_RTT_EDGE, tlsRtt: 0, tlsName: "1.3 resumed",
+    dnsHops: 0, srv: sdnetworking_SRV_EDGE,
+    http: 2, loss: false,
+    where: "CDN PoP", proto: "HTTP/2",
+    cacheNote: "miss on the HTML itself"
+  });
+
+  var sdnetworking_LOSS = sdnetworking_plan({
+    rtt: sdnetworking_RTT_OCEAN, tlsRtt: 1, tlsName: "1.3",
+    dnsHops: 0, srv: sdnetworking_SRV_ORIGIN,
+    http: 2, loss: true,
+    where: "origin across an ocean", proto: "HTTP/2",
+    cacheNote: "miss — same HTML, same ocean as tab one"
+  });
+
+  // what one lost segment costs under each protocol, in resources held up
+  var sdnetworking_BLOCK11 = sdnetworking_SUBRES / sdnetworking_CONNS11; // queued behind it
+  var sdnetworking_BLOCK2 = sdnetworking_SUBRES;                          // one byte stream
+  var sdnetworking_BLOCK3 = 1;                                            // QUIC
+  var sdnetworking_STREAMMS2 = sdnetworking_BLOCK2 * sdnetworking_RTT_OCEAN;
+  var sdnetworking_STREAMMS3 = sdnetworking_BLOCK3 * sdnetworking_RTT_OCEAN;
+
+  // the page's "300-450 ms before a byte moves", recomputed
+  var sdnetworking_PURE13 = (1 + 1) * sdnetworking_RTT_OCEAN;
+  var sdnetworking_PURE12 = (1 + 2) * sdnetworking_RTT_OCEAN;
+
+  function sdnetworking_sc(id, label, steps) {
+    return { id: id, label: label, steps: steps };
+  }
+
+  // --- tab 1 · the cold load --------------------------------------------
+  function sdnetworking_cold() {
+    var p = sdnetworking_COLD;
+    var srvShare = sdnetworking_p1(p.cfg.srv, p.total);
+    var netShare = sdnetworking_p1(p.total - p.cfg.srv, p.total);
+    var connMs = p.lines[5].ms, roundMs = p.lines[6].ms;
+    var handshakeAll = p.lines[2].ms + p.lines[3].ms + connMs;
+    var waitingAll = p.cfg.rtt + roundMs;
+
+    return sdnetworking_sc("cold", "Cold · HTTP/1.1 · an ocean away", [
+      {
+        plan: p, cut: 0, stages: [], viz: "",
+        title: "the stopwatch", status: "0 ms",
+        rows: [
+          { label: "distance", value: p.cfg.rtt + " ms RTT" },
+          { label: "protocol", value: p.cfg.proto + " · TLS " + p.cfg.tlsName },
+          { label: "subresources in the HTML", value: String(sdnetworking_SUBRES) },
+          { label: "server work when reached", value: p.cfg.srv + " ms" }
+        ],
+        caption: "A first visit to one page, from a laptop <b>an ocean away</b> from the " +
+          "origin — <b>" + p.cfg.rtt + " ms per round trip</b>, the page's own number — on the " +
+          "stack every site shipped in 2010: <b>HTTP/1.1</b> and <b>TLS 1.2</b>. The page's " +
+          "eight steps run along the strip below; the stopwatch starts on Play. Watch the " +
+          "round-trip counter rather than the milliseconds — it is the thing you can change."
+      },
+      {
+        plan: p, cut: 1, stages: [0], viz: "",
+        title: "1 · browser cache", status: "MISS",
+        rows: [
+          { label: "cost", value: "0 ms", flag: "ok" },
+          { label: "requests avoided", value: "0", flag: "warn" }
+        ],
+        caption: "<b>1 · BROWSER CACHE.</b> First visit, so nothing is reusable and the step " +
+          "costs <b>0 ms</b>. It is still the first thing that happens, and on a repeat visit " +
+          "it can be the <i>only</i> thing that happens — the cheapest request is the one never " +
+          "made."
+      },
+      {
+        plan: p, cut: 2, stages: [1], viz: "", flag: "warn",
+        title: "2 · DNS", status: "COLD WALK",
+        rows: [
+          { label: "queries", value: sdnetworking_DNS_HOPS +
+            "  (resolver, root, TLD, authoritative)", flag: "warn" },
+          { label: "per query", value: sdnetworking_DNSQ + " ms" },
+          { label: "spent", value: sdnetworking_ms(p.dnsMs), flag: "warn" }
+        ],
+        caption: "<b>2 · DNS.</b> Browser cache, OS cache, resolver — all miss, so the resolver " +
+          "walks the hierarchy: <b>root → TLD → authoritative</b>. " + sdnetworking_DNS_HOPS +
+          " queries at " + sdnetworking_DNSQ + " ms is <b>" + sdnetworking_ms(p.dnsMs) +
+          "</b> spent before the browser knows where to send a single packet. Every layer " +
+          "caches, which is why this is usually 0 ms — and never 0 ms for the day's first visitor."
+      },
+      {
+        plan: p, cut: 3, stages: [2], viz: "conn", flag: "warn",
+        title: "3 · TCP", status: "1 RTT",
+        rows: [
+          { label: "SYN, SYN-ACK, ACK", value: "1 round trip" },
+          { label: "spent", value: sdnetworking_ms(p.cfg.rtt), flag: "warn" },
+          { label: "bytes of page moved", value: "0", flag: "bad" }
+        ],
+        caption: "<b>3 · TCP.</b> SYN, SYN-ACK, ACK — <b>one round trip</b>, " +
+          sdnetworking_ms(p.cfg.rtt) + ", and all it achieves is that both ends agree they are " +
+          "talking. No request has been sent yet."
+      },
+      {
+        plan: p, cut: 4, stages: [3], viz: "conn", flag: "bad",
+        title: "4 · TLS 1.2", status: "2 RTT",
+        rows: [
+          { label: "certificate + key exchange", value: "2 round trips", flag: "bad" },
+          { label: "TCP + TLS so far", value: sdnetworking_ms(p.handshakeMs), flag: "bad" },
+          { label: "the page's range", value: sdnetworking_PURE13 + "–" + sdnetworking_PURE12 +
+            " ms" },
+          { label: "bytes of page moved", value: "0", flag: "bad" }
+        ],
+        caption: "<b>4 · TLS 1.2.</b> Certificate and key exchange: <b>two more round trips</b>, " +
+          sdnetworking_ms(p.cfg.tlsRtt * p.cfg.rtt) + ". With the TCP leg that is <b>" +
+          sdnetworking_ms(p.handshakeMs) + " of pure latency before a byte of the page moves</b> " +
+          "— the top of the page's " + sdnetworking_PURE13 + "–" + sdnetworking_PURE12 +
+          " ms, which is nothing more than (1 + 1 or 2) × " + p.cfg.rtt +
+          " ms. TLS 1.3 would make it " + sdnetworking_ms(sdnetworking_PURE13) +
+          "; the next tab spends that instead."
+      },
+      {
+        plan: p, cut: 5, stages: [4, 5, 6], viz: "conn", flag: "warn",
+        title: "5-7 · request, server, response", status: "FIRST BYTE",
+        rows: [
+          { label: "request + response", value: "1 RTT = " + sdnetworking_ms(p.cfg.rtt) },
+          { label: "server: LB, app, cache/DB", value: sdnetworking_ms(p.cfg.srv), flag: "ok" },
+          { label: "first byte at", value: sdnetworking_msn(p.firstByte), flag: "warn" },
+          { label: "round trips so far", value: String(p.firstByteRt), flag: "warn" }
+        ],
+        caption: "<b>5–7 · REQUEST, SERVER, RESPONSE.</b> The GET goes out, the origin does its " +
+          "LB → app → cache/DB work in " + sdnetworking_ms(p.cfg.srv) + ", the response comes " +
+          "back. <b>First byte at " + sdnetworking_msn(p.firstByte) + "</b>, of which the server " +
+          "is responsible for " + p.cfg.srv + " — " +
+          sdnetworking_p1(p.cfg.srv, p.firstByte) + " of the wait so far."
+      },
+      {
+        plan: p, cut: 6, stages: [7], viz: "queued", flag: "bad",
+        title: "8 · render: more connections", status: sdnetworking_CONNS11 + " SOCKETS",
+        rows: [
+          { label: "subresources named", value: String(sdnetworking_SUBRES) },
+          { label: "requests in flight per connection", value: "1", flag: "bad" },
+          { label: "connections opened", value: String(sdnetworking_CONNS11), flag: "warn" },
+          { label: "handshakes for them", value: sdnetworking_ms(connMs), flag: "bad" }
+        ],
+        caption: "<b>8 · RENDER — and this is where HTTP/1.1 hurts.</b> The HTML names <b>" +
+          sdnetworking_SUBRES + " subresources</b>, and a connection carries <b>one request at " +
+          "a time</b>. So the browser opens " + (sdnetworking_CONNS11 - 1) + " more — <b>" +
+          sdnetworking_CONNS11 + " in total</b>, the limit the page mentions — and every one " +
+          "needs its own TCP and TLS handshake: " + (1 + p.cfg.tlsRtt) + " round trips, in " +
+          "parallel, <b>" + sdnetworking_ms(connMs) + " for connections that carry nothing yet</b>."
+      },
+      {
+        plan: p, cut: 7, stages: [7], viz: "fetched", flag: "bad",
+        title: "8 · render: the queue drains", status: p.rounds + " ROUNDS",
+        rows: [
+          { label: sdnetworking_SUBRES + " resources ÷ " + sdnetworking_CONNS11 + " connections",
+            value: p.rounds + " serial rounds", flag: "bad" },
+          { label: "per round", value: sdnetworking_ms(p.cfg.rtt) },
+          { label: "spent here", value: sdnetworking_ms(roundMs), flag: "bad" },
+          { label: "page complete at", value: sdnetworking_msn(p.total), flag: "bad" }
+        ],
+        caption: "<b>" + sdnetworking_SUBRES + " resources over " + sdnetworking_CONNS11 +
+          " connections is " + p.rounds + " serial rounds</b> at " + sdnetworking_ms(p.cfg.rtt) +
+          " each: <b>" + sdnetworking_ms(roundMs) + "</b>. This queue is what <i>domain " +
+          "sharding</i> was invented to game — more hostnames, more connection pools, more " +
+          "parallelism — and it is exactly the trick the page says becomes <b>harmful</b> once " +
+          "HTTP/2 arrives."
+      },
+      {
+        plan: p, cut: 7, stages: [7], viz: "fetched", flag: "bad",
+        title: "the bill", status: "DONE",
+        rows: [
+          { label: "wall clock", value: sdnetworking_msn(p.total), flag: "bad" },
+          { label: "round trips", value: String(p.rt), flag: "bad" },
+          { label: "server work", value: sdnetworking_ms(p.cfg.srv) + "  (" + srvShare + ")",
+            flag: "ok" },
+          { label: "network round trips", value: netShare + " of the load", flag: "bad" }
+        ],
+        tableHead: ["where the " + sdnetworking_num(p.total) + " ms went", "ms", "share"],
+        tableRows: [
+          ["DNS", sdnetworking_num(p.dnsMs), sdnetworking_p1(p.dnsMs, p.total)],
+          ["handshakes (TCP + TLS, all " + sdnetworking_CONNS11 + " connections)",
+            sdnetworking_num(handshakeAll), sdnetworking_p1(handshakeAll, p.total)],
+          ["waiting for data over the wire", sdnetworking_num(waitingAll),
+            sdnetworking_p1(waitingAll, p.total)],
+          ["the server doing the actual work", sdnetworking_num(p.cfg.srv), srvShare]
+        ],
+        caption: "<b>" + sdnetworking_msn(p.total) + ", " + p.rt + " round trips — and " +
+          sdnetworking_ms(p.cfg.srv) + " of it was the server.</b> Server work is <b>" +
+          srvShare + "</b> of the load; the other <b>" + netShare + "</b> is the network being " +
+          "asked to go back and forth. That ratio is the page's whole argument: connection " +
+          "reuse, HTTP/2 and a CDN move far more than any amount of shaving server time. Halve " +
+          "the server and you save " + sdnetworking_ms(p.cfg.srv / 2) + "."
+      }
+    ]);
+  }
+
+  // --- tab 2 · the engineered load ---------------------------------------
+  function sdnetworking_edge() {
+    var p = sdnetworking_EDGE, c = sdnetworking_COLD, r = sdnetworking_RESUMED;
+    var saved = c.total - p.total;
+    var srvSaved = c.cfg.srv - p.cfg.srv;
+
+    return sdnetworking_sc("edge", "HTTP/2 · TLS 1.3 · CDN edge", [
+      {
+        plan: p, cut: 0, stages: [], viz: "",
+        title: "the same page", status: "0 ms",
+        rows: [
+          { label: "distance", value: p.cfg.rtt + " ms RTT to the PoP", flag: "ok" },
+          { label: "protocol", value: p.cfg.proto + " · TLS " + p.cfg.tlsName, flag: "ok" },
+          { label: "subresources in the HTML", value: String(sdnetworking_SUBRES) },
+          { label: "tab one finished in", value: sdnetworking_msn(c.total), flag: "bad" }
+        ],
+        caption: "The same HTML and the same <b>" + sdnetworking_SUBRES + " subresources</b> — " +
+          "now behind a <b>CDN PoP " + p.cfg.rtt + " ms away</b>, over <b>HTTP/2</b> and " +
+          "<b>TLS 1.3</b>, requested by a browser that resolved this name an hour ago. Not a " +
+          "line of application code is different. Tab one took " + sdnetworking_msn(c.total) + "."
+      },
+      {
+        plan: p, cut: 1, stages: [0], viz: "",
+        title: "1 · browser cache", status: "MISS",
+        rows: [
+          { label: "cost", value: "0 ms", flag: "ok" },
+          { label: "the HTML", value: "must not be stale — fetched", flag: "warn" }
+        ],
+        caption: "<b>1 · BROWSER CACHE.</b> Still a miss on the HTML — that is the one document " +
+          "you cannot serve stale — so the request happens. <b>0 ms</b>, same as tab one."
+      },
+      {
+        plan: p, cut: 2, stages: [1], viz: "", flag: "ok",
+        title: "2 · DNS", status: "CACHED",
+        rows: [
+          { label: "queries", value: "0", flag: "ok" },
+          { label: "saved against tab one", value: sdnetworking_ms(c.dnsMs), flag: "ok" },
+          { label: "the same caching, later", value: "is why DNS failover is slow", flag: "warn" }
+        ],
+        caption: "<b>2 · DNS: 0 ms.</b> The answer is still in the OS cache, so the hierarchy is " +
+          "never walked — the page's <i>each layer caches, so most lookups stop early</i>, worth " +
+          sdnetworking_ms(c.dnsMs) + " here. The flip side is on the same page: that caching is " +
+          "exactly why <b>DNS is a poor failover mechanism</b>. Resolvers, operating systems and " +
+          "browsers hold records and many ignore your TTL, so a dead address keeps taking traffic " +
+          "long after 60 seconds have passed. Use anycast or a health-checked balancer."
+      },
+      {
+        plan: p, cut: 3, stages: [2], viz: "conn", flag: "ok",
+        title: "3 · TCP", status: "1 RTT",
+        rows: [
+          { label: "round trips", value: "1  (unchanged)" },
+          { label: "each", value: p.cfg.rtt + " ms vs " + c.cfg.rtt + " ms", flag: "ok" },
+          { label: "saved on this leg", value: sdnetworking_ms(c.cfg.rtt - p.cfg.rtt),
+            flag: "ok" }
+        ],
+        caption: "<b>3 · TCP.</b> One round trip, exactly as before — but to a PoP <b>" +
+          p.cfg.rtt + " ms</b> away instead of an origin " + c.cfg.rtt + " ms away. The protocol " +
+          "did not change here; the <i>distance</i> did, and that alone is <b>" +
+          sdnetworking_ms(c.cfg.rtt - p.cfg.rtt) + " saved</b> on one leg. A CDN is mostly a " +
+          "machine for shortening RTT."
+      },
+      {
+        plan: p, cut: 4, stages: [3], viz: "conn", flag: "ok",
+        title: "4 · TLS 1.3", status: "1 RTT",
+        rows: [
+          { label: "round trips", value: "1 vs 2", flag: "ok" },
+          { label: "spent here", value: sdnetworking_ms(p.cfg.tlsRtt * p.cfg.rtt), flag: "ok" },
+          { label: "tab one spent", value: sdnetworking_ms(c.cfg.tlsRtt * c.cfg.rtt), flag: "bad" },
+          { label: "TCP + TLS total", value: sdnetworking_ms(p.handshakeMs), flag: "ok" }
+        ],
+        caption: "<b>4 · TLS 1.3.</b> One round trip instead of two, and each round trip is " +
+          p.cfg.rtt + " ms instead of " + c.cfg.rtt + ": <b>" +
+          sdnetworking_ms(p.cfg.tlsRtt * p.cfg.rtt) + " against tab one's " +
+          sdnetworking_ms(c.cfg.tlsRtt * c.cfg.rtt) + "</b>. Two independent changes multiply — " +
+          "half the round trips, a tenth of the distance. The page's " + sdnetworking_PURE13 +
+          "–" + sdnetworking_PURE12 + " ms of pure handshake latency is <b>" +
+          sdnetworking_ms(p.handshakeMs) + "</b> here."
+      },
+      {
+        plan: p, cut: 5, stages: [4, 5, 6], viz: "conn", flag: "ok",
+        title: "5-7 · request, edge, response", status: "FIRST BYTE",
+        rows: [
+          { label: "edge cache hit", value: sdnetworking_ms(p.cfg.srv), flag: "ok" },
+          { label: "first byte at", value: sdnetworking_msn(p.firstByte), flag: "ok" },
+          { label: "tab one's first byte", value: sdnetworking_msn(c.firstByte), flag: "bad" },
+          { label: "ratio", value: sdnetworking_x(c.firstByte, p.firstByte), flag: "ok" }
+        ],
+        caption: "<b>5–7.</b> The edge serves the document from its own cache in " +
+          sdnetworking_ms(p.cfg.srv) + " — the origin is not even contacted. <b>First byte at " +
+          sdnetworking_msn(p.firstByte) + " against " + sdnetworking_msn(c.firstByte) +
+          "</b>, a factor of <b>" + sdnetworking_x(c.firstByte, p.firstByte) + "</b>, and " +
+          "the application is byte-identical."
+      },
+      {
+        plan: p, cut: 6, stages: [7], viz: "h2", flag: "ok",
+        title: "8 · render", status: sdnetworking_SUBRES + " STREAMS",
+        rows: [
+          { label: "connections", value: "1  (already open)", flag: "ok" },
+          { label: "new handshakes", value: "0  (tab one: " + sdnetworking_ms(c.lines[5].ms) +
+            ")", flag: "ok" },
+          { label: "rounds", value: "1  (tab one: " + c.rounds + ")", flag: "ok" },
+          { label: "spent here", value: sdnetworking_ms(p.subMs) + " vs " +
+            sdnetworking_ms(c.subMs), flag: "ok" }
+        ],
+        caption: "<b>8 · RENDER.</b> All " + sdnetworking_SUBRES + " subresources are <b>streams " +
+          "on the connection that is already open</b>. No new handshakes — tab one spent " +
+          sdnetworking_ms(c.lines[5].ms) + " on those — and no rounds of " +
+          sdnetworking_CONNS11 + ", which cost it another " + sdnetworking_ms(c.lines[6].ms) +
+          ". One round trip for the lot: <b>" + sdnetworking_ms(p.subMs) + "</b>. And note what " +
+          "this does to the old trick: sharding across hostnames would now force <i>new</i> " +
+          "connections and throw the multiplexing away. The HTTP/1.1 workaround is an HTTP/2 bug."
+      },
+      {
+        plan: r, cut: 6, stages: [3, 7], viz: "h2", flag: "ok",
+        title: "the repeat visit", status: "0-RTT",
+        rows: [
+          { label: "TLS handshake", value: "0 round trips", flag: "ok" },
+          { label: "whole load", value: sdnetworking_msn(r.total), flag: "ok" },
+          { label: "round trips", value: String(r.rt), flag: "ok" },
+          { label: "0-RTT data is replayable", value: "idempotent requests only", flag: "bad" }
+        ],
+        caption: "<b>The repeat visit.</b> TLS 1.3 session resumption puts application data in " +
+          "the <b>first flight</b> — 0-RTT — so the handshake leg disappears entirely and the " +
+          "whole load is <b>" + sdnetworking_msn(r.total) + " in " + r.rt + " round trips</b>. " +
+          "The catch the page states plainly: <b>0-RTT data is replayable</b>, so it may only " +
+          "carry idempotent requests. A 0-RTT POST is a duplicate charge waiting to happen."
+      },
+      {
+        plan: p, cut: 6, stages: [7], viz: "h2", flag: "ok",
+        title: "the bill", status: "DONE",
+        rows: [
+          { label: "this run", value: sdnetworking_msn(p.total), flag: "ok" },
+          { label: "tab one", value: sdnetworking_msn(c.total), flag: "bad" },
+          { label: "faster by", value: sdnetworking_x(c.total, p.total), flag: "ok" },
+          { label: "round trips", value: p.rt + " vs " + c.rt, flag: "ok" }
+        ],
+        tableHead: ["stage", "tab one", "this run", "saved"],
+        tableRows: [
+          ["2 DNS", sdnetworking_num(c.dnsMs), sdnetworking_num(p.dnsMs),
+            sdnetworking_num(c.dnsMs - p.dnsMs)],
+          ["3 TCP", sdnetworking_num(c.lines[2].ms), sdnetworking_num(p.lines[2].ms),
+            sdnetworking_num(c.lines[2].ms - p.lines[2].ms)],
+          ["4 TLS", sdnetworking_num(c.lines[3].ms), sdnetworking_num(p.lines[3].ms),
+            sdnetworking_num(c.lines[3].ms - p.lines[3].ms)],
+          ["5-7 request + server", sdnetworking_num(c.lines[4].ms),
+            sdnetworking_num(p.lines[4].ms),
+            sdnetworking_num(c.lines[4].ms - p.lines[4].ms)],
+          ["8 subresources", sdnetworking_num(c.subMs), sdnetworking_num(p.subMs),
+            sdnetworking_num(c.subMs - p.subMs)],
+          ["total", sdnetworking_num(c.total), sdnetworking_num(p.total),
+            sdnetworking_num(saved)]
+        ],
+        caption: "<b>" + sdnetworking_msn(p.total) + " against " + sdnetworking_msn(c.total) +
+          " — " + sdnetworking_x(c.total, p.total) + " — with identical HTML.</b> Read the last " +
+          "column: of the " + sdnetworking_msn(saved) + " saved, the <i>server</i> contributed " +
+          sdnetworking_ms(srvSaved) + ", or <b>" + sdnetworking_p1(srvSaved, saved) +
+          "</b>. Everything else was round trips — fewer of them, and shorter ones. That is why " +
+          "the URL question is really a question about round trips."
+      }
+    ]);
+  }
+
+  // --- tab 3 · the failure mode ------------------------------------------
+  function sdnetworking_lossy() {
+    var p = sdnetworking_LOSS;
+    var clean = p.total - p.lines[6].ms;
+
+    return sdnetworking_sc("loss", "One packet drops", [
+      {
+        plan: p, cut: 0, stages: [], viz: "",
+        title: "protocol fixed, distance not", status: "0 ms",
+        rows: [
+          { label: "distance", value: p.cfg.rtt + " ms RTT", flag: "bad" },
+          { label: "protocol", value: p.cfg.proto + " · TLS " + p.cfg.tlsName, flag: "ok" },
+          { label: "subresources", value: String(sdnetworking_SUBRES) },
+          { label: "packet loss", value: "one segment, stream " + sdnetworking_DROPPED,
+            flag: "warn" }
+        ],
+        caption: "Third run: the protocol is modern but the <b>distance is not</b> — HTTP/2 and " +
+          "TLS 1.3 straight to the origin across the ocean, " + p.cfg.rtt + " ms. Everything " +
+          "here goes right, and faster than tab one, until <b>one packet does not arrive</b>."
+      },
+      {
+        plan: p, cut: 2, stages: [0, 1], viz: "",
+        title: "1-2 · cache and DNS", status: "0 ms",
+        rows: [
+          { label: "browser cache", value: "miss" },
+          { label: "DNS", value: "cached — 0 queries", flag: "ok" },
+          { label: "elapsed", value: "0 ms" }
+        ],
+        caption: "<b>1–2.</b> Cache miss on the HTML, DNS still cached: <b>0 ms</b> for both, " +
+          "so the run starts where tab two started. The difference from here is entirely the " +
+          "length of a round trip."
+      },
+      {
+        plan: p, cut: 3, stages: [2], viz: "conn", flag: "warn",
+        title: "3 · TCP", status: "1 RTT",
+        rows: [
+          { label: "round trips", value: "1" },
+          { label: "spent", value: sdnetworking_ms(p.cfg.rtt), flag: "warn" },
+          { label: "the same leg at the edge", value: sdnetworking_ms(sdnetworking_RTT_EDGE),
+            flag: "ok" }
+        ],
+        caption: "<b>3 · TCP.</b> One round trip — <b>" + sdnetworking_ms(p.cfg.rtt) +
+          "</b>, because this one goes all the way to the origin. The identical handshake cost " +
+          sdnetworking_ms(sdnetworking_RTT_EDGE) + " in tab two."
+      },
+      {
+        plan: p, cut: 4, stages: [3], viz: "conn", flag: "warn",
+        title: "4 · TLS 1.3", status: "1 RTT",
+        rows: [
+          { label: "round trips", value: "1  (TLS 1.2 would be 2)", flag: "ok" },
+          { label: "TCP + TLS", value: sdnetworking_ms(p.handshakeMs), flag: "warn" },
+          { label: "the page's range", value: sdnetworking_PURE13 + "–" + sdnetworking_PURE12 +
+            " ms" }
+        ],
+        caption: "<b>4 · TLS 1.3.</b> One round trip. TCP + TLS is <b>" +
+          sdnetworking_ms(p.handshakeMs) + "</b> — the <i>bottom</i> of the page's " +
+          sdnetworking_PURE13 + "–" + sdnetworking_PURE12 + " ms, and the best a first " +
+          "connection to this origin can possibly do. Protocol work is finished; physics is not."
+      },
+      {
+        plan: p, cut: 5, stages: [4, 5, 6], viz: "open", flag: "warn",
+        title: "5-7 · request, server, response", status: "FIRST BYTE",
+        rows: [
+          { label: "first byte at", value: sdnetworking_msn(p.firstByte), flag: "warn" },
+          { label: "streams opened", value: String(sdnetworking_SUBRES), flag: "ok" },
+          { label: "connections used", value: "1", flag: "ok" },
+          { label: "HTTP-level head-of-line blocking", value: "gone", flag: "ok" }
+        ],
+        caption: "<b>5–7.</b> First byte at " + sdnetworking_msn(p.firstByte) +
+          ". The HTML names " + sdnetworking_SUBRES + " subresources and every one becomes a " +
+          "<b>stream on this single connection</b>. HTTP-level head-of-line blocking is genuinely " +
+          "gone: no request is queued behind another request."
+      },
+      {
+        plan: p, cut: 6, stages: [7], viz: "flight", flag: "ok",
+        title: "8 · render", status: "ALL IN FLIGHT",
+        rows: [
+          { label: "streams in flight", value: String(sdnetworking_SUBRES), flag: "ok" },
+          { label: "under HTTP/1.1 this would be", value: sdnetworking_CONNS11 +
+            " at a time, " + sdnetworking_COLD.rounds + " rounds", flag: "warn" },
+          { label: "elapsed", value: sdnetworking_msn(clean), flag: "ok" }
+        ],
+        caption: "All <b>" + sdnetworking_SUBRES + " streams are in flight at once</b>, and this " +
+          "is real: the same " + sdnetworking_SUBRES + " would have been queued " +
+          sdnetworking_COLD.rounds + " deep behind " + sdnetworking_CONNS11 +
+          " connections under HTTP/1.1. At <b>" + sdnetworking_msn(clean) + "</b> the page " +
+          "would be done — <b>" + sdnetworking_x(sdnetworking_COLD.total, clean) +
+          " faster than tab one on the same wire</b>, from the protocol alone."
+      },
+      {
+        plan: p, cut: 6, stages: [7], viz: "blocked", flag: "bad",
+        title: "one segment lost", status: "ALL STALLED",
+        rows: [
+          { label: "lost segment belongs to", value: "stream " + sdnetworking_DROPPED, flag: "bad" },
+          { label: "streams whose bytes have arrived", value: String(sdnetworking_SUBRES - 1),
+            flag: "warn" },
+          { label: "streams the application can read", value: "0", flag: "bad" },
+          { label: "blocked by one packet", value: String(sdnetworking_BLOCK2), flag: "bad" }
+        ],
+        caption: "<b>One packet is lost</b> — a segment belonging to stream " +
+          sdnetworking_DROPPED + ". TCP delivers bytes <i>in order</i>, and all " +
+          sdnetworking_SUBRES + " streams ride one byte stream. The data for the other <b>" +
+          (sdnetworking_SUBRES - 1) + " has already arrived</b> and is sitting complete in the " +
+          "kernel's receive buffer, unreadable, because a byte in front of it is missing. " +
+          "<b>" + sdnetworking_BLOCK2 + " streams blocked by one packet</b>, and not one of them " +
+          "had anything to do with it."
+      },
+      {
+        plan: p, cut: 7, stages: [7], viz: "delivered", flag: "bad",
+        title: "retransmit", status: "+1 RTT",
+        rows: [
+          { label: "fast retransmit", value: "1 RTT = " + sdnetworking_ms(p.cfg.rtt), flag: "bad" },
+          { label: "clean run would have been", value: sdnetworking_msn(clean) },
+          { label: "actual", value: sdnetworking_msn(p.total), flag: "bad" },
+          { label: "stream-milliseconds lost", value: sdnetworking_num(sdnetworking_STREAMMS2),
+            flag: "bad" }
+        ],
+        caption: "The retransmit costs a full round trip: <b>+" + sdnetworking_ms(p.cfg.rtt) +
+          "</b>, total <b>" + sdnetworking_msn(p.total) + "</b>. Priced per stream, one lost " +
+          "packet cost <b>" + sdnetworking_BLOCK2 + " × " + p.cfg.rtt + " = " +
+          sdnetworking_num(sdnetworking_STREAMMS2) + " stream-milliseconds</b>. This is the " +
+          "sentence worth being able to say: <b>HTTP/2 did not remove head-of-line blocking — it " +
+          "moved it down a layer</b>, from HTTP to TCP, and then put every stream behind the same " +
+          "TCP connection."
+      },
+      {
+        plan: p, cut: 7, stages: [7], viz: "quic", flag: "ok",
+        title: "the same packet, three protocols", status: "HTTP/3",
+        rows: [
+          { label: "HTTP/1.1 blocks", value: sdnetworking_BLOCK11 + " resources", flag: "warn" },
+          { label: "HTTP/2 blocks", value: sdnetworking_BLOCK2 + " streams", flag: "bad" },
+          { label: "HTTP/3 blocks", value: sdnetworking_BLOCK3 + " stream", flag: "ok" },
+          { label: "stream-ms lost, HTTP/2 vs HTTP/3",
+            value: sdnetworking_x(sdnetworking_STREAMMS2, sdnetworking_STREAMMS3), flag: "ok" }
+        ],
+        tableHead: ["protocol", "connections", "held up by one lost segment", "stream-ms lost"],
+        tableRows: [
+          ["HTTP/1.1", String(sdnetworking_CONNS11),
+            sdnetworking_BLOCK11 + " (the queue on that one socket)",
+            sdnetworking_num(sdnetworking_BLOCK11 * p.cfg.rtt)],
+          ["HTTP/2 over TCP", "1", String(sdnetworking_BLOCK2) + " (every stream)",
+            sdnetworking_num(sdnetworking_STREAMMS2)],
+          ["HTTP/3 over QUIC", "1, streams independent", String(sdnetworking_BLOCK3),
+            sdnetworking_num(sdnetworking_STREAMMS3)]
+        ],
+        caption: "<b>The same dropped packet, three protocols.</b> HTTP/1.1 stalls the one " +
+          "socket it was on, so <b>" + sdnetworking_BLOCK11 + "</b> queued resources wait. " +
+          "HTTP/2 stalls <b>" + sdnetworking_BLOCK2 + "</b>. HTTP/3 stalls <b>" +
+          sdnetworking_BLOCK3 + "</b>, because QUIC keeps delivery order <i>per stream</i> and " +
+          "hands the other " + (sdnetworking_SUBRES - 1) + " up immediately — <b>" +
+          sdnetworking_num(sdnetworking_STREAMMS3) + " stream-ms against " +
+          sdnetworking_num(sdnetworking_STREAMMS2) + ", a " +
+          sdnetworking_x(sdnetworking_STREAMMS2, sdnetworking_STREAMMS3) + " difference</b> " +
+          "bought by abandoning TCP. On a clean network HTTP/2 wins; on a lossy one it can lose " +
+          "to the protocol it replaced. That is what HTTP/3 is for."
+      }
+    ]);
+  }
+
+  /** The subresource picture for this frame. */
+  function sdnetworking_res(mode, d) {
+    if (!mode || mode === "conn" || mode === "open") return "";
+    var cells = [], i, round, c;
+    for (i = 0; i < sdnetworking_SUBRES; i++) {
+      round = Math.floor(i / sdnetworking_CONNS11) + 1;
+      if (mode === "queued") {
+        c = { label: String(round), flag: "idle",
+          title: "resource " + (i + 1) + " — waits for round " + round };
+      } else if (mode === "fetched") {
+        c = { label: String(round), flag: round === 1 ? "ok" : "warn",
+          title: "resource " + (i + 1) + " — arrived in round " + round + " of " +
+            sdnetworking_COLD.rounds };
+      } else if (mode === "h2" || mode === "flight" || mode === "delivered") {
+        c = { label: "", flag: "ok",
+          title: "stream " + (i + 1) + " — multiplexed on the one connection" };
+      } else if (mode === "blocked") {
+        c = i + 1 === sdnetworking_DROPPED
+          ? { label: "!", flag: "bad", title: "stream " + (i + 1) + " — its segment was lost" }
+          : { label: "", flag: "warn",
+              title: "stream " + (i + 1) + " — bytes arrived, held in the kernel buffer" };
+      } else {
+        c = i + 1 === sdnetworking_DROPPED
+          ? { label: "!", flag: "warn", title: "stream " + (i + 1) + " — the only one that waits" }
+          : { label: "", flag: "ok", title: "stream " + (i + 1) + " — delivered immediately" };
+      }
+      cells.push(c);
+    }
+    var label = mode === "queued" ? "the " + sdnetworking_SUBRES +
+        " subresources, by the round that will fetch them"
+      : mode === "fetched" ? "the " + sdnetworking_SUBRES + " subresources, by round"
+      : mode === "blocked" ? "the " + sdnetworking_SUBRES + " streams — one lost segment"
+      : mode === "quic" ? "the same loss over QUIC"
+      : mode === "delivered" ? "delivered, one round trip late"
+      : "the " + sdnetworking_SUBRES + " streams, one connection";
+    return d.cells(cells, { label: label, dense: true });
+  }
+
+  S["sdnetworking"] = {
+    title: "Type a URL and press enter, three times",
+    note: "The page's eight steps — cache, DNS, TCP, TLS, request, server, response, render — " +
+      "with a stopwatch on each, over the same HTML and the same <b>24 subresources</b>. " +
+      "Constants are the page's: an ocean is <b>150 ms per round trip</b>, TCP is <b>1 RTT</b>, " +
+      "TLS 1.2 is <b>2</b> and TLS 1.3 is <b>1</b> (<b>0</b> on resumption), HTTP/1.1 carries " +
+      "<b>one request at a time</b> over about <b>6 connections</b>, HTTP/2 puts every stream on " +
+      "one connection, and HTTP/3 lets a loss in one stream block no other. Declared here, " +
+      "because the page does not publish them: <b>24</b> subresources, an uncached DNS query at " +
+      "<b>30 ms</b> and a cold walk of <b>4</b> of them, a CDN PoP at <b>15 ms</b>, <b>40 ms</b> " +
+      "of origin work and <b>5 ms</b> for an edge cache hit, and a fast retransmit costing " +
+      "<b>1 RTT</b>. Every total below is the sum of the ledger, not a figure typed in — " +
+      "including the page's own “300–450 ms before a byte moves”, recomputed as (1 + 1 or 2) × " +
+      "150 ms.",
+    interval: 1500,
+
+    scenarios: [sdnetworking_cold(), sdnetworking_edge(), sdnetworking_lossy()],
+
+    draw: function (step, d, ctx) {
+      var p = step.plan, cfg = p.cfg;
+      var v = sdnetworking_upto(p, step.cut);
+      var stages = step.stages || [];
+      var first = stages.length ? stages[0] : -1;
+      var i, k, active;
+
+      // the page's eight steps, with this frame's lit
+      var strip = [];
+      for (i = 0; i < sdnetworking_STAGES.length; i++) {
+        active = false;
+        for (k = 0; k < stages.length; k++) if (stages[k] === i) active = true;
+        strip.push({
+          label: sdnetworking_STAGES[i],
+          flag: active ? "warn" : (first >= 0 && i < first ? "ok" : "idle"),
+          title: active ? "this frame" : (first >= 0 && i < first ? "done" : "not reached")
+        });
+      }
+
+      var reachedFB = v.n >= 5;
+      var head = d.cols([
+        d.big(v.ms > 0 ? sdnetworking_msn(v.ms) : "0 ms", "elapsed",
+          v.ms === 0 ? "idle" : (step.flag || "warn")),
+        d.stat({
+          label: "round trips spent",
+          value: String(v.rt),
+          sub: cfg.rtt + " ms each" + (cfg.dnsHops ? " · DNS " + sdnetworking_DNSQ + " ms" : ""),
+          flag: v.rt === 0 ? "idle" : v.rt > 8 ? "bad" : v.rt > 4 ? "warn" : "ok"
+        }),
+        d.stat({
+          label: "first byte at",
+          value: reachedFB ? sdnetworking_msn(p.firstByte) : "not yet",
+          sub: reachedFB ? p.firstByteRt + " round trips to get there" : "still handshaking",
+          flag: !reachedFB ? "idle" : p.firstByte > 300 ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "server work",
+          value: sdnetworking_ms(cfg.srv),
+          sub: v.ms > 0 ? sdnetworking_p1(cfg.srv, v.ms) + " of elapsed" : "nothing spent yet",
+          flag: v.ms === 0 ? "idle" : "ok"
+        })
+      ]);
+
+      // the connection picture: how many sockets, carrying how much
+      var conns = [], per;
+      if (v.n >= 3) {
+        if (cfg.http === 11 && v.n >= 6) {
+          per = sdnetworking_SUBRES / sdnetworking_CONNS11;
+          for (i = 0; i < sdnetworking_CONNS11; i++) {
+            conns.push({
+              label: v.n >= 7 ? String(per) : "—",
+              flag: v.n >= 7 ? "warn" : "idle",
+              title: "connection " + (i + 1) + " — " + per +
+                " resources, one at a time, own TCP + TLS handshake"
+            });
+          }
+        } else {
+          conns.push({
+            label: v.n >= 6 ? String(sdnetworking_SUBRES) : "1",
+            flag: step.viz === "blocked" ? "bad" : "ok",
+            title: cfg.http === 11
+              ? "the first connection, carrying the HTML"
+              : "one connection carrying every stream"
+          });
+        }
+      }
+
+      var body = [head, d.cells(strip, { label: "the page's eight steps" })];
+
+      body.push(d.node({
+        title: step.title,
+        status: step.status,
+        statusFlag: step.flag || "idle",
+        badge: cfg.proto + " · TLS " + cfg.tlsName,
+        meta: cfg.where + " · " + cfg.rtt + " ms RTT · " + sdnetworking_SUBRES + " subresources",
+        flag: step.flag || "idle",
+        rows: step.rows
+      }));
+
+      if (conns.length) {
+        body.push(d.cells(conns, {
+          label: conns.length > 1
+            ? conns.length + " connections, resources queued on each"
+            : "1 connection, streams on it"
+        }));
+      }
+
+      var res = sdnetworking_res(step.viz, d);
+      if (res) body.push(res);
+
+      body.push(d.table(["step", "arithmetic", "+ms", "total ms"], v.rows));
+
+      if (step.tableHead) body.push(d.table(step.tableHead, step.tableRows));
+
+      body.push(d.note(
+        v.n >= 6
+          ? "Count the round trips, not the milliseconds — the round trips are the part an " +
+            "engineering decision can remove."
+          : "Nothing on this line is the server working. It is the network agreeing to talk."
+      ));
+
+      return d.stack(body);
     }
   };
 
@@ -10715,6 +22973,1570 @@ S["sdapidesign"] = {
 
   // ====================================================================
   // ======================================================================
+  // SIM · sdpostgresinternal  (postgres-internals.md)
+  // One heap page, watched while the page's own psql session runs against it.
+  // Three runs of the same machinery — write a new version, mark the old one
+  // dead, leave the cleanup to vacuum — reaching three different outcomes:
+  // the default update that writes into every index, the HOT update that
+  // writes into none, and the 20,000 updates that turn one row into 89 pages.
+  //
+  // CONFIG — every figure is the page's, executed against its live
+  // PostgreSQL 16 and quoted here:
+  //   block_size                    8192 bytes          §1 "SHOW block_size"
+  //   line pointers                 1-indexed, (0,0) invalid   §2
+  //   page n starts at byte         n × 8192            §2
+  //   INSERT  (0,1) xmin 731 · (0,2) xmin 731           §2
+  //   UPDATE  new tuple (0,3) xmin 732; old lp1 gets
+  //           t_xmax 732 and t_ctid (0,3)               §3
+  //   DELETE  lp2 gets t_xmax 745, nothing removed      §3
+  //   index   100 -> (0,1), 100 -> (0,3), 200 -> (0,2)  §4
+  //   six indexes on a table -> seven writes per update §4
+  //   HOT     50 updates / 50 hot_updates  (plain_col)  §5
+  //           100 updates / 50 hot_updates (indexed_col) §5
+  //   fillfactor default 100, the page's suggestion 80  §5
+  //   bloat   1 page -> 20,000 updates -> 89 pages
+  //           -> VACUUM 89 -> VACUUM FULL 1             §7
+  //   long tx 5,000 dead tuples with an old transaction
+  //           open, 0 after it committed                §7
+  //   xid     32-bit, wraps after ~4 billion            §8
+  //
+  // DERIVED HERE (arithmetic on the figures above, never typed in):
+  //   versions per 8 KB page  (20,000 + 1) / 89 = 224.7
+  //   bytes per version       8192 / 224.7 = 36 B
+  //   room left by fillfactor 80  8192 × 20% = 1,638 B = 44 more versions
+  //   intermediate page counts    ceil(versions / 224.7) — the page publishes
+  //                               only the two endpoints, and these two fit
+  //                               them exactly (1 page at the start, 89 at
+  //                               20,000 updates)
+  //   file size               pages × 8192 B
+  //   write amplification     1 heap write + 1 index write per index
+  //
+  // DECLARED, because the page prints no xids for the hot_demo table: the
+  // HOT statements are given xid 746 and 747, continuing its sequence.
+  // ======================================================================
+  var sdpostgresinternal_BLOCK = 8192;          // §1, verified
+  var sdpostgresinternal_UPDATES = 20000;       // §7
+  var sdpostgresinternal_PAGES89 = 89;          // §7
+  var sdpostgresinternal_DEADLONG = 5000;       // §7
+  var sdpostgresinternal_SIXIDX = 6;            // §4
+  var sdpostgresinternal_FILL = 80;             // §5
+  var sdpostgresinternal_HOTROWS = 50;          // §5, WHERE id <= 50
+
+  // derived: how many row versions an 8 KB page held in the page's own
+  // bloat experiment, and therefore how big one version is
+  var sdpostgresinternal_VPP =
+    (sdpostgresinternal_UPDATES + 1) / sdpostgresinternal_PAGES89;   // 224.7
+  var sdpostgresinternal_TUPB =
+    sdpostgresinternal_BLOCK / sdpostgresinternal_VPP;               // ~36 B
+  var sdpostgresinternal_FREE80 =
+    sdpostgresinternal_BLOCK * (100 - sdpostgresinternal_FILL) / 100; // 1,638 B
+  var sdpostgresinternal_ROOM80 =
+    Math.floor(sdpostgresinternal_FREE80 / sdpostgresinternal_TUPB);  // 44
+
+  function sdpostgresinternal_num(n) {
+    return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+  function sdpostgresinternal_bytes(b) {
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + " MB";
+    if (b >= 1024) return Math.round(b / 1024) + " KB";
+    return Math.round(b) + " B";
+  }
+  function sdpostgresinternal_pages(versions) {
+    return Math.max(1, Math.ceil(versions / sdpostgresinternal_VPP - 1e-9));
+  }
+  function sdpostgresinternal_plural(n, w) {
+    return sdpostgresinternal_num(n) + " " + w + (Math.abs(n) === 1 ? "" : "s");
+  }
+  function sdpostgresinternal_x(a, b) {
+    return b > 0 ? (a / b).toFixed(0) + "×" : "—";
+  }
+  function sdpostgresinternal_pct(a, b) {
+    return b > 0 ? Math.round((a / b) * 100) + "%" : "—";
+  }
+
+  /** A line pointer as pageinspect prints it. */
+  function sdpostgresinternal_lp(lp, xmin, xmax, tctid, what, flag) {
+    return { lp: lp, xmin: xmin, xmax: xmax, tctid: tctid, what: what, flag: flag };
+  }
+
+  /** The counters every frame carries. idx < 0 means "not measured here". */
+  function sdpostgresinternal_st(live, dead, pages, idx, heapW) {
+    return { live: live, dead: dead, pages: pages, idx: idx, heapW: heapW };
+  }
+
+  function sdpostgresinternal_chips(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({
+        label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined
+      });
+    }
+    return d.pills(chips);
+  }
+
+  // --- tab 1 · the default UPDATE ---------------------------------------
+  function sdpostgresinternal_plain() {
+    var L1 = sdpostgresinternal_lp;
+    var afterInsert = [
+      L1(1, 731, 0, "(0,1)", "item 100, price 10 — live", "ok"),
+      L1(2, 731, 0, "(0,2)", "item 200, price 5 — live", "ok")
+    ];
+    var afterNew = [
+      L1(1, 731, 0, "(0,1)", "item 100, price 10 — still live", "ok"),
+      L1(2, 731, 0, "(0,2)", "item 200, price 5 — live", "ok"),
+      L1(3, 732, 0, "(0,3)", "item 100, price 20 — the NEW version", "warn")
+    ];
+    var afterMark = [
+      L1(1, 731, 732, "(0,3)", "DEAD — and it points forward to (0,3)", "bad"),
+      L1(2, 731, 0, "(0,2)", "item 200, price 5 — untouched", "ok"),
+      L1(3, 732, 0, "(0,3)", "item 100, price 20 — live, points at itself", "ok")
+    ];
+    var afterDelete = [
+      L1(1, 731, 732, "(0,3)", "DEAD — superseded by the update", "bad"),
+      L1(2, 731, 745, "(0,2)", "DEAD — only t_xmax was written", "bad"),
+      L1(3, 732, 0, "(0,3)", "item 100, price 20 — the one visible row", "ok")
+    ];
+
+    var idx2 = [
+      { key: "100", ctid: "(0,1)", note: "live version", flag: "ok" },
+      { key: "200", ctid: "(0,2)", note: "live version", flag: "ok" }
+    ];
+    var idx3 = [
+      { key: "100", ctid: "(0,1)", note: "now points at a DEAD tuple", flag: "bad" },
+      { key: "200", ctid: "(0,2)", note: "live version", flag: "ok" },
+      { key: "100", ctid: "(0,3)", note: "added by the UPDATE", flag: "warn" }
+    ];
+    var idx3b = [
+      { key: "100", ctid: "(0,1)", note: "dead tuple", flag: "bad" },
+      { key: "200", ctid: "(0,2)", note: "dead tuple, entry still here", flag: "bad" },
+      { key: "100", ctid: "(0,3)", note: "the live version", flag: "ok" }
+    ];
+
+    return {
+      id: "plain", label: "UPDATE, one index",
+      phases: ["empty", "INSERT", "SELECT", "new tuple", "old marked",
+        "index write", "DELETE", "the page now", "verdict"],
+      steps: [
+        {
+          view: "heap", heap: [], idx: [], st: sdpostgresinternal_st(0, 0, 1, 0, 0),
+          title: "items", status: "EMPTY", op: "CREATE TABLE items (item_id int PRIMARY KEY, price numeric)",
+          rows: [
+            { label: "block_size", value: sdpostgresinternal_num(sdpostgresinternal_BLOCK) +
+              "  (verified)" },
+            { label: "fillfactor", value: "100  (the default)" },
+            { label: "indexes", value: "1  (the primary key)" },
+            { label: "pages in the file", value: "1" }
+          ],
+          caption: "A table is a file, a file is an array of <b>8 KB pages</b>, and a page holds " +
+            "<b>tuples — row versions, not rows</b>. <code>SHOW block_size</code> on the page's " +
+            "live Postgres 16 returns <b>" + sdpostgresinternal_num(sdpostgresinternal_BLOCK) +
+            "</b>. Everything that follows is one page of one table, watched while the page's own " +
+            "psql session runs. Press Play."
+        },
+        {
+          view: "heap", heap: afterInsert, idx: idx2,
+          st: sdpostgresinternal_st(2, 0, 1, 2, 2), flag: "ok",
+          title: "INSERT", status: "2 TUPLES",
+          op: "INSERT INTO items VALUES (100, 10), (200, 5)",
+          rows: [
+            { label: "ctids written", value: "(0,1) and (0,2)", flag: "ok" },
+            { label: "xmin on both", value: "731  (this transaction)" },
+            { label: "xmax on both", value: "0  — nothing has superseded them" },
+            { label: "index entries", value: "2", flag: "ok" }
+          ],
+          caption: "<b>Two tuples, at <code>(0,1)</code> and <code>(0,2)</code>.</b> A ctid is " +
+            "<b>(page number, line pointer)</b>, and line pointers are <b>1-indexed</b> — the " +
+            "first tuple on a page is <code>(0,1)</code>, not <code>(0,0)</code>, which is an " +
+            "invalid ctid whatever the diagrams show. <code>xmin 731</code> is the transaction " +
+            "that created them; <code>xmax 0</code> means nothing has superseded them yet."
+        },
+        {
+          view: "heap", heap: afterInsert, idx: idx2,
+          st: sdpostgresinternal_st(2, 0, 1, 2, 2), flag: "ok",
+          title: "SELECT by ctid", status: "1 PAGE READ",
+          op: "SELECT ctid, xmin, xmax FROM items ORDER BY ctid",
+          rows: [
+            { label: "(0,1) means", value: "page 0, line pointer 1" },
+            { label: "byte offset of page 0", value: "0 × " +
+              sdpostgresinternal_num(sdpostgresinternal_BLOCK) + " = 0" },
+            { label: "bytes read", value: sdpostgresinternal_num(sdpostgresinternal_BLOCK) +
+              "  (a page is the unit of I/O)", flag: "ok" },
+            { label: "cost on a 7 GB table", value: "the same one page read", flag: "ok" }
+          ],
+          caption: "<b>Why reads are fast at any table size.</b> Given <code>(0,1)</code> " +
+            "Postgres computes the file offset arithmetically — page <i>n</i> starts at " +
+            "<i>n</i> × " + sdpostgresinternal_num(sdpostgresinternal_BLOCK) + " — reads that " +
+            "<b>one 8 KB page</b>, and finds the tuple by its line pointer. A 7 GB table and a " +
+            "7 MB table cost the <b>same single page read</b>. Nothing is scanned, and the page " +
+            "is the unit of I/O: Postgres never reads part of one."
+        },
+        {
+          view: "heap", heap: afterNew, idx: idx2,
+          st: sdpostgresinternal_st(2, 0, 1, 2, 3), flag: "warn",
+          title: "UPDATE — step 1", status: "NEW TUPLE",
+          op: "UPDATE items SET price = 20 WHERE item_id = 100",
+          rows: [
+            { label: "tuples modified in place", value: "0", flag: "ok" },
+            { label: "new tuple at", value: "(0,3)", flag: "warn" },
+            { label: "its xmin", value: "732  (the updating transaction)" },
+            { label: "heap writes so far", value: "3" }
+          ],
+          caption: "<b>The one fact the whole page hangs on: an <code>UPDATE</code> never " +
+            "modifies a row in place.</b> A <i>third</i> tuple is written, at a new ctid " +
+            "<code>(0,3)</code>, carrying <code>price 20</code> and <code>xmin 732</code>. The " +
+            "row did not move. A second version of it now exists on the same page, and for one " +
+            "instant both are on disk with <code>xmax 0</code>."
+        },
+        {
+          view: "heap", heap: afterMark, idx: idx2,
+          st: sdpostgresinternal_st(2, 1, 1, 2, 3), flag: "warn",
+          title: "UPDATE — step 2", status: "OLD MARKED DEAD",
+          op: "-- same statement, second half",
+          rows: [
+            { label: "lp1 t_xmax", value: "732  — the updating transaction", flag: "bad" },
+            { label: "lp1 t_ctid", value: "(0,3)  — points FORWARD", flag: "warn" },
+            { label: "bytes freed", value: "0", flag: "bad" },
+            { label: "dead tuples", value: "1", flag: "bad" }
+          ],
+          caption: "<b>The old version is marked, not removed.</b> <code>pageinspect</code> shows " +
+            "lp1 with <code>t_xmax 732</code> — the updating transaction — which is how a tuple " +
+            "is marked dead, and <code>t_ctid (0,3)</code>, which <b>points forward at its " +
+            "replacement</b>. That forward pointer is the <b>update chain</b>, and it is what " +
+            "lets an index entry aimed at the old version still reach the current one. " +
+            "<code>UPDATE</code> is a delete plus an insert."
+        },
+        {
+          view: "heap", heap: afterMark, idx: idx3,
+          st: sdpostgresinternal_st(2, 1, 1, 3, 4), flag: "bad",
+          title: "the index write", status: "+1 ENTRY",
+          op: "-- still the same statement",
+          rows: [
+            { label: "item_id changed?", value: "no", flag: "ok" },
+            { label: "index entries before", value: "2" },
+            { label: "index entries after", value: "3", flag: "bad" },
+            { label: "with " + sdpostgresinternal_SIXIDX + " indexes this update costs",
+              value: sdpostgresinternal_plural(1 + sdpostgresinternal_SIXIDX, "write"),
+              flag: "bad" }
+          ],
+          caption: "<b>And here is the cost.</b> An index is a B-tree of <b>key → ctid</b>, so " +
+            "it stores a <i>physical address</i> — which means the new version needs a new " +
+            "entry <b>in every index on the table, even indexes on columns that did not " +
+            "change</b>. <code>item_id</code> is still 100 and the primary key still gains an " +
+            "entry. On the page's table with " + sdpostgresinternal_SIXIDX + " indexes, one " +
+            "update is <b>" + (1 + sdpostgresinternal_SIXIDX) + " writes</b>. Brilliant, because " +
+            "a lookup is one arithmetic jump; catastrophic, because every version pays every " +
+            "index."
+        },
+        {
+          view: "heap", heap: afterDelete, idx: idx3b,
+          st: sdpostgresinternal_st(1, 2, 1, 3, 5), flag: "bad",
+          title: "DELETE", status: "4 BYTES",
+          op: "DELETE FROM items WHERE item_id = 200",
+          rows: [
+            { label: "lp2 t_xmax", value: "745", flag: "bad" },
+            { label: "tuple removed", value: "no — still on the page", flag: "bad" },
+            { label: "index entry removed", value: "no", flag: "bad" },
+            { label: "disk space freed", value: "0 B", flag: "bad" }
+          ],
+          caption: "<b>A <code>DELETE</code> writes four bytes.</b> lp2 gets " +
+            "<code>t_xmax 745</code> and that is the entire operation — the tuple, its data and " +
+            "its index entry are all still there. This is why deleting a million rows frees no " +
+            "disk space, and can leave the table <i>slower</i> until vacuum runs: the dead " +
+            "tuples are still read."
+        },
+        {
+          view: "heap", heap: afterDelete, idx: idx3b,
+          st: sdpostgresinternal_st(1, 2, 1, 3, 5), flag: "bad",
+          title: "the page now", status: "1 LIVE / 3 TUPLES",
+          op: "SELECT lp, t_xmin, t_xmax, t_ctid FROM heap_page_items(get_raw_page('items', 0))",
+          rows: [
+            { label: "rows a client can see", value: "1", flag: "ok" },
+            { label: "tuples on the page", value: "3", flag: "bad" },
+            { label: "dead", value: "2  (" + sdpostgresinternal_pct(2, 3) + " of the page's " +
+              "tuples)", flag: "bad" },
+            { label: "index entries for 1 visible row", value: "3", flag: "bad" }
+          ],
+          caption: "<b>Two statements, and the page holds three tuples for one visible row — " +
+            "plus three index entries pointing at them.</b> Visibility is the rule that a tuple " +
+            "counts when its <code>xmin</code> is committed and in your snapshot and its " +
+            "<code>xmax</code> is 0 or invisible to you. Nothing here has been cleaned up, " +
+            "because nothing cleans up until <code>VACUUM</code> runs — the third tab."
+        },
+        {
+          view: "heap", heap: afterDelete, idx: idx3b,
+          st: sdpostgresinternal_st(1, 2, 1, 3, 5), flag: "bad",
+          title: "verdict", status: "MVCC'S BILL",
+          op: "-- what this cost",
+          rows: [
+            { label: "heap writes", value: "5 for 2 logical rows", flag: "warn" },
+            { label: "index writes", value: "3", flag: "warn" },
+            { label: "the same 2 statements, " + sdpostgresinternal_SIXIDX + " indexes",
+              value: sdpostgresinternal_plural(1 + sdpostgresinternal_SIXIDX, "write") +
+              " per update", flag: "bad" },
+            { label: "the index cannot tell you", value: "whether a ctid is visible", flag: "bad" }
+          ],
+          caption: "<b>Readers never block writers because the old version is still there — " +
+            "that is MVCC, and this page is the invoice.</b> One more consequence to hold on to: " +
+            "the index knows a ctid existed, never whether it is visible, so Postgres must still " +
+            "visit the heap to read <code>xmin</code>/<code>xmax</code>. An <i>index-only scan</i> " +
+            "is possible only where the <b>visibility map</b> marks a page all-visible — which is " +
+            "set by vacuum. The next tab is the version of this run that skips the index writes " +
+            "entirely."
+        }
+      ]
+    };
+  }
+
+  // --- tab 2 · the HOT update -------------------------------------------
+  function sdpostgresinternal_hot() {
+    var L1 = sdpostgresinternal_lp;
+    var start = [
+      L1(1, 745, 0, "(0,1)", "id 1 — live; plain_col not indexed", "ok"),
+      L1(2, 745, 0, "(0,2)", "id 2 — live", "ok")
+    ];
+    var hotDone = [
+      L1(1, 745, 746, "(0,9)", "DEAD — chains forward, inside this page", "warn"),
+      L1(2, 745, 746, "(0,10)", "DEAD — chains forward, inside this page", "warn"),
+      L1(9, 746, 0, "(0,9)", "id 1, new version — HEAP ONLY", "ok"),
+      L1(10, 746, 0, "(0,10)", "id 2, new version — HEAP ONLY", "ok")
+    ];
+    var idxDone = [
+      L1(1, 745, 746, "(0,9)", "dead", "warn"),
+      L1(9, 746, 747, "(0,17)", "DEAD — indexed_col changed, so not HOT", "bad"),
+      L1(17, 747, 0, "(0,17)", "id 1, third version — and the index knows", "bad")
+    ];
+
+    // writes per statement, computed: HOT is one heap write and nothing else
+    var hotW = sdpostgresinternal_HOTROWS;
+    var coldW = sdpostgresinternal_HOTROWS * 2;                       // 1 index
+    var coldW6 = sdpostgresinternal_HOTROWS * (1 + sdpostgresinternal_SIXIDX);
+
+    return {
+      id: "hot", label: "The same update, HOT",
+      phases: ["fillfactor 80", "two conditions", "UPDATE plain_col", "it fits",
+        "0 index writes", "UPDATE indexed_col", "a packed page", "the cost", "verdict"],
+      steps: [
+        {
+          view: "heap", heap: start, idx: [],
+          st: sdpostgresinternal_st(2, 0, 1, 0, 2),
+          title: "hot_demo", status: "FILLFACTOR " + sdpostgresinternal_FILL,
+          op: "ALTER TABLE hot_demo SET (fillfactor = " + sdpostgresinternal_FILL + ")",
+          rows: [
+            { label: "page", value: sdpostgresinternal_num(sdpostgresinternal_BLOCK) + " B" },
+            { label: "filled on insert", value: sdpostgresinternal_FILL + "%", flag: "ok" },
+            { label: "left free for new versions",
+              value: sdpostgresinternal_num(sdpostgresinternal_FREE80) + " B", flag: "ok" },
+            { label: "versions that fits, at " +
+              Math.round(sdpostgresinternal_TUPB) + " B each",
+              value: String(sdpostgresinternal_ROOM80), flag: "ok" }
+          ],
+          caption: "Same machinery, one knob moved. <b><code>fillfactor</code> is the tuning " +
+            "knob nobody uses</b>: the default is 100, so pages are packed full and an update " +
+            "has nowhere on the page to put the new version. At <b>" + sdpostgresinternal_FILL +
+            "</b> the insert leaves <b>" + sdpostgresinternal_num(sdpostgresinternal_FREE80) +
+            " B</b> free per page — room for about <b>" + sdpostgresinternal_ROOM80 +
+            "</b> more versions, at the ~" + Math.round(sdpostgresinternal_TUPB) +
+            " B per version the third tab's experiment implies."
+        },
+        {
+          view: "heap", heap: start, idx: [],
+          st: sdpostgresinternal_st(2, 0, 1, 0, 2), flag: "ok",
+          title: "the two conditions", status: "BOTH REQUIRED",
+          op: "-- Heap-Only Tuple",
+          rows: [
+            { label: "1 · no indexed column changed", value: "to be tested" },
+            { label: "2 · the new version fits on the page", value: "to be tested" },
+            { label: "if both hold", value: "zero index writes", flag: "ok" },
+            { label: "if either fails", value: "1 write per index", flag: "bad" }
+          ],
+          caption: "<b>Heap-Only Tuple.</b> Two conditions, both required: the updated columns " +
+            "are in <b>no index</b>, and the new version <b>fits on the same page</b>. When they " +
+            "hold, Postgres skips the index writes entirely and chains the versions with the old " +
+            "tuple's forward pointer alone — the index entry still finds the current row by " +
+            "following it. Watch the index counter stay at zero."
+        },
+        {
+          view: "heap", heap: start, idx: [],
+          st: sdpostgresinternal_st(2, 0, 1, 0, 2), flag: "ok",
+          title: "condition 1", status: "PASSES",
+          op: "UPDATE hot_demo SET plain_col = plain_col + 1 WHERE id <= " +
+            sdpostgresinternal_HOTROWS,
+          rows: [
+            { label: "column updated", value: "plain_col" },
+            { label: "indexes containing it", value: "0", flag: "ok" },
+            { label: "rows matched", value: String(sdpostgresinternal_HOTROWS) },
+            { label: "xid", value: "746" }
+          ],
+          caption: "<b>The statement updates <code>plain_col</code>, which is in no index.</b> " +
+            "Condition 1 passes. Note that this has nothing to do with how many indexes the " +
+            "table has — only whether the <i>changed columns</i> appear in any of them. A table " +
+            "with " + sdpostgresinternal_SIXIDX + " indexes can still do HOT updates all day, " +
+            "as long as it never updates the " + sdpostgresinternal_SIXIDX + " indexed columns."
+        },
+        {
+          view: "heap", heap: hotDone, idx: [],
+          st: sdpostgresinternal_st(sdpostgresinternal_HOTROWS, sdpostgresinternal_HOTROWS,
+            1, 0, sdpostgresinternal_HOTROWS * 2), flag: "ok",
+          title: "condition 2", status: "PASSES",
+          op: "-- does the new version fit on the page?",
+          rows: [
+            { label: "free space on the page",
+              value: sdpostgresinternal_num(sdpostgresinternal_FREE80) + " B", flag: "ok" },
+            { label: "one new version", value: "~" + Math.round(sdpostgresinternal_TUPB) + " B" },
+            { label: "fits", value: "yes — so the tuple is heap-only", flag: "ok" },
+            { label: "old tuple", value: "marked dead, points forward within the page" }
+          ],
+          caption: "<b>The new version fits in the space fillfactor left.</b> So it is written " +
+            "into the same page, the old tuple's <code>t_ctid</code> chains to it, and the line " +
+            "pointer the index already knows about becomes a redirect. Physically this is the " +
+            "same as the first tab — new tuple, old one marked, nothing modified in place. " +
+            "<b>What is different is what happens next.</b>"
+        },
+        {
+          view: "heap", heap: hotDone, idx: [],
+          st: sdpostgresinternal_st(sdpostgresinternal_HOTROWS, sdpostgresinternal_HOTROWS,
+            1, 0, sdpostgresinternal_HOTROWS * 2), flag: "ok",
+          title: "the index", status: "0 WRITES",
+          op: "SELECT n_tup_upd AS updates, n_tup_hot_upd AS hot_updates FROM pg_stat_user_tables",
+          rows: [
+            { label: "updates", value: String(sdpostgresinternal_HOTROWS) },
+            { label: "hot_updates", value: String(sdpostgresinternal_HOTROWS), flag: "ok" },
+            { label: "HOT rate", value: sdpostgresinternal_pct(sdpostgresinternal_HOTROWS,
+              sdpostgresinternal_HOTROWS), flag: "ok" },
+            { label: "index writes", value: "0", flag: "ok" }
+          ],
+          caption: "<b>Verified, and the difference is total: <code>" +
+            sdpostgresinternal_HOTROWS + " | " + sdpostgresinternal_HOTROWS + "</code> — " +
+            sdpostgresinternal_pct(sdpostgresinternal_HOTROWS, sdpostgresinternal_HOTROWS) +
+            " HOT, zero index writes.</b> The same " + sdpostgresinternal_HOTROWS +
+            " updates in the first tab's configuration would have written " +
+            sdpostgresinternal_HOTROWS + " index entries with one index, and " +
+            sdpostgresinternal_num(sdpostgresinternal_HOTROWS * sdpostgresinternal_SIXIDX) +
+            " with the page's " + sdpostgresinternal_SIXIDX + ". Bloat still accumulates in the " +
+            "heap — but it is reclaimed within the page, without touching an index."
+        },
+        {
+          view: "heap", heap: idxDone, idx: [
+            { key: "indexed_col", ctid: "(0,9)", note: "the old version", flag: "bad" },
+            { key: "indexed_col+1000", ctid: "(0,17)", note: "written by this update",
+              flag: "warn" }
+          ],
+          st: sdpostgresinternal_st(sdpostgresinternal_HOTROWS,
+            sdpostgresinternal_HOTROWS * 2, 1, sdpostgresinternal_HOTROWS,
+            sdpostgresinternal_HOTROWS * 3), flag: "bad",
+          title: "condition 1 fails", status: "NOT HOT",
+          op: "UPDATE hot_demo SET indexed_col = indexed_col + 1000 WHERE id <= " +
+            sdpostgresinternal_HOTROWS,
+          rows: [
+            { label: "updates", value: String(sdpostgresinternal_HOTROWS * 2) },
+            { label: "hot_updates", value: String(sdpostgresinternal_HOTROWS) + "  (unchanged)",
+              flag: "bad" },
+            { label: "of the new " + sdpostgresinternal_HOTROWS + ", HOT", value: "0", flag: "bad" },
+            { label: "index writes", value: String(sdpostgresinternal_HOTROWS), flag: "bad" }
+          ],
+          caption: "<b>Now update the column that <i>is</i> indexed.</b> The counters read " +
+            "<code>" + (sdpostgresinternal_HOTROWS * 2) + " | " + sdpostgresinternal_HOTROWS +
+            "</code>: " + (sdpostgresinternal_HOTROWS * 2) + " updates total, still only " +
+            sdpostgresinternal_HOTROWS + " of them HOT — <b>none of the new " +
+            sdpostgresinternal_HOTROWS + " qualified</b>. Same table, same fillfactor, same " +
+            "number of rows, same page. One column in one index is the whole difference."
+        },
+        {
+          view: "heap", heap: idxDone, idx: [
+            { key: "indexed_col", ctid: "(0,9)", note: "the old version", flag: "bad" },
+            { key: "indexed_col+1000", ctid: "(1,1)", note: "new version, on another page",
+              flag: "bad" }
+          ],
+          st: sdpostgresinternal_st(sdpostgresinternal_HOTROWS,
+            sdpostgresinternal_HOTROWS * 2, 2, sdpostgresinternal_HOTROWS,
+            sdpostgresinternal_HOTROWS * 3), flag: "bad",
+          title: "condition 2 fails", status: "ALSO NOT HOT",
+          op: "-- the default: fillfactor 100",
+          rows: [
+            { label: "fillfactor", value: "100  (the default)", flag: "bad" },
+            { label: "free space on the page", value: "0 B", flag: "bad" },
+            { label: "where the new version goes", value: "a different page", flag: "bad" },
+            { label: "index writes", value: String(sdpostgresinternal_HOTROWS), flag: "bad" }
+          ],
+          caption: "<b>The other way to lose it, and the one nobody sees coming.</b> Change " +
+            "nothing but <code>fillfactor</code> back to its default of 100: the page is packed, " +
+            "the new version does not fit, so it is written to <b>another page</b> — a different " +
+            "ctid on a different page cannot be reached by a forward pointer within this one, so " +
+            "every index must be updated. <b>An unindexed column, and still not HOT.</b> Both " +
+            "conditions, every time."
+        },
+        {
+          view: "heap", heap: idxDone, idx: [
+            { key: "indexed_col", ctid: "(0,9)", note: "the old version", flag: "bad" },
+            { key: "indexed_col+1000", ctid: "(0,17)", note: "the live version", flag: "ok" }
+          ],
+          st: sdpostgresinternal_st(sdpostgresinternal_HOTROWS,
+            sdpostgresinternal_HOTROWS * 2, 1, sdpostgresinternal_HOTROWS,
+            sdpostgresinternal_HOTROWS * 3), flag: "warn",
+          title: "the cost, side by side", status: "PER " + sdpostgresinternal_HOTROWS +
+            " UPDATES",
+          op: "-- writes, counted",
+          tableHead: ["run", "heap writes", "index writes", "total"],
+          tableRows: [
+            ["HOT (plain_col, fillfactor " + sdpostgresinternal_FILL + ")",
+              String(hotW), "0", String(hotW)],
+            ["not HOT, 1 index", String(hotW), String(hotW), String(coldW)],
+            ["not HOT, " + sdpostgresinternal_SIXIDX + " indexes", String(hotW),
+              sdpostgresinternal_num(hotW * sdpostgresinternal_SIXIDX),
+              sdpostgresinternal_num(coldW6)]
+          ],
+          rows: [
+            { label: "HOT", value: sdpostgresinternal_plural(hotW, "write"), flag: "ok" },
+            { label: "not HOT, 1 index", value: sdpostgresinternal_plural(coldW, "write"),
+              flag: "warn" },
+            { label: "not HOT, " + sdpostgresinternal_SIXIDX + " indexes",
+              value: sdpostgresinternal_plural(coldW6, "write"), flag: "bad" },
+            { label: "write amplification", value: sdpostgresinternal_x(coldW6, hotW),
+              flag: "bad" }
+          ],
+          caption: "<b>The same " + sdpostgresinternal_HOTROWS + " logical changes, priced three " +
+            "ways.</b> HOT costs " + hotW + " writes. Not HOT with the page's " +
+            sdpostgresinternal_SIXIDX + " indexes costs " + sdpostgresinternal_num(coldW6) +
+            " — <b>" + sdpostgresinternal_x(coldW6, hotW) + "</b>. That multiple is what people " +
+            "mean when they say Postgres MVCC is expensive, and it is entirely avoidable on " +
+            "update-heavy tables."
+        },
+        {
+          view: "heap", heap: hotDone, idx: [],
+          st: sdpostgresinternal_st(sdpostgresinternal_HOTROWS, sdpostgresinternal_HOTROWS,
+            1, 0, sdpostgresinternal_HOTROWS * 2), flag: "ok",
+          title: "verdict", status: "TWO LEVERS",
+          op: "-- what to actually do",
+          rows: [
+            { label: "do not index columns you update often",
+              value: "the single biggest lever", flag: "ok" },
+            { label: "lower fillfactor, e.g. " + sdpostgresinternal_FILL,
+              value: "leaves room on the page", flag: "ok" },
+            { label: "keep rows narrow", value: "more versions fit per page", flag: "ok" },
+            { label: "measure with", value: "n_tup_hot_upd / n_tup_upd" }
+          ],
+          caption: "<b>Two conditions, therefore two levers</b> — and one number that tells you " +
+            "whether they are working: <code>n_tup_hot_upd / n_tup_upd</code>. The page's table " +
+            "moved between " + sdpostgresinternal_pct(sdpostgresinternal_HOTROWS,
+              sdpostgresinternal_HOTROWS) + " and " +
+            sdpostgresinternal_pct(0, sdpostgresinternal_HOTROWS === 0 ? 1 :
+              sdpostgresinternal_HOTROWS) + " on that ratio purely by which column the statement " +
+            "touched. Heap bloat still happens either way — which is the third tab, where nobody " +
+            "cleans up for 20,000 updates."
+        }
+      ]
+    };
+  }
+
+  // --- tab 3 · bloat, vacuum, and one open transaction --------------------
+  function sdpostgresinternal_bloat() {
+    var P = sdpostgresinternal_pages;
+    var U = sdpostgresinternal_UPDATES;
+    var full = sdpostgresinternal_PAGES89;
+    var fileFull = full * sdpostgresinternal_BLOCK;
+
+    function frame(versions, pagesOverride, extra) {
+      var pg = pagesOverride === undefined ? P(versions) : pagesOverride;
+      return { versions: versions, pages: pg, bytes: pg * sdpostgresinternal_BLOCK,
+        extra: extra };
+    }
+    var f1 = frame(1);
+    var f1k = frame(1001);
+    var f10k = frame(10001);
+    var f20k = frame(U + 1);
+
+    return {
+      id: "bloat", label: "20,000 updates, one row",
+      phases: ["1 row, 1 page", "1,000 updates", "10,000", "20,000", "VACUUM",
+        "VACUUM FULL", "an old transaction", "after it commits", "verdict"],
+      steps: [
+        {
+          view: "pages", pages: f1.pages, livePage: 0,
+          st: sdpostgresinternal_st(1, 0, f1.pages, -1, 1),
+          title: "one row", status: "1 PAGE",
+          op: "INSERT INTO bloat_demo VALUES (1, 'x')",
+          rows: [
+            { label: "visible rows", value: "1" },
+            { label: "pages", value: String(f1.pages) },
+            { label: "file on disk", value: sdpostgresinternal_bytes(f1.bytes) },
+            { label: "dead tuples", value: "0", flag: "ok" }
+          ],
+          caption: "One logical row, one page, and from here nothing is deleted and no row is " +
+            "added — the table will be updated <b>" + sdpostgresinternal_num(U) + " times</b> " +
+            "and will still hold exactly one visible row at the end. Everything that grows below " +
+            "is dead versions. The page ran this against a live Postgres 16; the two endpoints " +
+            "are its measurements."
+        },
+        {
+          view: "pages", pages: f1k.pages, livePage: f1k.pages - 1,
+          st: sdpostgresinternal_st(1, 1000, f1k.pages, -1, 1001), flag: "warn",
+          title: "1,000 updates", status: sdpostgresinternal_plural(f1k.pages, "PAGE"),
+          op: "UPDATE bloat_demo SET v = v || 'x'  -- ×1,000",
+          rows: [
+            { label: "visible rows", value: "1", flag: "ok" },
+            { label: "dead tuples", value: sdpostgresinternal_num(1000), flag: "warn" },
+            { label: "pages", value: String(f1k.pages), flag: "warn" },
+            { label: "file on disk", value: sdpostgresinternal_bytes(f1k.bytes), flag: "warn" }
+          ],
+          caption: "A thousand updates in, and the file has grown to <b>" +
+            sdpostgresinternal_plural(f1k.pages, "page") + "</b>. Each update wrote a new " +
+            "version and marked the previous one dead — the mechanism from tab one, repeated. " +
+            "The page count here is computed from the two figures the page measured: " +
+            sdpostgresinternal_num(U) + " updates produced " + full + " pages, so a page holds " +
+            "about <b>" + Math.round(sdpostgresinternal_VPP) + " versions</b>."
+        },
+        {
+          view: "pages", pages: f10k.pages, livePage: f10k.pages - 1,
+          st: sdpostgresinternal_st(1, 10000, f10k.pages, -1, 10001), flag: "warn",
+          title: "10,000 updates", status: sdpostgresinternal_plural(f10k.pages, "PAGE"),
+          op: "UPDATE bloat_demo SET v = v || 'x'  -- ×10,000",
+          rows: [
+            { label: "visible rows", value: "1", flag: "ok" },
+            { label: "dead tuples", value: sdpostgresinternal_num(10000), flag: "bad" },
+            { label: "pages", value: String(f10k.pages), flag: "bad" },
+            { label: "a sequential scan now reads",
+              value: sdpostgresinternal_bytes(f10k.bytes) + " to return 1 row", flag: "bad" }
+          ],
+          caption: "Ten thousand in. <b>" + sdpostgresinternal_plural(f10k.pages, "page") +
+            "</b>, one visible row. This is the answer to <i>why did the table get slower when " +
+            "the row count did not change</i>: a sequential scan reads every page and checks " +
+            "<code>xmin</code>/<code>xmax</code> on every tuple, so the work grows with the " +
+            "<b>dead</b> tuples, not the live ones. It is also why <code>count(*)</code> is slow."
+        },
+        {
+          view: "pages", pages: f20k.pages, livePage: f20k.pages - 1,
+          st: sdpostgresinternal_st(1, U, f20k.pages, -1, U + 1), flag: "bad",
+          title: sdpostgresinternal_num(U) + " updates", status: full + " PAGES",
+          op: "-- pages after 20k updates",
+          rows: [
+            { label: "visible rows", value: "1", flag: "ok" },
+            { label: "dead tuples", value: sdpostgresinternal_num(U), flag: "bad" },
+            { label: "pages", value: String(full) + "  (measured)", flag: "bad" },
+            { label: "file on disk", value: sdpostgresinternal_bytes(fileFull) + " for ~" +
+              Math.round(sdpostgresinternal_TUPB) + " B of data", flag: "bad" }
+          ],
+          caption: "<b>" + full + " pages — the page's measured number — still one visible " +
+            "row.</b> That is <b>" + sdpostgresinternal_bytes(fileFull) + " of file</b> holding " +
+            "about " + Math.round(sdpostgresinternal_TUPB) + " bytes of live data, an " +
+            "amplification of <b>" + sdpostgresinternal_x(full, 1) + "</b>. Nothing here is a " +
+            "leak or a bug: every one of those " + sdpostgresinternal_num(U) + " versions was " +
+            "correct and necessary at the moment it was written, and some transaction might " +
+            "still have needed it."
+        },
+        {
+          view: "pages", pages: full, livePage: full - 1, reusable: true,
+          st: sdpostgresinternal_st(1, 0, full, -1, U + 1), flag: "warn",
+          title: "VACUUM", status: full + " PAGES",
+          op: "VACUUM bloat_demo",
+          rows: [
+            { label: "dead tuples removed", value: sdpostgresinternal_num(U), flag: "ok" },
+            { label: "pages after", value: String(full) + "  — unchanged", flag: "warn" },
+            { label: "space returned to the OS", value: "none", flag: "warn" },
+            { label: "lock", value: "none — non-blocking", flag: "ok" }
+          ],
+          caption: "<b><code>VACUUM</code> does not shrink the file, and that is usually " +
+            "correct.</b> It marks the dead space <b>reusable within the table</b> and updates " +
+            "the free space map and the visibility map — so future inserts land in these pages " +
+            "and index-only scans start working again. Still <b>" + full + " pages</b>, and it " +
+            "took no lock: a steady-state table stabilises here rather than growing forever."
+        },
+        {
+          view: "pages", pages: 1, livePage: 0,
+          st: sdpostgresinternal_st(1, 0, 1, -1, U + 1), flag: "bad",
+          title: "VACUUM FULL", status: "1 PAGE",
+          op: "VACUUM FULL bloat_demo",
+          rows: [
+            { label: "pages after", value: "1", flag: "ok" },
+            { label: "space returned to the OS",
+              value: sdpostgresinternal_bytes(fileFull - sdpostgresinternal_BLOCK), flag: "ok" },
+            { label: "how", value: "the whole table is rewritten", flag: "warn" },
+            { label: "lock", value: "ACCESS EXCLUSIVE — blocks everything", flag: "bad" }
+          ],
+          caption: "<b><code>VACUUM FULL</code> rewrites the table compactly and gives " +
+            sdpostgresinternal_bytes(fileFull - sdpostgresinternal_BLOCK) +
+            " back to the operating system — " + full + " pages down to 1.</b> The price is an " +
+            "<b><code>ACCESS EXCLUSIVE</code> lock</b>: every reader and every writer waits for " +
+            "the whole rewrite. This is the pair of facts behind <i>“VACUUM FULL fixed it and " +
+            "caused an outage”</i>. Not a thing you run on a live table."
+        },
+        {
+          view: "pages", pages: sdpostgresinternal_pages(sdpostgresinternal_DEADLONG + 1),
+          livePage: sdpostgresinternal_pages(sdpostgresinternal_DEADLONG + 1) - 1,
+          st: sdpostgresinternal_st(1, sdpostgresinternal_DEADLONG,
+            sdpostgresinternal_pages(sdpostgresinternal_DEADLONG + 1), -1,
+            sdpostgresinternal_DEADLONG + 1), flag: "bad",
+          title: "the same VACUUM, one thing different", status: "0 REMOVED",
+          op: "-- session 2: BEGIN;  -- and then nothing",
+          rows: [
+            { label: "updates", value: sdpostgresinternal_num(sdpostgresinternal_DEADLONG) },
+            { label: "dead tuples before VACUUM",
+              value: sdpostgresinternal_num(sdpostgresinternal_DEADLONG), flag: "bad" },
+            { label: "dead tuples after VACUUM",
+              value: sdpostgresinternal_num(sdpostgresinternal_DEADLONG), flag: "bad" },
+            { label: "removed", value: "0 of " +
+              sdpostgresinternal_num(sdpostgresinternal_DEADLONG), flag: "bad" }
+          ],
+          caption: "Fresh table, <b>" + sdpostgresinternal_num(sdpostgresinternal_DEADLONG) +
+            " updates</b>, the same <code>VACUUM</code> command — and it removes <b>nothing</b>. " +
+            "The only difference is that somewhere else, an <i>unrelated</i> transaction did " +
+            "<code>BEGIN</code> and has not finished. <b>Vacuum can only remove a tuple no " +
+            "running transaction could still need</b>, and one open transaction holds that " +
+            "horizon back for the entire database."
+        },
+        {
+          view: "pages", pages: sdpostgresinternal_pages(sdpostgresinternal_DEADLONG + 1),
+          livePage: sdpostgresinternal_pages(sdpostgresinternal_DEADLONG + 1) - 1,
+          reusable: true,
+          st: sdpostgresinternal_st(1, 0,
+            sdpostgresinternal_pages(sdpostgresinternal_DEADLONG + 1), -1,
+            sdpostgresinternal_DEADLONG + 1), flag: "ok",
+          title: "it commits", status: "ALL REMOVED",
+          op: "-- session 2: COMMIT;   then VACUUM again",
+          rows: [
+            { label: "dead tuples before", value:
+              sdpostgresinternal_num(sdpostgresinternal_DEADLONG), flag: "bad" },
+            { label: "dead tuples after", value: "0", flag: "ok" },
+            { label: "the VACUUM command", value: "identical" },
+            { label: "the table", value: "identical" }
+          ],
+          caption: "<b>The transaction commits, the same <code>VACUUM</code> runs, and all " +
+            sdpostgresinternal_num(sdpostgresinternal_DEADLONG) +
+            " dead tuples go.</b> Same table, same updates, same command — <b>" +
+            sdpostgresinternal_num(sdpostgresinternal_DEADLONG) + " → 0</b>. The variable was " +
+            "never the table and never the vacuum settings. It was a session somewhere else " +
+            "holding a snapshot."
+        },
+        {
+          view: "pages", pages: 1, livePage: 0,
+          st: sdpostgresinternal_st(1, 0, 1, -1, U + 1), flag: "warn",
+          title: "verdict", status: "WHAT TO WATCH",
+          op: "SELECT * FROM pg_stat_activity WHERE state = 'idle in transaction'",
+          rows: [
+            { label: "the usual culprit", value: "idle in transaction", flag: "bad" },
+            { label: "also", value: "a forgotten BEGIN in a REPL", flag: "bad" },
+            { label: "also", value: "a replica with hot_standby_feedback", flag: "bad" },
+            { label: "the metric that predicts bloat",
+              value: "long-running sessions in pg_stat_activity", flag: "ok" }
+          ],
+          caption: "<b>This is the most common cause of production Postgres bloat, and it is " +
+            "rarely the obvious culprit</b> — an idle-in-transaction connection, a forgotten " +
+            "<code>BEGIN</code>, a stuck analytics query, a replica with " +
+            "<code>hot_standby_feedback</code> on. A <i>read-only</i> reporting query is enough, " +
+            "because it pins the horizon just as firmly as a writer. Alert on " +
+            "<code>pg_stat_activity</code>. And the long-run version of never vacuuming is worse " +
+            "than disk: xids are 32-bit, so vacuum must also <b>freeze</b> old tuples before " +
+            "they wrap at ~4 billion, or Postgres shuts itself down to protect the data."
+        }
+      ]
+    };
+  }
+
+  S["sdpostgresinternal"] = {
+    title: "Watch one heap page while the page's psql session runs",
+    note: "Every figure here is the page's, executed against its live PostgreSQL 16: " +
+      "<b>block_size 8192</b>, tuples at <code>(0,1)</code> and <code>(0,2)</code> with " +
+      "<b>xmin 731</b>, an update writing <code>(0,3)</code> with <b>xmin 732</b> and setting " +
+      "the old tuple's <b>t_xmax 732</b> and <b>t_ctid (0,3)</b>, a delete writing <b>xmax " +
+      "745</b>, HOT counters of <b>50 | 50</b> then <b>100 | 50</b>, and the bloat run of " +
+      "<b>1 page → 20,000 updates → 89 pages → VACUUM 89 → VACUUM FULL 1</b> with <b>5,000 → " +
+      "0</b> dead tuples across one open transaction. Derived on screen rather than typed: a " +
+      "page held <b>(20,000 + 1) / 89 ≈ 225 versions</b>, so a version is about <b>36 B</b>, so " +
+      "<code>fillfactor 80</code> leaves room for about <b>44</b> of them — and the " +
+      "intermediate page counts are that same ratio, which reproduces both measured endpoints. " +
+      "Three runs of one mechanism: the update that writes to every index, the update that " +
+      "writes to none, and the one nobody cleans up after.",
+    interval: 1600,
+
+    scenarios: [
+      sdpostgresinternal_plain(),
+      sdpostgresinternal_hot(),
+      sdpostgresinternal_bloat()
+    ],
+
+    draw: function (step, d, ctx) {
+      var st = step.st, i;
+
+      var head = d.cols([
+        d.big(sdpostgresinternal_num(st.dead), "dead tuples",
+          st.dead === 0 ? "ok" : st.dead > 1000 ? "bad" : "warn"),
+        d.stat({
+          label: "rows a client sees",
+          value: sdpostgresinternal_num(st.live),
+          sub: st.dead > 0 ? "out of " + sdpostgresinternal_num(st.live + st.dead) +
+            " tuples on disk" : "nothing dead yet",
+          flag: st.dead > st.live ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "heap file",
+          value: sdpostgresinternal_plural(st.pages, "page"),
+          sub: sdpostgresinternal_bytes(st.pages * sdpostgresinternal_BLOCK),
+          flag: st.pages > 1 ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "index entries written",
+          value: st.idx < 0 ? "—" : sdpostgresinternal_num(st.idx),
+          sub: st.idx < 0 ? "not part of this run"
+            : st.idx === 0 ? "zero — every update was HOT" : "one per version, per index",
+          flag: st.idx < 0 ? "idle" : st.idx === 0 ? "ok" : "bad"
+        })
+      ]);
+
+      var body = [sdpostgresinternal_chips(d, ctx), head];
+
+      body.push(d.node({
+        title: step.title,
+        status: step.status,
+        statusFlag: step.flag || "idle",
+        badge: "page 0",
+        meta: step.op,
+        flag: step.flag || "idle",
+        rows: step.rows
+      }));
+
+      if (step.view === "heap") {
+        var hrows = [];
+        for (i = 0; i < (step.heap || []).length; i++) {
+          hrows.push([
+            String(step.heap[i].lp), String(step.heap[i].xmin),
+            String(step.heap[i].xmax), step.heap[i].tctid, step.heap[i].what
+          ]);
+        }
+        if (!hrows.length) hrows.push(["—", "—", "—", "—", "no tuples on the page yet"]);
+        body.push(d.table(["lp", "t_xmin", "t_xmax", "t_ctid", "what it is"], hrows));
+
+        var irows = [];
+        for (i = 0; i < (step.idx || []).length; i++) {
+          irows.push([step.idx[i].key, step.idx[i].ctid, step.idx[i].note]);
+        }
+        if (!irows.length) {
+          irows.push(["—", "—", step.st.idx === 0 && ctx.i > 0
+            ? "no index entry was written by this statement"
+            : "nothing indexed yet"]);
+        }
+        body.push(d.table(["index key", "→ ctid", "state of that entry"], irows));
+      } else {
+        var cells = [], n = step.pages;
+        for (i = 0; i < n; i++) {
+          cells.push({
+            label: "",
+            flag: i === step.livePage ? "ok" : (step.reusable ? "warn" : "bad"),
+            title: i === step.livePage
+              ? "page " + i + " — holds the one visible row version"
+              : (step.reusable
+                  ? "page " + i + " — dead space, now reusable by future inserts"
+                  : "page " + i + " — dead versions, not reclaimable yet")
+          });
+        }
+        body.push(d.cells(cells, {
+          label: sdpostgresinternal_plural(n, "page") + " × " +
+            sdpostgresinternal_num(sdpostgresinternal_BLOCK) + " B = " +
+            sdpostgresinternal_bytes(n * sdpostgresinternal_BLOCK) +
+            "  ·  green holds the visible row",
+          dense: true
+        }));
+      }
+
+      if (step.tableHead) body.push(d.table(step.tableHead, step.tableRows));
+
+      body.push(d.note(
+        st.idx > 0
+          ? "Every index entry on this screen exists because a <i>physical address</i> changed — " +
+            "not because any indexed value did."
+          : "A tuple is a row version. Nothing on this page is ever modified in place; versions " +
+            "are added and marked."
+      ));
+
+      return d.stack(body);
+    }
+  };
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sdquestionbank  (question-bank.md)
+  // The page's claim is that the bank is not 52 questions but eight shapes,
+  // and that recognising the shape is most of the work. This runs a practice
+  // plan forward and watches SHAPE COVERAGE fill — the same machinery three
+  // times, ending in three different places:
+  //   1 eight designs picked by interest — one shape;
+  //   2 the page's fifteen in its order   — eight shapes, and the exact
+  //     design at which each arrives;
+  //   3 the same fifteen READ instead of rehearsed — the coverage counter
+  //     reads identically, and §5's five conditions all read zero.
+  //
+  // CONFIG — the page's own tables, transcribed once and then counted:
+  //   §1  eight shapes, with what each really tests
+  //   §2  the prompts, by shape:
+  //         read-heavy 8 · fan-out 6 · connection 5 · strong consistency 7 ·
+  //         large media 5 · crawl/ingest 5 · search/ranking 5 · geospatial 5
+  //         · infrastructure 6
+  //       The sim sums these rather than quoting a total.
+  //   §3  the fifteen designs, in the page's order, each with its "Adds"
+  //   §4  the four-week schedule: mocks on day 21 and day 27, one design per
+  //       day on days 22-25, 28 days in all
+  //   §5  five rehearsal conditions and six things to mark afterwards
+  //   §6  five rungs of the self-judgement ladder
+  //
+  // NOTE FOR THE PAGE, not shown on screen: the front matter says "sixty
+  // prompts" and §2's tables list 52; the sim counts the tables. §3's text
+  // says "the bolded six" and the table bolds five rows (#3, #4, #5, #9,
+  // #12); the sim counts the bold rows and reports what they cover.
+  //
+  // Everything numeric below — coverage counts, the share of the bank a run
+  // has practised the shape of, the design at which each shape first
+  // arrives, the marginal new-shapes-per-design curve — is computed from
+  // those tables at load time.
+  // ======================================================================
+
+  // §1 + §2: the shapes, what they test, and how many prompts each holds
+  var sdquestionbank_SHAPES = [
+    { k: "read", label: "read-heavy key lookup", tests: "caching, CDN, sharding by key",
+      prompts: 8 },
+    { k: "fan", label: "fan-out", tests: "push vs pull, hot keys, amplification",
+      prompts: 6 },
+    { k: "conn", label: "connection-oriented", tests: "stateful gateways, routing, presence",
+      prompts: 5 },
+    { k: "strong", label: "strong consistency", tests: "locking, transactions, reservations",
+      prompts: 7 },
+    { k: "media", label: "large media", tests: "object storage, CDN, pipelines, cost",
+      prompts: 5 },
+    { k: "crawl", label: "crawl / ingest", tests: "queues, politeness, dedup, scheduling",
+      prompts: 5 },
+    { k: "search", label: "search / ranking", tests: "inverted indexes, two-stage retrieval",
+      prompts: 5 },
+    { k: "geo", label: "geospatial", tests: "spatial indexing, proximity, matching",
+      prompts: 5 }
+  ];
+  // §2 also lists an infrastructure group, which §1's eight shapes do not include
+  var sdquestionbank_INFRA = { k: "infra", label: "infrastructure", prompts: 6 };
+
+  var sdquestionbank_NSHAPES = sdquestionbank_SHAPES.length;
+
+  function sdquestionbank_bank() {
+    var t = sdquestionbank_INFRA.prompts, i;
+    for (i = 0; i < sdquestionbank_SHAPES.length; i++) t += sdquestionbank_SHAPES[i].prompts;
+    return t;
+  }
+  var sdquestionbank_BANK = sdquestionbank_bank();   // 52, counted
+
+  // §3: the fifteen, in the page's order. bold = the rows the table bolds.
+  function sdquestionbank_d(n, name, shape, adds, bold) {
+    return { n: n, name: name, shape: shape, adds: adds, bold: !!bold };
+  }
+  var sdquestionbank_FIFTEEN = [
+    sdquestionbank_d(1, "URL shortener", "read", "framework, ID generation, cache-first"),
+    sdquestionbank_d(2, "Rate limiter", "read", "algorithms, distributed counting"),
+    sdquestionbank_d(3, "News feed", "fan", "fan-out, hot keys, the canonical question", true),
+    sdquestionbank_d(4, "Chat", "conn", "stateful connections, ordering", true),
+    sdquestionbank_d(5, "Ticketing", "strong", "strong consistency, locking", true),
+    sdquestionbank_d(6, "Photo sharing", "media", "object storage, CDN, presigned upload"),
+    sdquestionbank_d(7, "Web crawler", "crawl", "queues, politeness, dedup structures"),
+    sdquestionbank_d(8, "Typeahead", "search", "latency budget, precomputation"),
+    sdquestionbank_d(9, "Video platform", "media", "pipelines, bandwidth economics", true),
+    sdquestionbank_d(10, "File sync", "media", "chunking, conflict resolution"),
+    sdquestionbank_d(11, "Notifications", "fan", "third parties, bulkheads, tiers"),
+    sdquestionbank_d(12, "Payment system", "strong", "idempotency, ledgers, reconciliation", true),
+    sdquestionbank_d(13, "Uber", "geo", "geospatial indexing, matching"),
+    sdquestionbank_d(14, "Metrics system", "crawl", "time-series, downsampling, cardinality"),
+    sdquestionbank_d(15, "Job scheduler", "infra", "leader election, exactly-once execution")
+  ];
+
+  // §2's read-heavy table, which is what tab one works through
+  var sdquestionbank_READROW = [
+    sdquestionbank_d(1, "URL shortener", "read", "unique ID generation; is it enumerable?"),
+    sdquestionbank_d(2, "Pastebin", "read", "same, plus expiry and large text bodies"),
+    sdquestionbank_d(3, "Key-value store", "read", "consistent hashing, replication, quorums"),
+    sdquestionbank_d(4, "Distributed cache", "read", "eviction, hot keys, consistent hashing"),
+    sdquestionbank_d(5, "API rate limiter", "read", "algorithm choice, distributed counting, fail-open"),
+    sdquestionbank_d(6, "Unique ID generator", "read", "Snowflake; clock skew; coordination-free"),
+    sdquestionbank_d(7, "Leaderboard / top-k", "read", "sorted sets, approximate counting, heavy hitters"),
+    sdquestionbank_d(8, "Counting service", "read", "hot-row contention, sharded counters, sampling")
+  ];
+
+  // §5: the five conditions a rehearsal has to meet, and the six marks after
+  var sdquestionbank_CONDS = [
+    "45-minute timer, unpaused", "standing at a canvas, not an editor",
+    "spoken aloud, recorded", "nothing looked up mid-design", "listened back and marked"
+  ];
+  var sdquestionbank_MARKS = [
+    "did you scope before designing?",
+    "did an estimate change a decision?",
+    "can you trace each choice to a requirement?",
+    "did you go three levels deep anywhere?",
+    "did you volunteer a weakness?",
+    "how much dead silence?"
+  ];
+  // §6, the ladder, in the page's order
+  var sdquestionbank_LADDER = [
+    ["cannot start without the framework in front of you", "keep drilling the framework"],
+    ["can produce a design but not defend the choices", "practise “why not the alternative?”"],
+    ["can defend choices but run out of time", "timebox scoping; be drawing by minute 13"],
+    ["reach the deep dive with time left", "READY — now add depth on one component"],
+    ["volunteer weaknesses unprompted", "interviewing above the bar"]
+  ];
+
+  function sdquestionbank_shape(k) {
+    var i;
+    for (i = 0; i < sdquestionbank_SHAPES.length; i++) {
+      if (sdquestionbank_SHAPES[i].k === k) return sdquestionbank_SHAPES[i];
+    }
+    return sdquestionbank_INFRA;
+  }
+
+  /** Coverage after a list of completed designs: shapes hit, prompts reachable. */
+  function sdquestionbank_cover(done) {
+    var seen = {}, order = [], i, k, prompts = 0, hasInfra = false;
+    for (i = 0; i < done.length; i++) {
+      k = done[i].shape;
+      if (!seen[k]) {
+        seen[k] = done[i].n;
+        if (k === "infra") hasInfra = true; else order.push(k);
+      }
+    }
+    for (i = 0; i < sdquestionbank_SHAPES.length; i++) {
+      if (seen[sdquestionbank_SHAPES[i].k]) prompts += sdquestionbank_SHAPES[i].prompts;
+    }
+    if (hasInfra) prompts += sdquestionbank_INFRA.prompts;
+    return { seen: seen, shapes: order.length, prompts: prompts, infra: hasInfra };
+  }
+
+  function sdquestionbank_pct(a, b) {
+    return b > 0 ? Math.round((a / b) * 100) + "%" : "0%";
+  }
+  function sdquestionbank_plural(n, w) {
+    return n + " " + w + (Math.abs(n) === 1 ? "" : "s");
+  }
+
+  /** The first n of a list. */
+  function sdquestionbank_take(list, n) {
+    var out = [], i;
+    for (i = 0; i < list.length && i < n; i++) out.push(list[i]);
+    return out;
+  }
+
+  function sdquestionbank_chips(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+    return d.pills(chips);
+  }
+
+  // where each shape first arrives in the page's ordering, computed
+  var sdquestionbank_ARRIVE = (function () {
+    var c = sdquestionbank_cover(sdquestionbank_FIFTEEN), out = [], i, k;
+    for (i = 0; i < sdquestionbank_SHAPES.length; i++) {
+      k = sdquestionbank_SHAPES[i].k;
+      out.push({ label: sdquestionbank_SHAPES[i].label, at: c.seen[k] || 0 });
+    }
+    return out;
+  })();
+
+  // what the bolded rows of §3 cover, counted rather than asserted
+  var sdquestionbank_BOLD = (function () {
+    var b = [], i;
+    for (i = 0; i < sdquestionbank_FIFTEEN.length; i++) {
+      if (sdquestionbank_FIFTEEN[i].bold) b.push(sdquestionbank_FIFTEEN[i]);
+    }
+    return { list: b, cover: sdquestionbank_cover(b) };
+  })();
+
+  // the design at which coverage reaches 7 of 8, and 8 of 8
+  var sdquestionbank_MILE = (function () {
+    var i, c, seven = 0, eight = 0;
+    for (i = 1; i <= sdquestionbank_FIFTEEN.length; i++) {
+      c = sdquestionbank_cover(sdquestionbank_take(sdquestionbank_FIFTEEN, i));
+      if (!seven && c.shapes >= sdquestionbank_NSHAPES - 1) seven = i;
+      if (!eight && c.shapes >= sdquestionbank_NSHAPES) eight = i;
+    }
+    return { seven: seven, eight: eight };
+  })();
+
+  function sdquestionbank_step(o) { return o; }
+
+  // --- tab 1 · eight designs, one shape ----------------------------------
+  function sdquestionbank_narrow() {
+    var L = sdquestionbank_READROW;
+    function f(k, caption, flag, extra) {
+      var done = sdquestionbank_take(L, k);
+      var s = sdquestionbank_step({
+        done: done, blank: true, conds: 5, caption: caption, flag: flag,
+        title: k === 0 ? "a plan" : done[k - 1].name,
+        status: k === 0 ? "0 DESIGNS" : sdquestionbank_plural(k, "design"),
+        op: k === 0 ? "pick the prompts that look interesting"
+          : "really asking: " + done[k - 1].adds
+      });
+      if (extra) { s.tableHead = extra.head; s.tableRows = extra.rows; }
+      return s;
+    }
+
+    var c8 = sdquestionbank_cover(L);
+
+    return {
+      id: "narrow", label: "Eight designs, one shape",
+      phases: ["a plan", "#1", "#2-3", "#4-5", "#6-7", "#8", "the prompt arrives",
+        "the bank", "verdict"],
+      steps: [
+        f(0, "Four weeks, and the plan is the one most people actually follow: <b>do the " +
+          "prompts that look interesting</b>. These eight all come from one table in §2, and " +
+          "every one of them is a real interview question. The rehearsal is honest too — timer, " +
+          "standing, recorded, no lookups. Watch the <b>eight shapes</b> below, not the design " +
+          "count."),
+        f(1, "<b>#1 · URL shortener.</b> Unique ID generation, and whether the ids are " +
+          "enumerable. One design done, and the first shape lights up: <b>read-heavy key " +
+          "lookup</b> — caching, CDN, sharding by key. Genuine progress.", "ok"),
+        f(3, "<b>#2 Pastebin, #3 key-value store.</b> Expiry and large bodies; then consistent " +
+          "hashing, replication and quorums. Three designs, all real work — and the shape " +
+          "counter has not moved, because all three are the same shape. <b>The domain changed; " +
+          "the derivation did not.</b>", "warn"),
+        f(5, "<b>#4 distributed cache, #5 API rate limiter.</b> Eviction and hot keys; algorithm " +
+          "choice, distributed counting, fail-open. Five designs. Still <b>" +
+          sdquestionbank_cover(sdquestionbank_take(L, 5)).shapes + " of " +
+          sdquestionbank_NSHAPES + "</b> shapes.", "warn"),
+        f(7, "<b>#6 unique ID generator, #7 leaderboard.</b> Snowflake and clock skew; sorted " +
+          "sets and heavy hitters. Seven designs in, and this run is genuinely good at one " +
+          "thing: hand it any key-lookup prompt and it will fly.", "warn"),
+        f(8, "<b>#8 counting service.</b> Hot-row contention, sharded counters, sampling. " +
+          "<b>Eight designs, rehearsed properly, " + sdquestionbank_plural(c8.shapes, "shape") +
+          ".</b> That is the whole outcome of four weeks: " +
+          sdquestionbank_pct(c8.shapes, sdquestionbank_NSHAPES) + " of the shape space.", "bad"),
+        (function () {
+          var s = f(8, "<b>The round begins and the prompt is “design food delivery”.</b> " +
+            "Geospatial — spatial index, radius query, and a multi-party state machine on top. " +
+            "Nothing this run practised transfers, because what transfers is the shape, not the " +
+            "domain. The page's advice is to classify first: <i>“this is essentially a " +
+            "geospatial matching problem”</i> orients you — but only if you have derived one " +
+            "before.", "bad");
+          s.title = "the interview";
+          s.status = "UNPRACTISED SHAPE";
+          s.op = "prompt: food delivery  ·  shape: geospatial";
+          s.probe = "geo";
+          return s;
+        })(),
+        (function () {
+          var s = f(8, "<b>Priced against the whole bank: " + c8.prompts + " of the " +
+            sdquestionbank_BANK + " prompts in §2 are shapes this run has derived — <b>" +
+            sdquestionbank_pct(c8.prompts, sdquestionbank_BANK) + "</b>.</b> The other " +
+            (sdquestionbank_BANK - c8.prompts) + " are prompts where the first fifteen minutes " +
+            "would be invented on the spot. Eight designs of effort bought one eighth of the " +
+            "coverage, and nothing about the effort was wrong.", "bad");
+          s.title = "coverage of the bank";
+          s.status = sdquestionbank_pct(c8.prompts, sdquestionbank_BANK);
+          s.op = c8.prompts + " of " + sdquestionbank_BANK + " prompts";
+          s.tableHead = ["shape", "prompts in §2", "derived here"];
+          s.tableRows = (function () {
+            var rows = [], i, sh;
+            for (i = 0; i < sdquestionbank_SHAPES.length; i++) {
+              sh = sdquestionbank_SHAPES[i];
+              rows.push([sh.label, String(sh.prompts), c8.seen[sh.k] ? "yes" : "no"]);
+            }
+            rows.push([sdquestionbank_INFRA.label, String(sdquestionbank_INFRA.prompts), "no"]);
+            return rows;
+          })();
+          return s;
+        })(),
+        (function () {
+          var s = f(8, "<b>The lesson is about ordering, not effort.</b> This run rehearsed " +
+            "eight designs under the page's exact conditions and would beat a lazier candidate " +
+            "on any read-heavy prompt. It also left " +
+            (sdquestionbank_NSHAPES - c8.shapes) + " of the " + sdquestionbank_NSHAPES +
+            " shapes never derived once. The next tab spends the same eight designs on the " +
+            "page's ordering and see what the counter does.", "warn");
+          s.title = "verdict";
+          s.status = c8.shapes + " / " + sdquestionbank_NSHAPES;
+          s.op = "same effort, different order";
+          return s;
+        })()
+      ]
+    };
+  }
+
+  // --- tab 2 · the page's fifteen, in its order --------------------------
+  function sdquestionbank_ordered() {
+    var F = sdquestionbank_FIFTEEN;
+    function upto(n) { return sdquestionbank_take(F, n); }
+    function f(k, title, status, op, caption, flag) {
+      return sdquestionbank_step({
+        done: upto(k), blank: true, conds: 5, title: title, status: status, op: op,
+        caption: caption, flag: flag
+      });
+    }
+    var c2 = sdquestionbank_cover(upto(2));
+    var c8 = sdquestionbank_cover(upto(8));
+    var c12 = sdquestionbank_cover(upto(12));
+    var c13 = sdquestionbank_cover(upto(13));
+    var c15 = sdquestionbank_cover(upto(15));
+
+    return {
+      id: "ordered", label: "The page's fifteen, in order",
+      phases: ["the rule", "#1-2", "#3", "#4", "#5-6", "#7-8", "#9-12", "#13-15", "verdict"],
+      steps: [
+        f(0, "the ordering", "15 DESIGNS", "each adds something the previous ones did not",
+          "Same four weeks, same rehearsal conditions, and the only change is <b>which designs, " +
+          "in which order</b>. The page's fifteen are ordered by what each one <i>adds</i>. " +
+          "Watch where the eight shapes arrive — and, just as usefully, where four designs in a " +
+          "row add none."),
+        f(2, "#1-2 · URL shortener, rate limiter", sdquestionbank_plural(c2.shapes, "shape"),
+          "framework, ID generation, cache-first · algorithms, distributed counting",
+          "<b>#1 and #2 are the same shape as each other</b> — read-heavy key lookup — and " +
+          "that is deliberate: the first is where you learn the framework at all, the second is " +
+          "where you learn that a prompt can be about choosing between four algorithms. Two " +
+          "designs, <b>" + c2.shapes + " of " + sdquestionbank_NSHAPES + "</b> shapes.", "ok"),
+        f(3, "#3 · News feed", sdquestionbank_plural(sdquestionbank_cover(upto(3)).shapes,
+          "shape"), "fan-out, hot keys, the canonical question",
+          "<b>#3 is the canonical question</b>, and it is third for a reason: push versus pull " +
+          "with a celebrity hybrid is the first prompt where the <i>read:write ratio decides " +
+          "the architecture</i>. The page schedules it on day 11 and then makes you redo it " +
+          "from a blank page on day 12 — the only design it asks for twice.", "ok"),
+        f(4, "#4 · Chat", sdquestionbank_plural(sdquestionbank_cover(upto(4)).shapes, "shape"),
+          "stateful connections, ordering",
+          "<b>#4 breaks the stateless assumption.</b> Everything up to here could be served by " +
+          "identical boxes behind a load balancer; a chat connection lives on one machine, and " +
+          "that single change drags in a routing registry, presence and ordering. " +
+          sdquestionbank_cover(upto(4)).shapes + " shapes from 4 designs.", "ok"),
+        f(6, "#5-6 · Ticketing, photo sharing",
+          sdquestionbank_plural(sdquestionbank_cover(upto(6)).shapes, "shape"),
+          "optimistic locking, holds · object storage, CDN, presigned upload",
+          "<b>#5 is the one prompt where you may not be eventually consistent</b> — two people " +
+          "and one seat — and #6 is the one where the bytes never touch your servers at all. " +
+          "Six designs, <b>" + sdquestionbank_cover(upto(6)).shapes + " of " +
+          sdquestionbank_NSHAPES + "</b>.", "ok"),
+        f(8, "#7-8 · Web crawler, typeahead", c8.shapes + " / " + sdquestionbank_NSHAPES,
+          "politeness frontier, Bloom filter · trie with precomputed top-k",
+          "<b>" + sdquestionbank_MILE.seven + " designs in, and " + c8.shapes + " of the " +
+          sdquestionbank_NSHAPES + " shapes have been derived at least once</b> — " +
+          sdquestionbank_pct(c8.prompts, sdquestionbank_BANK) + " of the " +
+          sdquestionbank_BANK + " prompts in §2. Compare with the other tab: the same eight " +
+          "designs, the same hours, <b>" + sdquestionbank_cover(sdquestionbank_READROW).shapes +
+          " shape</b>.", "ok"),
+        f(12, "#9-12 · Video, file sync, notifications, payments",
+          c12.shapes + " / " + sdquestionbank_NSHAPES,
+          "pipelines and egress cost · chunking · bulkheads · idempotency and ledgers",
+          "<b>Four designs, and the shape counter does not move.</b> Still " + c12.shapes +
+          " of " + sdquestionbank_NSHAPES + ". This is not waste — each adds a mechanism the " +
+          "shape alone does not teach: bandwidth economics, delta sync, third-party bulkheads, " +
+          "idempotency keys and a double-entry ledger. It is the point where practice stops " +
+          "buying <i>coverage</i> and starts buying <b>depth</b>, and knowing which of the two " +
+          "you are short of is how you choose what to do next.", "warn"),
+        (function () {
+          var s = f(15, "#13-15 · Uber, metrics, job scheduler",
+            c15.shapes + " / " + sdquestionbank_NSHAPES,
+            "geohash or S2 · time-series and cardinality · leader election",
+            "<b>#" + sdquestionbank_MILE.eight + " completes the set</b> — geospatial is the " +
+            "last of the eight to arrive, and it waits until design " + sdquestionbank_MILE.eight +
+            ". #14 and #15 add none: metrics is crawl/ingest again, and the job scheduler is " +
+            "§2's ninth group, infrastructure, which §1's eight shapes never claimed to cover. " +
+            "All " + sdquestionbank_BANK + " prompts in §2 are now shapes this run has derived.",
+            "ok");
+          s.tableHead = ["shape", "first derived at", "prompts it unlocks"];
+          s.tableRows = (function () {
+            var rows = [], i;
+            for (i = 0; i < sdquestionbank_ARRIVE.length; i++) {
+              rows.push([sdquestionbank_ARRIVE[i].label,
+                sdquestionbank_ARRIVE[i].at ? "#" + sdquestionbank_ARRIVE[i].at : "never",
+                String(sdquestionbank_SHAPES[i].prompts)]);
+            }
+            return rows;
+          })();
+          return s;
+        })(),
+        (function () {
+          var s = f(15, "verdict", "COVERAGE CURVE", "new shapes per design",
+            "<b>" + c8.shapes + " of " + sdquestionbank_NSHAPES + " shapes by design #" +
+            sdquestionbank_MILE.seven + "; all " + sdquestionbank_NSHAPES + " by #" +
+            sdquestionbank_MILE.eight + "; the last two add none.</b> If four weeks is all you " +
+            "have, the first eight are the ones that change what you can attempt. The set §3 " +
+            "puts in bold is " + sdquestionbank_BOLD.list.length + " designs covering <b>" +
+            sdquestionbank_BOLD.cover.shapes + " of " + sdquestionbank_NSHAPES +
+            "</b> — the four heaviest shapes, and deliberately not the cheap ones: add #1 and " +
+            "#7 and #8 and you are at " +
+            (sdquestionbank_BOLD.cover.shapes + 3) + ". Coverage is not the same as readiness, " +
+            "which is what the third tab is about.", "ok");
+          s.tableHead = ["after design", "shapes", "prompts reachable", "new shapes"];
+          s.tableRows = (function () {
+            var rows = [], i, prev = 0, c;
+            for (i = 1; i <= F.length; i++) {
+              c = sdquestionbank_cover(upto(i));
+              rows.push(["#" + i + " " + F[i - 1].name,
+                c.shapes + " / " + sdquestionbank_NSHAPES,
+                c.prompts + " of " + sdquestionbank_BANK,
+                c.shapes > prev ? "+1" : "—"]);
+              prev = c.shapes;
+            }
+            return rows;
+          })();
+          return s;
+        })()
+      ]
+    };
+  }
+
+  // --- tab 3 · the same fifteen, read ------------------------------------
+  function sdquestionbank_read() {
+    var F = sdquestionbank_FIFTEEN;
+    function f(k, title, status, op, caption, flag, conds) {
+      return sdquestionbank_step({
+        done: sdquestionbank_take(F, k), blank: false,
+        conds: conds === undefined ? 0 : conds,
+        title: title, status: status, op: op, caption: caption, flag: flag
+      });
+    }
+    var c15 = sdquestionbank_cover(F);
+    var c4 = sdquestionbank_cover(sdquestionbank_take(F, 4));
+    var c8 = sdquestionbank_cover(sdquestionbank_take(F, 8));
+    var c12 = sdquestionbank_cover(sdquestionbank_take(F, 12));
+
+    return {
+      id: "read", label: "The same fifteen, read",
+      phases: ["week 1", "week 2", "week 3", "week 4", "the counter", "§5's conditions",
+        "the six marks", "§6's ladder", "verdict"],
+      steps: [
+        f(2, "week 1 · read", sdquestionbank_plural(
+          sdquestionbank_cover(sdquestionbank_take(F, 2)).shapes, "shape"),
+          "read the write-ups for #1 and #2",
+          "Third run, same 28 days, same fifteen designs, same order — <b>read, not " +
+          "rehearsed</b>. This is the most common way the four weeks are actually spent, and it " +
+          "is not laziness: the write-ups are good, reading them feels like progress, and the " +
+          "coverage counter agrees.", "warn"),
+        f(6, "week 2 · read",
+          sdquestionbank_plural(sdquestionbank_cover(sdquestionbank_take(F, 6)).shapes, "shape"),
+          "news feed, chat, photo sharing",
+          "Week 2 covers the canonical fan-out question and the first stateful one. Read " +
+          "attentively, notes taken, diagrams copied. The shapes counter climbs exactly as fast " +
+          "as it did in tab two — <b>the instrument cannot tell the difference</b>.", "warn"),
+        f(12, "week 3 · read", c12.shapes + " / " + sdquestionbank_NSHAPES,
+          "ticketing, payments, crawler, typeahead",
+          "Week 3 is the hard parts: strong consistency, idempotency, the crawler's politeness " +
+          "frontier. <b>" + c12.shapes + " of " + sdquestionbank_NSHAPES + " shapes</b>, and by " +
+          "now every explanation makes sense on the page. Making sense while reading and " +
+          "producing from a blank page are different skills, and only one of them is tested.",
+          "warn"),
+        f(15, "week 4 · read", c15.shapes + " / " + sdquestionbank_NSHAPES,
+          "uber, metrics, job scheduler",
+          "Day 28. <b>All " + sdquestionbank_NSHAPES + " shapes, all " +
+          sdquestionbank_BANK + " prompts in §2 accounted for.</b> Every diagram in the " +
+          "handbook has been looked at, some twice.", "warn"),
+        (function () {
+          var s = f(15, "the counter", c15.shapes + " / " + sdquestionbank_NSHAPES,
+            "identical to tab two",
+            "<b>Look at the coverage tile: " + c15.shapes + " of " + sdquestionbank_NSHAPES +
+            ", " + sdquestionbank_pct(c15.prompts, sdquestionbank_BANK) + " of the bank — " +
+            "exactly what tab two finished with.</b> The number a plan optimises for is the " +
+            "number it will reach, and this one reached it in full. Now measure the thing the " +
+            "counter does not see.", "bad");
+          return s;
+        })(),
+        (function () {
+          var s = f(15, "§5's five conditions", "0 / " + sdquestionbank_CONDS.length,
+            "rehearsal has to look like the round or it does not transfer",
+            "<b>Zero of " + sdquestionbank_CONDS.length + ".</b> No unpaused 45-minute timer, " +
+            "no standing at a canvas, nothing spoken aloud, everything looked up while reading " +
+            "— by construction, since reading <i>is</i> looking it up — and nothing recorded to " +
+            "listen back to. Tab one met all five, on one shape. <b>This run met none, on all " +
+            "eight.</b>", "bad");
+          s.showConds = true;
+          return s;
+        })(),
+        (function () {
+          var s = f(15, "the six marks", "0 / " + sdquestionbank_MARKS.length,
+            "afterwards, listen back and mark",
+            "<b>And none of the six review questions can be answered</b> — not answered badly, " +
+            "<i>unanswerable</i>. “Did you scope before designing?” has no answer when you did " +
+            "not design; “did an estimate change a decision?” has none when you made no " +
+            "decisions. The page calls listening back the highest-value thirty minutes in the " +
+            "whole schedule, and it is the only half hour that produces evidence about you " +
+            "rather than about the material.", "bad");
+          s.tableHead = ["the six marks (§5)", "this run"];
+          s.tableRows = (function () {
+            var rows = [], i;
+            for (i = 0; i < sdquestionbank_MARKS.length; i++) {
+              rows.push([sdquestionbank_MARKS[i], "no recording — unanswerable"]);
+            }
+            return rows;
+          })();
+          return s;
+        })(),
+        (function () {
+          var s = f(15, "§6's ladder", "RUNG 1", "cannot start without the framework in front of you",
+            "<b>On the page's own ladder this run is on the bottom rung</b>, and the wording is " +
+            "exact: <i>cannot start without the framework in front of you</i>. That is what " +
+            "reading produces — recognition, which feels like knowledge and collapses the " +
+            "moment the canvas is blank and the timer is running. The remedy the page gives is " +
+            "not more material: it is drilling the framework.", "bad");
+          s.tableHead = ["signal (§6)", "where you are"];
+          s.tableRows = (function () {
+            var rows = [], i;
+            for (i = 0; i < sdquestionbank_LADDER.length; i++) {
+              rows.push([sdquestionbank_LADDER[i][0], sdquestionbank_LADDER[i][1]]);
+            }
+            return rows;
+          })();
+          return s;
+        })(),
+        (function () {
+          var s = f(15, "verdict", "SAME 28 DAYS", "three runs, three outcomes",
+            "<b>Three runs of the same 28 days.</b> Tab one: " +
+            sdquestionbank_cover(sdquestionbank_READROW).shapes + " shape, " +
+            sdquestionbank_CONDS.length + " of " + sdquestionbank_CONDS.length +
+            " conditions met — narrow and real. Tab two: " + c15.shapes + " shapes, " +
+            sdquestionbank_CONDS.length + " of " + sdquestionbank_CONDS.length +
+            " — the page's ordering, and ready by design #" + sdquestionbank_MILE.seven +
+            ". This one: " + c15.shapes + " shapes, <b>0 of " + sdquestionbank_CONDS.length +
+            "</b>. Two of the three tabs finish with an identical coverage number and only one " +
+            "of them can start. <b>Places you matched teach nothing</b> — and a plan that never " +
+            "produces anything to compare has nothing to mark.", "bad");
+          s.tableHead = ["run", "designs from a blank page", "shapes", "§5 conditions met"];
+          s.tableRows = [
+            ["eight by interest", "8", sdquestionbank_cover(sdquestionbank_READROW).shapes +
+              " / " + sdquestionbank_NSHAPES,
+              sdquestionbank_CONDS.length + " / " + sdquestionbank_CONDS.length],
+            ["the page's fifteen", String(F.length), c15.shapes + " / " +
+              sdquestionbank_NSHAPES,
+              sdquestionbank_CONDS.length + " / " + sdquestionbank_CONDS.length],
+            ["the same fifteen, read", "0", c15.shapes + " / " + sdquestionbank_NSHAPES,
+              "0 / " + sdquestionbank_CONDS.length]
+          ];
+          return s;
+        })()
+      ]
+    };
+  }
+
+  S["sdquestionbank"] = {
+    title: "Spend four weeks three ways",
+    note: "The page's own tables, counted rather than quoted: <b>eight shapes</b> in §1, the " +
+      "prompts under each of them in §2 (<b>8 · 6 · 5 · 7 · 5 · 5 · 5 · 5</b>, plus <b>6</b> " +
+      "infrastructure prompts that the eight shapes never claimed), the <b>fifteen designs in " +
+      "§3's order</b> with what each adds, §5's <b>five rehearsal conditions</b>, and §6's " +
+      "<b>five rungs</b>. Every figure below is computed off those lists at load time — which " +
+      "shape a design is, how many shapes a run has derived, how much of the prompt bank that " +
+      "unlocks, and which design each shape first arrives at. Three runs of the same four " +
+      "weeks: eight designs chosen by interest, the page's fifteen in its order, and the same " +
+      "fifteen read instead of rehearsed. Two of the three finish with the same coverage number.",
+    interval: 1600,
+
+    scenarios: [sdquestionbank_narrow(), sdquestionbank_ordered(), sdquestionbank_read()],
+
+    draw: function (step, d, ctx) {
+      var done = step.done || [];
+      var c = sdquestionbank_cover(done);
+      var i, sh;
+
+      var blankCount = step.blank ? done.length : 0;
+
+      var head = d.cols([
+        d.big(c.shapes + " / " + sdquestionbank_NSHAPES, "shapes derived",
+          c.shapes === 0 ? "idle"
+            : !step.blank ? "bad"
+            : c.shapes >= sdquestionbank_NSHAPES ? "ok"
+            : c.shapes <= 1 ? "bad" : "warn"),
+        d.stat({
+          label: "from a blank page",
+          value: String(blankCount),
+          sub: step.blank ? "designs produced, not read" : "read, never produced",
+          flag: blankCount === 0 ? "bad" : "ok"
+        }),
+        d.stat({
+          label: "prompts in §2 you could attempt",
+          value: c.prompts + " of " + sdquestionbank_BANK,
+          sub: sdquestionbank_pct(c.prompts, sdquestionbank_BANK) + " of the bank",
+          flag: c.prompts === 0 ? "idle"
+            : !step.blank ? "bad"
+            : c.prompts >= sdquestionbank_BANK ? "ok"
+            : c.prompts < sdquestionbank_BANK / 2 ? "bad" : "warn"
+        }),
+        d.stat({
+          label: "§5 conditions met",
+          value: step.conds + " / " + sdquestionbank_CONDS.length,
+          sub: step.conds === sdquestionbank_CONDS.length
+            ? "the rehearsal looked like the round" : "it did not look like the round",
+          flag: step.conds === sdquestionbank_CONDS.length ? "ok" : "bad"
+        })
+      ]);
+
+      // the eight shapes
+      var shapeCells = [];
+      for (i = 0; i < sdquestionbank_SHAPES.length; i++) {
+        sh = sdquestionbank_SHAPES[i];
+        shapeCells.push({
+          label: sh.label,
+          flag: c.seen[sh.k] ? (step.blank ? "ok" : "warn")
+            : (step.probe === sh.k ? "bad" : "idle"),
+          title: c.seen[sh.k]
+            ? (step.blank ? "derived at design #" + c.seen[sh.k] + " — " + sh.tests
+                : "read about, never derived — " + sh.tests)
+            : "never touched — " + sh.tests + " · " + sh.prompts + " prompts in §2"
+        });
+      }
+
+      var body = [sdquestionbank_chips(d, ctx), head,
+        d.cells(shapeCells, { label: "the eight shapes (§1)" })];
+
+      body.push(d.node({
+        title: step.title,
+        status: step.status,
+        statusFlag: step.flag || "idle",
+        badge: step.blank ? "rehearsed" : "read",
+        meta: step.op,
+        flag: step.flag || "idle",
+        rows: [
+          { label: "designs so far", value: String(done.length),
+            flag: done.length ? (step.blank ? "ok" : "bad") : undefined },
+          { label: "shapes derived", value: c.shapes + " of " + sdquestionbank_NSHAPES,
+            flag: c.shapes >= sdquestionbank_NSHAPES ? "ok" : c.shapes <= 1 ? "bad" : "warn" },
+          { label: "share of the §2 bank",
+            value: sdquestionbank_pct(c.prompts, sdquestionbank_BANK),
+            flag: c.prompts >= sdquestionbank_BANK ? "ok" : "warn" },
+          { label: "infrastructure group", value: c.infra ? "covered" : "not covered",
+            flag: c.infra ? "ok" : undefined }
+        ]
+      }));
+
+      if (step.showConds) {
+        var cc = [];
+        for (i = 0; i < sdquestionbank_CONDS.length; i++) {
+          cc.push({
+            label: sdquestionbank_CONDS[i],
+            flag: i < step.conds ? "ok" : "bad",
+            title: i < step.conds ? "met" : "not met — this is what did not transfer"
+          });
+        }
+        body.push(d.cells(cc, { label: "§5 · the five conditions" }));
+      }
+
+      // the run so far
+      var rows = [], seen = {}, dg;
+      for (i = 0; i < done.length; i++) {
+        dg = done[i];
+        rows.push([
+          "#" + dg.n, dg.name, sdquestionbank_shape(dg.shape).label,
+          seen[dg.shape] ? "—" : (step.blank ? "new shape" : "read only")
+        ]);
+        seen[dg.shape] = true;
+      }
+      if (!rows.length) rows.push(["—", "nothing yet", "—", "—"]);
+      body.push(d.table(["#", step.blank ? "designed" : "read", "shape", "added"], rows));
+
+      if (step.tableHead) body.push(d.table(step.tableHead, step.tableRows));
+
+      body.push(d.note(
+        c.shapes >= sdquestionbank_NSHAPES && !step.blank
+          ? "The coverage counter cannot tell reading from rehearsing. §5's five conditions can."
+          : "Green is a shape this run has derived at least once — the unit of transfer is the " +
+            "shape, not the domain."
+      ));
+
+      return d.stack(body);
+    }
+  };
+
+  // ====================================================================
+  // ======================================================================
   // SIM · sdqueuesandstreams  (queues-and-streams.md)
   //
   // The page's time axis is section 5. "Lag rising steadily", "lag spiking
@@ -11443,6 +25265,2335 @@ S["sdapidesign"] = {
       ]);
     }
   };
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sdratelimiting  (rate-limiting.md)
+  // The algorithms are implemented here and RUN, request by request, on one
+  // concrete arrival trace. Nothing on screen is asserted: every admitted,
+  // rejected and peak figure is the output of the loop.
+  //
+  // THE TRACE — the page's own boundary example (§2), plus one probe:
+  //   12:00:00-12:00:58   nothing
+  //   12:00:59            100 requests     <- the page's boundary burst
+  //   12:00:59            1 more request   <- is the limiter working at all?
+  //   12:01:00            100 requests     <- the page's boundary burst
+  //   12:01:30            100 requests     <- DECLARED, to ask whether the
+  //                                           limiter reopens, and how
+  //
+  // CONFIG — the page's figures:
+  //   limit                 100 / minute, window 60 s        §2
+  //   fixed window          reset at the boundary; "permits 2× the limit
+  //                         at any boundary"                 §2
+  //   sliding log           timestamps, exact, O(requests); the sim runs
+  //                         the page's Python, which zadds BEFORE it counts §2
+  //   sliding counter       estimate = current + previous × weight   §2
+  //   token bucket          capacity 10, refill 1/s; idle 10 s then a burst
+  //                         of 10; sustained throttled to 1/s        §2
+  //   lazy refill           tokens = min(capacity, tokens + elapsed × rate) §2
+  //   ten servers           each enforcing 100/min gives 1,000/min    §3
+  //   local, divided        each server enforces limit / N            §3
+  //   fail open / closed    the choice to state out loud              §3
+  //   429 + Retry-After + X-RateLimit-Limit / Remaining / Reset       §5
+  //
+  // ON §2's WORKED EXAMPLE, and the one place this sim does not follow the
+  // page: §2 says that at 12:01:15, "75% of the window is in 12:01 and 25%
+  // is still in 12:00", and weights the previous window by 0.25. At
+  // 12:01:15 the trailing 60 s covers 12:00:15-12:01:15 — 45 s of the 12:00
+  // window (75% of it) and 15 s of 12:01 — so the weight on the previous
+  // window is 0.75. The sim RUNS BOTH on the trace above and prints what
+  // each admits: the 0.75 weighting stops the boundary burst, and the
+  // elapsed-fraction weighting reproduces the fixed window request for
+  // request (200 admitted, 200 in one true 60 s span) — the algorithm it
+  // was meant to replace, with two counters instead of one. §2's own table promises
+  // "no boundary burst", so the sim uses 0.75 and shows the comparison
+  // rather than hiding it. (Page fix: swap the two percentages in §2.)
+  //
+  // DECLARED, because the page does not state them: the 12:01:30 probe
+  // above; that the sustained phase of the token-bucket trace sends its 5
+  // requests in the same instant (which is what makes the read-then-write
+  // race observable); and a concurrency of 10 servers in round-robin.
+  // ======================================================================
+  var sdratelimiting_LIMIT = 100;          // §2
+  var sdratelimiting_WIN = 60;             // §2
+  var sdratelimiting_CAP = 10;             // §2, token bucket
+  var sdratelimiting_RATE = 1;             // §2, 1 token/second
+  var sdratelimiting_SERVERS = 10;         // §3
+
+  function sdratelimiting_clock(s) {
+    var m = Math.floor(s / 60), sec = s % 60;
+    return "12:0" + m + ":" + (sec < 10 ? "0" : "") + sec;
+  }
+  function sdratelimiting_num(n) {
+    return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+  function sdratelimiting_f1(n) {
+    return Math.abs(n - Math.round(n)) < 0.05 ? String(Math.round(n)) : n.toFixed(1);
+  }
+  function sdratelimiting_xr(a, b) { return b > 0 ? (a / b).toFixed(2) + "×" : "—"; }
+
+  // the trace: [second, count, label]
+  var sdratelimiting_TRACE = [
+    { s: 59, n: 100, note: "the client saves the whole window for its last second" },
+    { s: 59, n: 1, note: "one more, same second" },
+    { s: 60, n: 100, note: "one second later — a new window, on the fixed scheme" },
+    { s: 90, n: 100, note: "thirty seconds into the new window" }
+  ];
+  var sdratelimiting_OFFERED = (function () {
+    var t = 0, i;
+    for (i = 0; i < sdratelimiting_TRACE.length; i++) t += sdratelimiting_TRACE[i].n;
+    return t;
+  })();
+
+  /** Peak admitted inside any true 60-second span — the honest measure. */
+  function sdratelimiting_peak(ev) {
+    var best = 0, i, j, sum;
+    for (i = 0; i < ev.length; i++) {
+      sum = 0;
+      for (j = 0; j < ev.length; j++) {
+        if (ev[j].s >= ev[i].s && ev[j].s <= ev[i].s + sdratelimiting_WIN - 1) {
+          sum += ev[j].ok;
+        }
+      }
+      if (sum > best) best = sum;
+    }
+    return best;
+  }
+  function sdratelimiting_totals(ev) {
+    var a = 0, r = 0, i;
+    for (i = 0; i < ev.length; i++) { a += ev[i].ok; r += ev[i].no; }
+    return { events: ev, admitted: a, rejected: r, peak: sdratelimiting_peak(ev) };
+  }
+
+  /** Fixed window: one counter per window, reset at the boundary. */
+  function sdratelimiting_fixed() {
+    var ev = [], i, k, e, w, curr = 0, cw = -1, ok, no;
+    for (i = 0; i < sdratelimiting_TRACE.length; i++) {
+      e = sdratelimiting_TRACE[i];
+      w = Math.floor(e.s / sdratelimiting_WIN);
+      if (w !== cw) { cw = w; curr = 0; }
+      ok = 0; no = 0;
+      for (k = 0; k < e.n; k++) {
+        if (curr + 1 <= sdratelimiting_LIMIT) { curr++; ok++; } else { no++; }
+      }
+      ev.push({ s: e.s, n: e.n, ok: ok, no: no, curr: curr, win: w, note: e.note });
+    }
+    return sdratelimiting_totals(ev);
+  }
+
+  /**
+   * Sliding window counter. weightMode "remaining" weights the previous
+   * window by how much of it is still inside the trailing 60 s (the
+   * standard rule); "elapsed" weights it by how far into the current window
+   * the clock is, which is what §2's worked example prints.
+   */
+  function sdratelimiting_counter(weightMode) {
+    var ev = [], i, k, e, w, prev = 0, curr = 0, cw = -1, frac, weight, est, ok, no;
+    for (i = 0; i < sdratelimiting_TRACE.length; i++) {
+      e = sdratelimiting_TRACE[i];
+      w = Math.floor(e.s / sdratelimiting_WIN);
+      while (cw < w) { if (cw >= 0) { prev = curr; curr = 0; } cw++; }
+      if (cw !== w) { prev = curr; curr = 0; cw = w; }
+      frac = (e.s - w * sdratelimiting_WIN) / sdratelimiting_WIN;   // elapsed fraction
+      weight = weightMode === "elapsed" ? frac : 1 - frac;
+      ok = 0; no = 0;
+      for (k = 0; k < e.n; k++) {
+        est = prev * weight + curr + 1;
+        if (est <= sdratelimiting_LIMIT) { curr++; ok++; } else { no++; }
+      }
+      ev.push({ s: e.s, n: e.n, ok: ok, no: no, curr: curr, prev: prev,
+        weight: weight, est: prev * weight + curr, win: w, note: e.note });
+    }
+    return sdratelimiting_totals(ev);
+  }
+
+  /** Sliding window log, exactly as §2's Python: zadd, then count. */
+  function sdratelimiting_log() {
+    var ev = [], zset = [], i, k, e, j, live, ok, no;
+    for (i = 0; i < sdratelimiting_TRACE.length; i++) {
+      e = sdratelimiting_TRACE[i];
+      ok = 0; no = 0;
+      for (k = 0; k < e.n; k++) {
+        live = [];
+        for (j = 0; j < zset.length; j++) {
+          if (zset[j] > e.s - sdratelimiting_WIN) live.push(zset[j]);
+        }
+        zset = live;
+        zset.push(e.s);                                  // zadd happens first
+        if (zset.length <= sdratelimiting_LIMIT) ok++; else no++;
+      }
+      ev.push({ s: e.s, n: e.n, ok: ok, no: no, curr: zset.length, win: 0, note: e.note });
+    }
+    return sdratelimiting_totals(ev);
+  }
+
+  var sdratelimiting_FIXED = sdratelimiting_fixed();
+  var sdratelimiting_SLIDE = sdratelimiting_counter("remaining");
+  var sdratelimiting_SLIDE_ELAPSED = sdratelimiting_counter("elapsed");
+  var sdratelimiting_LOG = sdratelimiting_log();
+
+  // §2's own worked example, recomputed under both weightings
+  var sdratelimiting_EG = { curr: 40, prev: 90, elapsed: 15 };
+  var sdratelimiting_EG_PAGE = sdratelimiting_EG.curr + sdratelimiting_EG.prev *
+    (sdratelimiting_EG.elapsed / sdratelimiting_WIN);
+  var sdratelimiting_EG_STD = sdratelimiting_EG.curr + sdratelimiting_EG.prev *
+    (1 - sdratelimiting_EG.elapsed / sdratelimiting_WIN);
+
+  // ---------------- token bucket ----------------------------------------
+  // trace: idle 10 s (bucket full), a burst of 10, then 5/s for 4 s
+  var sdratelimiting_TB_TRACE = [
+    { s: 10, n: 10, note: "the burst, after 10 s idle" },
+    { s: 11, n: 5, note: "sustained, 5 in the same instant" },
+    { s: 12, n: 5, note: "sustained" },
+    { s: 13, n: 5, note: "sustained" },
+    { s: 14, n: 5, note: "sustained" }
+  ];
+  var sdratelimiting_TB_OFFERED = (function () {
+    var t = 0, i;
+    for (i = 0; i < sdratelimiting_TB_TRACE.length; i++) t += sdratelimiting_TB_TRACE[i].n;
+    return t;
+  })();
+
+  /** trace -> per-event decisions. atomic=false models read-then-write. */
+  function sdratelimiting_tb(trace, cap, rate, atomic) {
+    var tokens = cap, last = trace.length ? trace[0].s : 0;
+    var ev = [], i, k, e, ok, no, before;
+    for (i = 0; i < trace.length; i++) {
+      e = trace[i];
+      tokens = Math.min(cap, tokens + (e.s - last) * rate);
+      last = e.s;
+      before = tokens;
+      ok = 0; no = 0;
+      if (atomic) {
+        for (k = 0; k < e.n; k++) {
+          if (tokens >= 1) { tokens -= 1; ok++; } else { no++; }
+        }
+      } else {
+        // every concurrent request reads the same value; one write lands
+        if (tokens >= 1) { ok = e.n; tokens = Math.max(0, tokens - 1); } else { no = e.n; }
+      }
+      ev.push({ s: e.s, n: e.n, ok: ok, no: no, before: before, after: tokens,
+        note: e.note });
+    }
+    return sdratelimiting_totals(ev);
+  }
+
+  var sdratelimiting_TB_ONE = sdratelimiting_tb(sdratelimiting_TB_TRACE,
+    sdratelimiting_CAP, sdratelimiting_RATE, true);
+  var sdratelimiting_TB_RACE = sdratelimiting_tb(sdratelimiting_TB_TRACE,
+    sdratelimiting_CAP, sdratelimiting_RATE, false);
+
+  /** Round-robin the same trace across N independent limiters. */
+  function sdratelimiting_split(trace, n) {
+    var lists = [], i, k, rr = 0, e, j;
+    for (i = 0; i < n; i++) lists.push([]);
+    for (i = 0; i < trace.length; i++) {
+      e = trace[i];
+      for (k = 0; k < e.n; k++) {
+        j = rr % n; rr++;
+        if (lists[j].length && lists[j][lists[j].length - 1].s === e.s) {
+          lists[j][lists[j].length - 1].n++;
+        } else {
+          lists[j].push({ s: e.s, n: 1, note: e.note });
+        }
+      }
+    }
+    return lists;
+  }
+  function sdratelimiting_fleet(cap, rate) {
+    var lists = sdratelimiting_split(sdratelimiting_TB_TRACE, sdratelimiting_SERVERS);
+    var a = 0, r = 0, per = [], i, out;
+    for (i = 0; i < lists.length; i++) {
+      out = sdratelimiting_tb(lists[i], cap, rate, true);
+      a += out.admitted; r += out.rejected;
+      per.push({ offered: out.admitted + out.rejected, admitted: out.admitted });
+    }
+    return { admitted: a, rejected: r, per: per };
+  }
+
+  var sdratelimiting_LOCAL = sdratelimiting_fleet(sdratelimiting_CAP, sdratelimiting_RATE);
+  var sdratelimiting_DIVIDED = sdratelimiting_fleet(
+    sdratelimiting_CAP / sdratelimiting_SERVERS,
+    sdratelimiting_RATE / sdratelimiting_SERVERS);
+  // the same divided fallback when the balancer sends everything to one server
+  var sdratelimiting_SKEWED = sdratelimiting_tb(sdratelimiting_TB_TRACE,
+    sdratelimiting_CAP / sdratelimiting_SERVERS,
+    sdratelimiting_RATE / sdratelimiting_SERVERS, true);
+
+  function sdratelimiting_chips(d, ctx) {
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    if (!names.length) return "";
+    var chips = [], i;
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i],
+        flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+    return d.pills(chips);
+  }
+
+  /** Where in each window the admitted traffic actually landed. */
+  function sdratelimiting_lanes(d, run, upto) {
+    var lanes = [], w, cells, i, k, bucket, counts;
+    for (w = 0; w < 2; w++) {
+      counts = [0, 0, 0, 0, 0, 0];
+      for (i = 0; i < upto && i < run.events.length; i++) {
+        if (Math.floor(run.events[i].s / sdratelimiting_WIN) !== w) continue;
+        bucket = Math.floor((run.events[i].s % sdratelimiting_WIN) / 10);
+        counts[bucket] += run.events[i].ok;
+      }
+      cells = [];
+      for (k = 0; k < counts.length; k++) {
+        cells.push({
+          label: counts[k] ? String(counts[k]) : "",
+          flag: counts[k] > sdratelimiting_LIMIT / 2 ? "bad" : counts[k] ? "warn" : "idle",
+          title: "12:0" + w + ":" + (k * 10 < 10 ? "0" : "") + (k * 10) + "-" +
+            (k * 10 + 9) + " · " + counts[k] + " admitted"
+        });
+      }
+      lanes.push(d.lane({ label: "12:0" + w, cells: cells }));
+    }
+    return lanes;
+  }
+
+  function sdratelimiting_ledger(d, run, upto) {
+    var rows = [], i, e;
+    for (i = 0; i < upto && i < run.events.length; i++) {
+      e = run.events[i];
+      rows.push([
+        sdratelimiting_clock(e.s), String(e.n), String(e.ok), String(e.no),
+        e.note
+      ]);
+    }
+    if (!rows.length) rows.push(["—", "0", "0", "0", "nothing has arrived yet"]);
+    return d.table(["clock", "offered", "admitted", "429", "what happened"], rows);
+  }
+
+  function sdratelimiting_tile(label, value, sub, flag) {
+    return { label: label, value: value, sub: sub, flag: flag };
+  }
+
+  // --- tab 1 · fixed window ---------------------------------------------
+  function sdratelimiting_tabFixed() {
+    var R = sdratelimiting_FIXED, E = R.events;
+    function upto(k) {
+      var a = 0, r = 0, i;
+      for (i = 0; i < k; i++) { a += E[i].ok; r += E[i].no; }
+      return { a: a, r: r };
+    }
+    function st(k, extra) {
+      var u = upto(k);
+      var o = {
+        run: R, upto: k, counter: k ? E[k - 1].curr : 0,
+        tiles: [
+          sdratelimiting_tile("admitted", sdratelimiting_num(u.a),
+            "of " + sdratelimiting_num(sdratelimiting_OFFERED) + " offered",
+            u.a > sdratelimiting_LIMIT ? "bad" : u.a ? "ok" : "idle"),
+          sdratelimiting_tile("rejected · 429", sdratelimiting_num(u.r),
+            u.r ? "with Retry-After" : "none yet", u.r ? "warn" : "idle"),
+          sdratelimiting_tile("worst true 60 s",
+            sdratelimiting_num(sdratelimiting_peak(sdratelimiting_take(E, k))),
+            "limit is " + sdratelimiting_LIMIT,
+            sdratelimiting_peak(sdratelimiting_take(E, k)) > sdratelimiting_LIMIT
+              ? "bad" : "ok"),
+          sdratelimiting_tile("window counter",
+            (k ? E[k - 1].curr : 0) + " / " + sdratelimiting_LIMIT,
+            k ? "window 12:0" + E[k - 1].win : "no requests yet",
+            k && E[k - 1].curr >= sdratelimiting_LIMIT ? "warn" : "ok")
+        ]
+      };
+      var key;
+      for (key in extra) if (extra.hasOwnProperty(key)) o[key] = extra[key];
+      return o;
+    }
+
+    return {
+      id: "fixed", label: "Fixed window",
+      phases: ["the config", "12:00:59", "one more", "the boundary", "the reset",
+        "12:01:00", "12:01:30", "the tally", "verdict"],
+      steps: [
+        st(0, {
+          title: "limit 100 / minute", status: "COUNTER 0",
+          op: "count requests per fixed interval; reset at the boundary",
+          caption: "<b>Limit 100 per minute</b>, one counter per client per window, reset at " +
+            "the boundary. The trace below is the page's own boundary example, and it will be " +
+            "replayed unchanged through three algorithms. The client is quiet for the first " +
+            "58 seconds of 12:00 — which is what makes everything that follows possible.",
+          rows: [
+            { label: "algorithm", value: "fixed window" },
+            { label: "memory", value: "O(1) — one integer per client", flag: "ok" },
+            { label: "window", value: "60 s, aligned to the minute" },
+            { label: "offered by this trace",
+              value: sdratelimiting_num(sdratelimiting_OFFERED) + " requests" }
+          ]
+        }),
+        st(1, {
+          title: "12:00:59", status: "100 ADMITTED", flag: "ok",
+          op: "100 requests arrive in one second",
+          caption: "<b>100 requests arrive in the window's last second and all 100 are " +
+            "admitted.</b> The counter is now at the limit and the limiter has done nothing " +
+            "wrong — 100 requests in the 12:00 window is exactly 100 per minute. Note where " +
+            "they landed, though: the whole allowance was spent in the final second.",
+          rows: [
+            { label: "counter", value: "100 / 100", flag: "warn" },
+            { label: "admitted", value: "100", flag: "ok" },
+            { label: "seconds of the window used", value: "1 of 60" },
+            { label: "X-RateLimit-Remaining", value: "0" }
+          ],
+          mono: "HTTP/1.1 200 OK   X-RateLimit-Limit: 100   X-RateLimit-Remaining: 0"
+        }),
+        st(2, {
+          title: "12:00:59, one more", status: "429", flag: "warn",
+          op: "the 101st request in this window",
+          caption: "<b>The 101st request is rejected — <code>429</code>, not <code>503</code>.</b> " +
+            "503 means the server is broken; 429 means slow down, and a well-behaved client " +
+            "reads <code>Retry-After</code> and backs off. The page's advice is to return the " +
+            "limit headers on <i>successful</i> responses too, so clients throttle themselves " +
+            "before they hit the wall instead of discovering it by being refused.",
+          rows: [
+            { label: "counter", value: "100 / 100", flag: "bad" },
+            { label: "decision", value: "reject", flag: "bad" },
+            { label: "Retry-After", value: "1 s — until the boundary" },
+            { label: "the limiter", value: "is working exactly as specified", flag: "ok" }
+          ],
+          mono: "HTTP/1.1 429 Too Many Requests   Retry-After: 1   " +
+            "X-RateLimit-Limit: 100   X-RateLimit-Remaining: 0   X-RateLimit-Reset: 1735689600"
+        }),
+        st(2, {
+          title: "12:01:00", status: "COUNTER RESETS", flag: "warn",
+          reset: true,
+          op: "the boundary — one second later",
+          caption: "<b>One second later the clock crosses the boundary and the counter resets " +
+            "to zero.</b> Nothing else changed: same client, same key, one second of wall " +
+            "clock. The counter has no memory of what just happened, because a fixed window " +
+            "stores a count and a window id and nothing else. That is the whole reason it is " +
+            "O(1) — and the whole reason for what happens next.",
+          rows: [
+            { label: "counter", value: "0 / 100", flag: "ok" },
+            { label: "what the limiter remembers", value: "nothing about 12:00", flag: "bad" },
+            { label: "requests in the last second", value: "100" },
+            { label: "the limiter's view", value: "a fresh, empty minute" }
+          ]
+        }),
+        st(3, {
+          title: "12:01:00", status: "100 MORE ADMITTED", flag: "bad",
+          op: "the same client, the same second",
+          caption: "<b>All 100 are admitted, and the true count in the last second is now 200.</b> " +
+            "Both windows are individually legal — 100 in 12:00, 100 in 12:01 — and the client " +
+            "has taken <b>2× the limit across one second</b> while never exceeding 100 per " +
+            "minute. This is the boundary burst, and naming it unprompted is the point of " +
+            "knowing the algorithm at all.",
+          rows: [
+            { label: "counter in 12:01", value: "100 / 100", flag: "warn" },
+            { label: "admitted in one second", value: "200", flag: "bad" },
+            { label: "against a limit of", value: sdratelimiting_num(sdratelimiting_LIMIT),
+              flag: "bad" },
+            { label: "overshoot",
+              value: sdratelimiting_xr(200, sdratelimiting_LIMIT), flag: "bad" }
+          ]
+        }),
+        st(4, {
+          title: "12:01:30", status: "100 REJECTED", flag: "warn",
+          op: "thirty seconds later, the same client asks again",
+          caption: "<b>Now the client is refused for the rest of the minute</b> — the 12:01 " +
+            "counter is already full. Notice the shape of what the algorithm produced: a " +
+            "client that games the boundary gets double, and then the same client is starved " +
+            "for 30 seconds. Neither the burst nor the starvation is what the limit was " +
+            "supposed to express.",
+          rows: [
+            { label: "counter", value: "100 / 100", flag: "bad" },
+            { label: "admitted", value: "0", flag: "bad" },
+            { label: "Retry-After", value: "30 s — until 12:02:00" },
+            { label: "admitted so far", value: sdratelimiting_num(upto(4).a), flag: "bad" }
+          ],
+          mono: "HTTP/1.1 429 Too Many Requests   Retry-After: 30   " +
+            "X-RateLimit-Limit: 100   X-RateLimit-Remaining: 0"
+        }),
+        st(4, {
+          title: "the tally", status: "RUN COMPLETE", flag: "bad",
+          op: sdratelimiting_num(sdratelimiting_OFFERED) + " offered",
+          caption: "<b>" + sdratelimiting_num(R.admitted) + " admitted, " +
+            sdratelimiting_num(R.rejected) + " refused, and the worst true 60-second window " +
+            "held " + sdratelimiting_num(R.peak) + " — " +
+            sdratelimiting_xr(R.peak, sdratelimiting_LIMIT) + " the limit.</b> Every one of " +
+            "those decisions was correct by the algorithm's own definition, which is what " +
+            "makes the flaw worth memorising: it is not a bug, it is the specification.",
+          rows: [
+            { label: "offered", value: sdratelimiting_num(sdratelimiting_OFFERED) },
+            { label: "admitted", value: sdratelimiting_num(R.admitted), flag: "bad" },
+            { label: "rejected", value: sdratelimiting_num(R.rejected) },
+            { label: "peak in any true 60 s", value: sdratelimiting_num(R.peak) + "  (" +
+              sdratelimiting_xr(R.peak, sdratelimiting_LIMIT) + ")", flag: "bad" }
+          ]
+        }),
+        st(4, {
+          title: "verdict", status: "O(1), AND 2×", flag: "warn",
+          op: "simple, memory-cheap, wrong at the boundary",
+          caption: "<b>Simple, memory-cheap, and it permits 2× the limit at any boundary.</b> " +
+            "That trade is fine for a rough internal limit and is the wrong answer for a public " +
+            "API — and in the round, <i>“fixed window, except it allows double across the " +
+            "boundary, so I would use a sliding window counter”</i> is a better sentence than " +
+            "either half alone. The next tab replays this identical trace through the " +
+            "algorithm that fixes it.",
+          rows: [
+            { label: "memory", value: "one integer per client", flag: "ok" },
+            { label: "exact", value: "no", flag: "bad" },
+            { label: "burst", value: "2× at the boundary", flag: "bad" },
+            { label: "use", value: "rough internal limits" }
+          ]
+        })
+      ]
+    };
+  }
+
+  function sdratelimiting_take(list, n) {
+    var out = [], i;
+    for (i = 0; i < list.length && i < n; i++) out.push(list[i]);
+    return out;
+  }
+
+  // --- tab 2 · sliding window counter ------------------------------------
+  function sdratelimiting_tabSlide() {
+    var R = sdratelimiting_SLIDE, E = R.events;
+    var F = sdratelimiting_FIXED, LG = sdratelimiting_LOG, EL = sdratelimiting_SLIDE_ELAPSED;
+    function upto(k) {
+      var a = 0, r = 0, i;
+      for (i = 0; i < k; i++) { a += E[i].ok; r += E[i].no; }
+      return { a: a, r: r };
+    }
+    function st(k, extra) {
+      var u = upto(k), e = k ? E[k - 1] : null;
+      var o = {
+        run: R, upto: k,
+        tiles: [
+          sdratelimiting_tile("admitted", sdratelimiting_num(u.a),
+            "of " + sdratelimiting_num(sdratelimiting_OFFERED) + " offered",
+            u.a > sdratelimiting_LIMIT ? "warn" : u.a ? "ok" : "idle"),
+          sdratelimiting_tile("rejected · 429", sdratelimiting_num(u.r),
+            u.r ? "with Retry-After" : "none yet", u.r ? "warn" : "idle"),
+          sdratelimiting_tile("worst true 60 s",
+            sdratelimiting_num(sdratelimiting_peak(sdratelimiting_take(E, k))),
+            "fixed window reached " + sdratelimiting_num(F.peak),
+            sdratelimiting_peak(sdratelimiting_take(E, k)) > sdratelimiting_LIMIT
+              ? "warn" : "ok"),
+          sdratelimiting_tile("estimate",
+            e ? sdratelimiting_f1(e.est) + " / " + sdratelimiting_LIMIT : "0 / " +
+              sdratelimiting_LIMIT,
+            e ? "prev × " + sdratelimiting_f1(e.weight) + " + current" : "no traffic yet",
+            e && e.est >= sdratelimiting_LIMIT ? "warn" : "ok")
+        ]
+      };
+      var key;
+      for (key in extra) if (extra.hasOwnProperty(key)) o[key] = extra[key];
+      return o;
+    }
+
+    return {
+      id: "slide", label: "Sliding window counter",
+      phases: ["the formula", "12:00:59", "one more", "the boundary holds",
+        "the weight", "12:01:30", "the approximation", "three algorithms", "verdict"],
+      steps: [
+        st(0, {
+          title: "estimate = previous × weight + current", status: "O(1)",
+          op: "weight = how much of the previous window is still in view",
+          caption: "<b>The same trace, the same limit, one idea added: do not throw the " +
+            "previous window away — weight it.</b> The estimate is the current window's count " +
+            "plus the previous window's count times the fraction of that window still inside " +
+            "the trailing 60 seconds. Two integers per client, and no boundary to game.",
+          rows: [
+            { label: "memory", value: "two counters per client", flag: "ok" },
+            { label: "exact", value: "no — it assumes even spreading", flag: "warn" },
+            { label: "at 12:01:00 the weight is", value: "1.0 — all of 12:00 is still in view" },
+            { label: "at 12:01:30", value: "0.5 — half of it has aged out" }
+          ]
+        }),
+        st(1, {
+          title: "12:00:59", status: "100 ADMITTED", flag: "ok",
+          op: "estimate = 0 × " + sdratelimiting_f1(E[0].weight) + " + current",
+          caption: "<b>Identical to the fixed window so far: all 100 admitted.</b> The " +
+            "previous window (11:59) is empty, so the weighted term is zero whatever the " +
+            "weight is. Nothing has been given up — a well-behaved client sees exactly the " +
+            "same limiter.",
+          rows: [
+            { label: "previous window count", value: "0" },
+            { label: "weight", value: sdratelimiting_f1(E[0].weight) },
+            { label: "estimate after", value: sdratelimiting_f1(E[0].est) + " / 100",
+              flag: "warn" },
+            { label: "admitted", value: "100", flag: "ok" }
+          ]
+        }),
+        st(2, {
+          title: "12:00:59, one more", status: "429", flag: "warn",
+          op: "estimate 101 > 100",
+          caption: "<b>The 101st is refused, same as before.</b> Both algorithms agree " +
+            "everywhere except at one instant — and the whole difference in behaviour comes " +
+            "from what happens one second from now.",
+          rows: [
+            { label: "estimate", value: sdratelimiting_f1(E[1].est + 1) + " / 100", flag: "bad" },
+            { label: "decision", value: "reject", flag: "bad" },
+            { label: "fixed window here", value: "also rejected — they agree" },
+            { label: "Retry-After", value: "1 s" }
+          ],
+          mono: "HTTP/1.1 429 Too Many Requests   Retry-After: 1   " +
+            "X-RateLimit-Limit: 100   X-RateLimit-Remaining: 0"
+        }),
+        st(3, {
+          title: "12:01:00", status: "100 REJECTED", flag: "ok",
+          op: "estimate = 100 × 1.0 + 0 + 1 = 101",
+          caption: "<b>Here is the fix, in one line of arithmetic.</b> The clock has crossed " +
+            "the boundary, so the current window is empty — but <b>none</b> of the previous " +
+            "window has aged out yet, so its weight is <b>1.0</b> and the estimate starts at " +
+            "100. The very first request makes it 101 and is refused. <b>All 100 rejected, " +
+            "where the fixed window admitted all 100.</b> Same trace, same memory class, no " +
+            "boundary.",
+          rows: [
+            { label: "previous window (12:00)", value: "100" },
+            { label: "weight", value: sdratelimiting_f1(E[2].weight) + "  (0 s elapsed)",
+              flag: "ok" },
+            { label: "estimate for request 1", value: "101", flag: "bad" },
+            { label: "fixed window admitted", value: "100 here", flag: "bad" }
+          ]
+        }),
+        st(3, {
+          title: "which weight?", status: "0.75, NOT 0.25", flag: "warn",
+          eg: true,
+          op: "§2's worked example, run both ways",
+          caption: "<b>§2's worked example is worth pausing on.</b> It says that at 12:01:15, " +
+            "current 40 and previous 90 give <code>40 + 90 × 0.25 = " +
+            sdratelimiting_f1(sdratelimiting_EG_PAGE) + "</code>. But at 12:01:15 the trailing " +
+            "60 seconds covers 12:00:15–12:01:15: that is <b>45 seconds of the 12:00 window — " +
+            "0.75 of it — still in view</b>, giving <code>40 + 90 × 0.75 = " +
+            sdratelimiting_f1(sdratelimiting_EG_STD) + "</code>. The previous frame is the " +
+            "proof of which is right: with the elapsed fraction the weight at the boundary is " +
+            "<b>0</b>, the estimate is <b>0</b>, and the boundary burst sails straight " +
+            "through. Run on this trace, that weighting admits <b>" +
+            sdratelimiting_num(EL.admitted) + "</b> and peaks at <b>" +
+            sdratelimiting_num(EL.peak) + "</b> in a true 60 s span — " +
+            (EL.admitted === F.admitted && EL.peak === F.peak
+              ? "request for request, <b>exactly the fixed window</b>. The second counter and " +
+                "the multiplication buy nothing at all."
+              : "against the fixed window's " + sdratelimiting_num(F.admitted) + "."),
+          rows: [
+            { label: "§2 prints", value: "40 + 90 × 0.25 = " +
+              sdratelimiting_f1(sdratelimiting_EG_PAGE) + " → allow" },
+            { label: "still in view at 12:01:15", value: "45 s of 60 = 0.75", flag: "ok" },
+            { label: "so the estimate is", value: "40 + 90 × 0.75 = " +
+              sdratelimiting_f1(sdratelimiting_EG_STD) + " → reject", flag: "warn" },
+            { label: "elapsed-fraction weighting, on this trace",
+              value: sdratelimiting_num(EL.admitted) + " admitted" +
+                (EL.admitted === F.admitted ? " — the fixed window exactly" : ""),
+              flag: "bad" }
+          ]
+        }),
+        st(4, {
+          title: "12:01:30", status: E[3].ok + " ADMITTED", flag: "ok",
+          op: "estimate = 100 × 0.5 + current",
+          caption: "<b>Thirty seconds in, half of the old window has aged out, so half the " +
+            "allowance comes back: " + E[3].ok + " admitted, " + E[3].no + " refused.</b> This " +
+            "is the behaviour the fixed window cannot produce — it reopens <i>gradually</i> " +
+            "rather than all at once, so there is no instant worth waiting for and nothing to " +
+            "game. The client is refused, then partly served, then fully served, in proportion " +
+            "to how much of its burst is still in the past.",
+          rows: [
+            { label: "weight", value: sdratelimiting_f1(E[3].weight) },
+            { label: "weighted previous", value: sdratelimiting_f1(E[3].prev * E[3].weight) },
+            { label: "room left", value: String(E[3].ok), flag: "ok" },
+            { label: "admitted", value: String(E[3].ok) + " of " + E[3].n, flag: "ok" }
+          ]
+        }),
+        st(4, {
+          title: "what the estimate got wrong", status: "APPROXIMATE", flag: "warn",
+          op: "the previous window was not spread evenly",
+          caption: "<b>And here is the price of O(1).</b> The estimate assumed the 12:00 " +
+            "window's 100 requests were <i>spread evenly</i> across it, so at 12:01:30 it " +
+            "counted 50 of them as still in view. In fact all 100 arrived in that window's " +
+            "final second, so all 100 were genuinely inside the trailing 60 seconds — the true " +
+            "count was already at the limit and the " + E[3].ok + " admitted here are " +
+            E[3].ok + " over. <b>This trace is the worst case for the assumption</b>, which is " +
+            "why the page calls the burst “minimal” rather than “none”: on traffic that is not " +
+            "deliberately shaped like this, the error is small.",
+          rows: [
+            { label: "assumed in view at 12:01:30", value: "50 (evenly spread)" },
+            { label: "actually in view", value: "100 (all in the last second)", flag: "bad" },
+            { label: "over-admitted", value: String(E[3].ok), flag: "warn" },
+            { label: "peak in any true 60 s", value: sdratelimiting_num(R.peak) + "  (" +
+              sdratelimiting_xr(R.peak, sdratelimiting_LIMIT) + ")", flag: "warn" }
+          ]
+        }),
+        st(4, {
+          title: "the same trace, four ways", status: "RUN AND COUNTED", flag: "ok",
+          op: sdratelimiting_num(sdratelimiting_OFFERED) + " offered to each",
+          tableHead: ["algorithm", "admitted", "peak in any true 60 s", "vs limit", "memory"],
+          tableRows: [
+            ["fixed window", sdratelimiting_num(F.admitted), sdratelimiting_num(F.peak),
+              sdratelimiting_xr(F.peak, sdratelimiting_LIMIT), "O(1)"],
+            ["sliding counter (weight 0.75 rule)", sdratelimiting_num(R.admitted),
+              sdratelimiting_num(R.peak), sdratelimiting_xr(R.peak, sdratelimiting_LIMIT),
+              "O(1)"],
+            ["sliding counter (elapsed-fraction weight)", sdratelimiting_num(EL.admitted),
+              sdratelimiting_num(EL.peak), sdratelimiting_xr(EL.peak, sdratelimiting_LIMIT),
+              "O(1)"],
+            ["sliding log", sdratelimiting_num(LG.admitted), sdratelimiting_num(LG.peak),
+              sdratelimiting_xr(LG.peak, sdratelimiting_LIMIT), "O(requests)"]
+          ],
+          caption: "<b>One trace, four implementations, all run here.</b> The log is exact — " +
+            "it holds every timestamp, so it admits exactly " +
+            sdratelimiting_num(LG.admitted) + " and never exceeds the limit, and it pays " +
+            "memory proportional to the request count for that. The counter overshoots by " +
+            (R.peak - sdratelimiting_LIMIT) + " on this adversarial trace and costs two " +
+            "integers. The fixed window doubles. (One detail from §2's Python: it " +
+            "<code>zadd</code>s before it counts, so a <i>rejected</i> request still occupies " +
+            "the window until it ages out.)",
+          rows: [
+            { label: "exact", value: "only the log", flag: "ok" },
+            { label: "O(1) and no boundary burst", value: "the counter", flag: "ok" },
+            { label: "cheapest and wrong", value: "the fixed window", flag: "bad" },
+            { label: "difference on this trace",
+              value: sdratelimiting_num(F.admitted - LG.admitted) + " requests", flag: "warn" }
+          ]
+        }),
+        st(4, {
+          title: "verdict", status: "THE DEFAULT", flag: "ok",
+          op: "O(1) memory, no boundary burst, approximate",
+          caption: "<b>O(1) memory, no boundary burst, approximate — and that is what most " +
+            "production limiters use.</b> Saying <i>why</i> the approximation is acceptable " +
+            "(it assumes even spreading, and real traffic mostly is) is a better answer than " +
+            "the algorithm's name. Keep the log for low limits where exactness is required, " +
+            "and the fixed window for rough internal caps. The third tab takes the algorithm " +
+            "the page actually recommends for a public API and asks the harder question: what " +
+            "happens when there are ten of these?",
+          rows: [
+            { label: "sliding counter", value: "the general default", flag: "ok" },
+            { label: "token bucket", value: "APIs — bursts are desirable", flag: "ok" },
+            { label: "leaky bucket", value: "protecting a fixed-rate downstream" },
+            { label: "still to answer", value: "ten servers, and Redis being down", flag: "warn" }
+          ]
+        })
+      ]
+    };
+  }
+
+  // --- tab 3 · token bucket across ten servers ---------------------------
+  function sdratelimiting_tabFleet() {
+    var ONE = sdratelimiting_TB_ONE, RACE = sdratelimiting_TB_RACE;
+    var E = ONE.events;
+    function st(k, extra) {
+      var a = 0, r = 0, i, tok = sdratelimiting_CAP;
+      for (i = 0; i < k; i++) { a += E[i].ok; r += E[i].no; tok = E[i].after; }
+      var o = {
+        tb: true, upto: k, tokens: tok,
+        tiles: [
+          sdratelimiting_tile("admitted", String(a),
+            "of " + sdratelimiting_TB_OFFERED + " offered", a ? "ok" : "idle"),
+          sdratelimiting_tile("rejected · 429", String(r),
+            r ? "bucket empty" : "none yet", r ? "warn" : "idle"),
+          sdratelimiting_tile("tokens", sdratelimiting_f1(tok) + " / " + sdratelimiting_CAP,
+            "refill " + sdratelimiting_RATE + "/s, lazily",
+            tok < 1 ? "warn" : "ok"),
+          sdratelimiting_tile("limiters", "1",
+            "one bucket, one client", "ok")
+        ]
+      };
+      var key;
+      for (key in extra) if (extra.hasOwnProperty(key)) o[key] = extra[key];
+      return o;
+    }
+    function fleetTile(n, label, admitted, flag) {
+      return [
+        sdratelimiting_tile("admitted", String(admitted),
+          "of " + sdratelimiting_TB_OFFERED + " offered", flag),
+        sdratelimiting_tile("the correct answer", String(ONE.admitted),
+          "one atomic bucket", "ok"),
+        sdratelimiting_tile("overshoot",
+          sdratelimiting_xr(admitted, ONE.admitted), "against one bucket",
+          admitted > ONE.admitted ? "bad" : admitted < ONE.admitted ? "warn" : "ok"),
+        sdratelimiting_tile("limiters", String(n), label, n > 1 ? "warn" : "ok")
+      ];
+    }
+
+    return {
+      id: "fleet", label: "Ten servers, and Redis",
+      phases: ["capacity 10", "the burst", "sustained", "lazy refill", "ten buckets",
+        "the race", "atomic", "Redis is down", "verdict"],
+      steps: [
+        st(0, {
+          title: "token bucket", status: "CAPACITY " + sdratelimiting_CAP,
+          op: "capacity " + sdratelimiting_CAP + ", refill " + sdratelimiting_RATE + "/s",
+          caption: "<b>The algorithm the page recommends for a public API</b>, because real " +
+            "clients are bursty and a limiter that refuses a legitimate burst after a quiet " +
+            "period is annoying without being safer. A bucket of capacity <b>" +
+            sdratelimiting_CAP + "</b> refills at <b>" + sdratelimiting_RATE +
+            "/second</b>; each request takes a token; empty means reject. The client has been " +
+            "idle for 10 seconds, so the bucket is full.",
+          rows: [
+            { label: "capacity", value: String(sdratelimiting_CAP) },
+            { label: "refill", value: sdratelimiting_RATE + " token/s" },
+            { label: "long-run average it enforces", value: sdratelimiting_RATE + "/s" },
+            { label: "burst it permits", value: "up to " + sdratelimiting_CAP, flag: "ok" }
+          ]
+        }),
+        st(1, {
+          title: "the burst", status: E[0].ok + " ADMITTED", flag: "ok",
+          op: "10 requests at once, after 10 s idle",
+          caption: "<b>All " + E[0].ok + " are admitted at once and the bucket empties.</b> " +
+            "This is the property you are choosing the algorithm for: the client was quiet, so " +
+            "it accrued credit, and it may spend it in one instant. A sliding window counter " +
+            "would have allowed this too — what a bucket adds is that the size of the " +
+            "permissible burst is <b>an explicit number you set</b>, separate from the " +
+            "sustained rate.",
+          rows: [
+            { label: "tokens before", value: sdratelimiting_f1(E[0].before) + " / " +
+              sdratelimiting_CAP },
+            { label: "admitted", value: String(E[0].ok), flag: "ok" },
+            { label: "tokens after", value: sdratelimiting_f1(E[0].after) + " / " +
+              sdratelimiting_CAP, flag: "warn" },
+            { label: "rejected", value: String(E[0].no) }
+          ]
+        }),
+        st(3, {
+          title: "sustained", status: "THROTTLED TO " + sdratelimiting_RATE + "/s",
+          flag: "warn",
+          op: "5 requests per second, arriving together",
+          caption: "<b>Now the client keeps pushing: 5 per second.</b> The bucket refills at " +
+            "one token per second, so <b>one</b> gets through each second and four are " +
+            "refused. The long-run average is enforced exactly, and it was never in tension " +
+            "with the burst — the two are separate dials. Over these seconds the client " +
+            "offered " + (E[1].n + E[2].n) + " and received " + (E[1].ok + E[2].ok) + ".",
+          rows: [
+            { label: "offered per second", value: "5" },
+            { label: "admitted per second", value: String(E[1].ok), flag: "warn" },
+            { label: "refill", value: sdratelimiting_RATE + " token/s" },
+            { label: "tokens", value: sdratelimiting_f1(E[2].after) + " / " +
+              sdratelimiting_CAP, flag: "warn" }
+          ],
+          mono: "HTTP/1.1 429 Too Many Requests   Retry-After: 1   " +
+            "X-RateLimit-Limit: 10   X-RateLimit-Remaining: 0"
+        }),
+        st(5, {
+          title: "lazy refill", status: "NO TIMER", flag: "ok",
+          op: "tokens = min(capacity, tokens + elapsed × rate)",
+          caption: "<b>There is no background job refilling anything.</b> On each request the " +
+            "limiter computes what accrued since the last one: <code>tokens = min(" +
+            sdratelimiting_CAP + ", tokens + elapsed × " + sdratelimiting_RATE +
+            ")</code>. That single line is why a bucket per client costs two fields and no " +
+            "scheduler — and why the <code>min</code> matters: credit stops accruing at the " +
+            "capacity, so an hour of silence still buys exactly " + sdratelimiting_CAP +
+            " requests, not 3,600. Full run: <b>" + ONE.admitted + " admitted of " +
+            sdratelimiting_TB_OFFERED + "</b>.",
+          rows: [
+            { label: "state stored", value: "tokens, last  — two fields", flag: "ok" },
+            { label: "timers", value: "none", flag: "ok" },
+            { label: "an hour idle buys", value: String(sdratelimiting_CAP) +
+              " requests, not 3,600", flag: "ok" },
+            { label: "this run", value: ONE.admitted + " of " + sdratelimiting_TB_OFFERED,
+              flag: "ok" }
+          ]
+        }),
+        (function () {
+          var s = st(5, {
+            title: "now put it on ten servers", status: sdratelimiting_LOCAL.admitted +
+              " ADMITTED", flag: "bad",
+            fleet: sdratelimiting_SERVERS, fleetPer: sdratelimiting_LOCAL.per,
+            op: "each server keeps its own bucket in process",
+            caption: "<b>The real problem.</b> Ten servers behind a balancer, each with its " +
+              "own in-process bucket, and the same trace round-robins across them. Each " +
+              "server sees a tenth of the traffic against a <i>full</i> bucket, so almost " +
+              "nothing is refused: <b>" + sdratelimiting_LOCAL.admitted + " of " +
+              sdratelimiting_TB_OFFERED + " admitted, against the correct " + ONE.admitted +
+              "</b>. The page states the same arithmetic in its own units: ten servers each " +
+              "enforcing 100/min is an effective limit of <b>" +
+              sdratelimiting_num(sdratelimiting_SERVERS * sdratelimiting_LIMIT) +
+              "/min</b>. The limit you configured is not the limit you have.",
+            rows: [
+              { label: "servers", value: String(sdratelimiting_SERVERS), flag: "bad" },
+              { label: "capacity per server", value: String(sdratelimiting_CAP) },
+              { label: "effective capacity",
+                value: String(sdratelimiting_SERVERS * sdratelimiting_CAP), flag: "bad" },
+              { label: "admitted", value: sdratelimiting_LOCAL.admitted + " vs " +
+                ONE.admitted + " correct", flag: "bad" }
+            ]
+          });
+          s.tiles = fleetTile(sdratelimiting_SERVERS, "one bucket each",
+            sdratelimiting_LOCAL.admitted, "bad");
+          return s;
+        })(),
+        (function () {
+          var s = st(5, {
+            title: "central store, read then write", status: RACE.admitted + " ADMITTED",
+            flag: "bad", race: true,
+            op: "GET tokens, decide, SET tokens",
+            caption: "<b>So the counters move to Redis — correct arithmetic, one network hop, " +
+              "one dependency — and the bug moves with them.</b> Read the token count, decide, " +
+              "write it back: when the 5 requests of a second arrive together, all five read " +
+              "the same <code>tokens = 1</code>, all five decide to allow, and one write " +
+              "lands. <b>" + RACE.admitted + " admitted instead of " + ONE.admitted +
+              "</b> — the counter is shared and still wrong, because the read and the write " +
+              "are two operations with a gap between them.",
+            rows: [
+              { label: "tokens available each second", value: "1" },
+              { label: "concurrent readers", value: "5", flag: "bad" },
+              { label: "admitted per second", value: String(RACE.events[1].ok), flag: "bad" },
+              { label: "run total", value: RACE.admitted + " vs " + ONE.admitted + " correct",
+                flag: "bad" }
+            ]
+          });
+          s.tiles = fleetTile(1, "Redis, non-atomic", RACE.admitted, "bad");
+          return s;
+        })(),
+        (function () {
+          var s = st(5, {
+            title: "INCR, or a Lua script", status: ONE.admitted + " ADMITTED", flag: "ok",
+            op: "the whole read-modify-write runs as one operation",
+            caption: "<b><code>INCR</code> is atomic by construction; for anything more " +
+              "complex than a counter, a Lua script — Redis runs the whole script as one " +
+              "operation, so there is no window between reading the tokens and writing them " +
+              "back.</b> The five concurrent requests are now serialised inside Redis: the " +
+              "first takes the token, the other four see zero. Back to <b>" + ONE.admitted +
+              " of " + sdratelimiting_TB_OFFERED + "</b>, which is the number one bucket on " +
+              "one machine would have produced.",
+            rows: [
+              { label: "atomicity", value: "the script is one operation", flag: "ok" },
+              { label: "admitted", value: String(ONE.admitted), flag: "ok" },
+              { label: "matches a single limiter", value: "exactly", flag: "ok" },
+              { label: "cost", value: "one network hop per request", flag: "warn" }
+            ]
+          });
+          s.tiles = fleetTile(1, "Redis, Lua — atomic", ONE.admitted, "ok");
+          return s;
+        })(),
+        (function () {
+          var s = st(5, {
+            title: "Redis is down", status: "A DECISION", flag: "bad",
+            down: true,
+            op: "fail open, or fail closed?",
+            tableHead: ["when the store is gone", "admitted", "what it costs"],
+            tableRows: [
+              ["fail closed — reject everything", "0",
+                "the limiter is now the outage"],
+              ["fail open — allow everything", String(sdratelimiting_TB_OFFERED),
+                "no protection at all while it lasts"],
+              ["fail open + local limit/N, balanced",
+                String(sdratelimiting_DIVIDED.admitted),
+                "under-permissive but bounded, and up"],
+              ["fail open + local limit/N, all on one server",
+                String(sdratelimiting_SKEWED.admitted),
+                "the client gets a tenth of its entitlement"]
+            ],
+            caption: "<b>And say what happens when Redis is down — volunteering this is a " +
+              "strong signal.</b> Fail closed and every request is refused: the limiter " +
+              "becomes the outage it existed to prevent. Fail open and there is no protection " +
+              "at all. The page's answer for a public API is fail open <i>with a conservative " +
+              "local fallback</i> — each server enforcing capacity/" + sdratelimiting_SERVERS +
+              ", which on this trace admits <b>" + sdratelimiting_DIVIDED.admitted +
+              "</b> against the correct " + ONE.admitted + ": too strict rather than too " +
+              "loose, and the service stays up. Its weakness is also computed here — send " +
+              "everything to one server and the same fallback admits <b>" +
+              sdratelimiting_SKEWED.admitted + "</b>.",
+            rows: [
+              { label: "fail closed", value: "0 admitted", flag: "bad" },
+              { label: "fail open", value: sdratelimiting_TB_OFFERED + " admitted",
+                flag: "bad" },
+              { label: "fail open + limit/N", value: sdratelimiting_DIVIDED.admitted +
+                " admitted", flag: "ok" },
+              { label: "the same, under skew", value: sdratelimiting_SKEWED.admitted +
+                " admitted", flag: "warn" }
+            ]
+          });
+          s.tiles = fleetTile(sdratelimiting_SERVERS, "local fallback, limit/N",
+            sdratelimiting_DIVIDED.admitted, "warn");
+          return s;
+        })(),
+        (function () {
+          var s = st(5, {
+            title: "verdict", status: "THE ANSWER", flag: "ok",
+            op: "token bucket at the gateway, Redis + Lua, fail open",
+            tableHead: ["approach (§3)", "admitted on this trace", "against " +
+              ONE.admitted + " correct"],
+            tableRows: [
+              ["one limiter, atomic", String(ONE.admitted),
+                sdratelimiting_xr(ONE.admitted, ONE.admitted)],
+              ["local buckets on " + sdratelimiting_SERVERS + " servers",
+                String(sdratelimiting_LOCAL.admitted),
+                sdratelimiting_xr(sdratelimiting_LOCAL.admitted, ONE.admitted)],
+              ["central store, read then write", String(RACE.admitted),
+                sdratelimiting_xr(RACE.admitted, ONE.admitted)],
+              ["central store, Lua", String(ONE.admitted),
+                sdratelimiting_xr(ONE.admitted, ONE.admitted)],
+              ["local, divided by " + sdratelimiting_SERVERS,
+                String(sdratelimiting_DIVIDED.admitted),
+                sdratelimiting_xr(sdratelimiting_DIVIDED.admitted, ONE.admitted)]
+            ],
+            caption: "<b>Five deployments of one algorithm, and only two of them enforce the " +
+              "limit you configured.</b> Token bucket at the API gateway — <i>at the edge, " +
+              "before the expensive work; rejecting a request after a database query has " +
+              "already spent the resource the limiter protects</i> — keyed by API key, with a " +
+              "stricter IP limit on the auth endpoints. Counters in Redis, updated by a Lua " +
+              "script so the read-modify-write is atomic. Fail open with a conservative local " +
+              "limit if Redis is gone. 429 with <code>Retry-After</code>, and the limit " +
+              "headers on every response so clients throttle themselves.",
+            rows: [
+              { label: "algorithm", value: "token bucket — bursts are legitimate", flag: "ok" },
+              { label: "where", value: "the gateway, not the application", flag: "ok" },
+              { label: "atomicity", value: "INCR or Lua, never read-then-write", flag: "ok" },
+              { label: "when the store is down", value: "fail open, locally bounded",
+                flag: "ok" }
+            ]
+          });
+          s.tiles = fleetTile(1, "gateway + Redis + Lua", ONE.admitted, "ok");
+          return s;
+        })()
+      ]
+    };
+  }
+
+  S["sdratelimiting"] = {
+    title: "Run one arrival trace through the algorithms",
+    note: "The algorithms are implemented and <b>run</b> here, request by request, on the " +
+      "page's own boundary example: <b>limit 100/minute</b>, nothing for 58 seconds, " +
+      "<b>100 requests at 12:00:59</b>, one more, <b>100 at 12:01:00</b> — plus a declared " +
+      "probe of 100 at 12:01:30 to ask whether the limiter reopens. The third tab uses §2's " +
+      "token bucket exactly: <b>capacity 10, refill 1/s</b>, idle ten seconds, then a burst of " +
+      "ten and a sustained five per second, spread across the <b>ten servers</b> of §3. Every " +
+      "admitted, rejected and peak figure below is the loop's output — including the peak " +
+      "inside any <i>true</i> 60-second span, which is the number a fixed window hides. One " +
+      "departure from the page, shown rather than hidden: §2's worked example weights the " +
+      "previous window by <b>0.25</b> at 12:01:15; the weight that makes the algorithm stop " +
+      "the boundary burst its own table promises to stop is <b>0.75</b>, and the sim runs both " +
+      "so the trace can settle it.",
+    interval: 1500,
+
+    scenarios: [
+      sdratelimiting_tabFixed(),
+      sdratelimiting_tabSlide(),
+      sdratelimiting_tabFleet()
+    ],
+
+    draw: function (step, d, ctx) {
+      var i, tiles = step.tiles || [];
+      var head = [];
+      for (i = 0; i < tiles.length; i++) {
+        head.push(i === 0
+          ? d.big(tiles[i].value, tiles[i].label, tiles[i].flag)
+          : d.stat(tiles[i]));
+      }
+
+      var body = [sdratelimiting_chips(d, ctx), d.cols(head)];
+
+      body.push(d.node({
+        title: step.title,
+        status: step.status,
+        statusFlag: step.flag || "idle",
+        badge: step.tb ? "token bucket" : "limit " + sdratelimiting_LIMIT + "/min",
+        meta: step.op,
+        flag: step.flag || "idle",
+        rows: step.rows
+      }));
+
+      if (step.tb) {
+        // the bucket, one cell per token
+        var toks = [], whole = Math.floor(step.tokens + 1e-9);
+        for (i = 0; i < sdratelimiting_CAP; i++) {
+          toks.push({
+            label: "",
+            flag: i < whole ? "ok" : "idle",
+            title: i < whole ? "a token" : "empty — a request arriving now is refused"
+          });
+        }
+        body.push(d.cells(toks, {
+          label: "the bucket — " + sdratelimiting_f1(step.tokens) + " of " +
+            sdratelimiting_CAP + " tokens",
+          dense: true
+        }));
+
+        if (step.fleet) {
+          var fc = [];
+          for (i = 0; i < step.fleetPer.length; i++) {
+            fc.push({
+              label: String(step.fleetPer[i].admitted),
+              flag: step.fleetPer[i].admitted >= step.fleetPer[i].offered ? "bad" : "warn",
+              title: "server " + (i + 1) + " — offered " + step.fleetPer[i].offered +
+                ", admitted " + step.fleetPer[i].admitted + ", own bucket of " +
+                sdratelimiting_CAP
+            });
+          }
+          body.push(d.cells(fc, {
+            label: sdratelimiting_SERVERS + " servers, admitted by each — every bucket " +
+              "started full"
+          }));
+        }
+        if (step.race) {
+          body.push(d.mono("GET tb:user -> tokens = 1      (all five read this)\n" +
+            "  allow, allow, allow, allow, allow\n" +
+            "SET tb:user tokens = 0        (one write lands, five requests passed)", "bad"));
+        }
+        if (step.down) {
+          body.push(d.mono("redis.call(EVALSHA) -> ConnectionError\n" +
+            "  fail closed -> 429 for everyone   ·   fail open -> no limit at all", "bad"));
+        }
+        body.push(d.table(["clock", "offered", "admitted", "429", "bucket after"],
+          (function () {
+            var rows = [], k, e;
+            for (k = 0; k < step.upto && k < sdratelimiting_TB_ONE.events.length; k++) {
+              e = sdratelimiting_TB_ONE.events[k];
+              rows.push(["t+" + e.s + "s", String(e.n), String(e.ok), String(e.no),
+                sdratelimiting_f1(e.after) + " / " + sdratelimiting_CAP]);
+            }
+            if (!rows.length) rows.push(["—", "0", "0", "0",
+              sdratelimiting_CAP + " / " + sdratelimiting_CAP]);
+            return rows;
+          })()));
+      } else {
+        var lanes = sdratelimiting_lanes(d, step.run, step.upto);
+        body.push(d.stack(lanes));
+        if (step.reset) {
+          body.push(d.mono("12:00:59  counter = 100   ->   12:01:00  counter = 0", "warn"));
+        }
+        if (step.eg) {
+          body.push(d.mono(
+            "12:01:15   as printed in the page:   40 + 90 x 0.25 = " +
+              sdratelimiting_f1(sdratelimiting_EG_PAGE) + "   -> allow\n" +
+            "12:01:15   45 s of 12:00 still in view:  40 + 90 x 0.75 = " +
+              sdratelimiting_f1(sdratelimiting_EG_STD) + "  -> reject", "warn"));
+        }
+        if (step.mono) body.push(d.mono(step.mono, step.flag === "bad" ? "bad" : undefined));
+        body.push(sdratelimiting_ledger(d, step.run, step.upto));
+      }
+
+      if (step.tableHead) body.push(d.table(step.tableHead, step.tableRows));
+
+      body.push(d.note(
+        step.tb
+          ? "A bucket separates two things a single number cannot express: how fast you may go, " +
+            "and how much you may save up."
+          : "The lanes show <i>where in each minute</i> the admitted traffic landed — which is " +
+            "the whole difference between a limit that is respected and one that is gamed."
+      ));
+
+      return d.stack(body);
+    }
+  };
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdreplicationandco  (replication-and-consistency.md)
+//
+// The time axis is one write stream crossing one leader and two followers,
+// followed by the leader dying. Nothing about the sequence is invented: it is
+// the page's own order — replicate (§2), lag (§3), fail over (§6) — and the
+// three tabs are the page's three ack policies applied to the identical
+// traffic and the identical hardware event.
+//
+// The unifying question the sim answers: ONE 900 ms hiccup happens on one
+// follower in every run. Where does it go? Under async it becomes replication
+// lag, and the lag becomes wrong answers to users. Under semi-sync it goes
+// nowhere, because the ack came from the other replica. Under fully
+// synchronous replication it becomes write latency for everybody — which is
+// the page's "trap", stated as arithmetic instead of as an opinion.
+//
+// CONFIG — page figures, used verbatim
+//   N = 3                     §5: "N=3, W=2, R=2   the standard"
+//   W = 2, R = 2              §5, used for the leaderless row in the closing
+//                             table: W + R > N, so the sets must overlap
+//   detect 10–30 s            §6: "heartbeat timeout (typically 10-30s)"
+//   ~30 s write unavailability §7: "roughly thirty seconds of write
+//                             unavailability plus a cold cache"
+//   30 s read-from-leader     §7: "a user's own data for thirty seconds after
+//                             they write it — that goes to the leader"
+//   four failover steps       §6: DETECT · ELECT · PROMOTE · REDIRECT
+//   fencing tokens            §6: monotonically increasing term number
+//
+// CONFIG — declared here, because the page publishes no such figures
+//   200 writes/s on the leader, measured over a 60 s window (12,000 writes)
+//   1,000 users post and then reload at +250 ms, and read again at +600 ms
+//   follower A: same AZ, 2 ms round trip, 120 ms steady-state lag when async
+//   follower B: cross-AZ, 8 ms round trip, and one 900 ms stall in the window
+//   leader commit 1 ms; per-node availability 99.9%
+//   detect 20 s (the midpoint of the page's 10–30 s) + 10 s to elect, promote
+//   and redirect = the page's ~30 s
+//   25% of clients keep talking to the old leader for 15 s after failover
+//
+// EVERY figure on screen is computed from those constants. Read routing is
+// counted user by user in a loop, not asserted: with round-robin replica
+// reads the four (first replica, second replica) pairs are equal quarters of
+// the 1,000 users, and the miss and monotonic counts fall out of the lags.
+// ======================================================================
+
+var sdrepl_NODES     = 3;       // page §5: N = 3
+var sdrepl_RATE      = 200;     // declared: writes/s on the leader
+var sdrepl_WINDOW_S  = 60;      // declared: measurement window
+var sdrepl_WRITES    = sdrepl_RATE * sdrepl_WINDOW_S;
+var sdrepl_USERS     = 1000;    // declared: users who post, then reload
+var sdrepl_RELOAD_MS = 250;     // declared: the reload after posting
+var sdrepl_SECOND_MS = 600;     // declared: a second read, moments later
+var sdrepl_STALL_MS  = 900;     // declared: one hiccup on follower B
+var sdrepl_LAG_A     = 120;     // declared: follower A's async lag
+var sdrepl_LOCAL_MS  = 1;       // declared: leader commit
+var sdrepl_RTT_A     = 2;       // declared: same-AZ round trip
+var sdrepl_RTT_B     = 8;       // declared: cross-AZ round trip
+var sdrepl_AV        = 0.999;   // declared: per-node availability
+var sdrepl_MIN_YR    = 365 * 24 * 60;
+var sdrepl_DETECT_S  = 20;      // page: heartbeat timeout, typically 10–30 s
+var sdrepl_PROMOTE_S = 10;      // declared: elect + promote + redirect
+var sdrepl_FAILOVER_S = sdrepl_DETECT_S + sdrepl_PROMOTE_S;   // page: ~30 s
+var sdrepl_RYW_S     = 30;      // page: leader reads for thirty seconds
+var sdrepl_STALE_SHR = 0.25;    // declared: clients still on the old leader
+var sdrepl_ZOMBIE_S  = 15;      // declared: before anyone notices
+var sdrepl_SAMPLE    = 24;      // users drawn as cells
+
+// the leaderless alternative, computed on the same constants (page §5)
+var sdrepl_W = 2;
+var sdrepl_R = 2;
+var sdrepl_OVERLAP = sdrepl_W + sdrepl_R - sdrepl_NODES;      // > 0 ⇒ overlap
+var sdrepl_QUORUM_MS = sdrepl_LOCAL_MS + sdrepl_RTT_A;        // 2nd of 3 acks
+var sdrepl_QUORUM_AV =
+  3 * sdrepl_AV * sdrepl_AV * (1 - sdrepl_AV) + Math.pow(sdrepl_AV, 3);
+
+function sdrepl_n(v, dec) {
+  if (!isFinite(v)) return "—";
+  return Number(v).toLocaleString("en-US", {
+    minimumFractionDigits: dec === undefined ? 0 : dec,
+    maximumFractionDigits: dec === undefined ? 0 : dec
+  });
+}
+function sdrepl_ms(v) { return v >= 100 ? sdrepl_n(v) + " ms" : sdrepl_n(v, 0) + " ms"; }
+function sdrepl_pc(v, dec) { return sdrepl_n(v * 100, dec === undefined ? 2 : dec) + "%"; }
+function sdrepl_pct(a, b) { return b ? (a / b) * 100 : 0; }
+
+// ----------------------------------------------------------------------
+// One run. ack decides where the hiccup lands; route decides whether a
+// user's own read can see their own write; fence decides what a returning
+// leader is allowed to do.
+// ----------------------------------------------------------------------
+function sdrepl_solve(cfg) {
+  var r = {}, i;
+
+  // --- where the 900 ms hiccup goes ------------------------------------
+  // async: it is lag on B, and A carries its own steady-state lag too.
+  // semi-sync: the ack came from A, so A is current and B's stall is invisible
+  //            to the writer — but B is still 900 ms behind for other readers.
+  // sync-all: B cannot be behind, because every write waits for it. The stall
+  //            becomes write latency instead.
+  r.lagA = cfg.ack === "async" ? sdrepl_LAG_A : 0;
+  r.lagB = cfg.ack === "all" ? 0 : sdrepl_STALL_MS;
+  r.blocked = cfg.ack === "all"
+    ? Math.round(sdrepl_RATE * sdrepl_STALL_MS / 1000) : 0;
+
+  // --- write cost -------------------------------------------------------
+  r.writeMs = sdrepl_LOCAL_MS + (
+    cfg.ack === "async" ? 0
+      : cfg.ack === "one" ? Math.min(sdrepl_RTT_A, sdrepl_RTT_B)
+      : Math.max(sdrepl_RTT_A, sdrepl_RTT_B));
+  r.worstMs = cfg.ack === "all" ? sdrepl_LOCAL_MS + sdrepl_STALL_MS : r.writeMs;
+
+  // --- write availability: the page's "product of every node's" ---------
+  var p = sdrepl_AV;
+  r.av = cfg.ack === "async" ? p
+    : cfg.ack === "one" ? p * (1 - (1 - p) * (1 - p))
+    : Math.pow(p, sdrepl_NODES);
+  r.nodesNeeded = cfg.ack === "async" ? 1 : cfg.ack === "one" ? 2 : sdrepl_NODES;
+  r.downMin = (1 - r.av) * sdrepl_MIN_YR;
+
+  // --- read-your-writes and monotonic reads, counted user by user -------
+  var lags = [r.lagA, r.lagB];
+  r.miss1 = 0; r.hit1 = 0; r.mono = 0; r.sample = [];
+  for (i = 0; i < sdrepl_USERS; i++) {
+    var toLeader = cfg.route === "leader";
+    var w1 = toLeader ? -1 : (i % 2);
+    var w2 = toLeader ? -1 : (Math.floor(i / 2) % 2);
+    var l1 = toLeader ? 0 : lags[w1];
+    var l2 = toLeader ? 0 : lags[w2];
+    var saw1 = l1 <= sdrepl_RELOAD_MS;
+    var saw2 = l2 <= sdrepl_SECOND_MS;
+    if (saw1) r.hit1++; else r.miss1++;
+    if (saw1 && !saw2) r.mono++;
+    if (i < sdrepl_SAMPLE) {
+      r.sample.push({
+        w1: toLeader ? "L" : (w1 === 0 ? "A" : "B"),
+        w2: toLeader ? "L" : (w2 === 0 ? "A" : "B"),
+        saw1: saw1, saw2: saw2
+      });
+    }
+  }
+
+  // --- failover ---------------------------------------------------------
+  // the new leader is the most caught-up follower, so the writes that are
+  // lost are the ones acked but not yet on ANY follower.
+  r.bestLag = Math.min(r.lagA, r.lagB);
+  r.lost = Math.ceil(sdrepl_RATE * r.bestLag / 1000);
+  r.rejected = sdrepl_RATE * sdrepl_FAILOVER_S;
+  r.newLeader = r.lagA <= r.lagB ? "follower A" : "follower B";
+
+  // --- the old leader comes back ----------------------------------------
+  r.zombieTries = Math.round(sdrepl_RATE * sdrepl_STALE_SHR) * sdrepl_ZOMBIE_S;
+  r.diverged = cfg.fence ? 0 : r.zombieTries;
+  r.fencedOff = cfg.fence ? r.zombieTries : 0;
+  r.damage = r.lost + r.diverged;
+
+  return r;
+}
+
+var sdrepl_PHASES = [
+  "config", "steady writes", "the hiccup", "lag", "read-your-writes",
+  "monotonic reads", "leader dies", "failover", "old leader returns"
+];
+
+function sdrepl_run(cfg) {
+  var r = sdrepl_solve(cfg);
+  var steps = [];
+  function f(ph, flag, caption) {
+    steps.push({ ph: ph, flag: flag, caption: caption, r: r, cfg: cfg });
+  }
+
+  f(0, "idle",
+    "<b>One leader, " + (sdrepl_NODES - 1) + " followers, " +
+    sdrepl_n(sdrepl_RATE) + " writes a second.</b> " + cfg.opening +
+    " The same " + sdrepl_n(sdrepl_STALL_MS) + " ms hiccup happens on follower B " +
+    "in every run — watch where it ends up. Press Play.");
+
+  f(1, cfg.ack === "all" ? "warn" : "ok",
+    "<b>" + sdrepl_n(sdrepl_WRITES) + " writes in " + sdrepl_WINDOW_S +
+    " seconds.</b> This build acks after <b>" + cfg.ackWords + "</b>, so a write " +
+    "costs " + sdrepl_LOCAL_MS + " ms locally " +
+    (cfg.ack === "async"
+      ? "and nothing else: <b>" + sdrepl_ms(r.writeMs) + "</b>."
+      : "plus the " + (cfg.ack === "one" ? "nearest" : "slowest") +
+        " replica's round trip: <b>" + sdrepl_ms(r.writeMs) + "</b>.") +
+    " The number that matters more is underneath it: a write needs <b>" +
+    r.nodesNeeded + " of " + sdrepl_NODES + " nodes</b> up, so write " +
+    "availability is " + (cfg.ack === "async" ? "just the leader's own " + sdrepl_pc(sdrepl_AV, 1)
+      : cfg.ack === "one" ? sdrepl_pc(sdrepl_AV, 1) + " × (1 − 0.001²)"
+      : sdrepl_pc(sdrepl_AV, 1) + "³") +
+    " = <b>" + sdrepl_pc(r.av, 4) + "</b>, which is <b>" +
+    sdrepl_n(r.downMin) + " minutes a year</b> in which writes fail.");
+
+  f(2, cfg.ack === "all" ? "bad" : cfg.ack === "one" ? "ok" : "warn",
+    "<b>Follower B stalls for " + sdrepl_n(sdrepl_STALL_MS) + " ms</b> — a GC pause, " +
+    "a slow disk, a noisy neighbour. It is the same event in all three tabs, and " +
+    "this is the frame where the topologies stop agreeing. " +
+    (cfg.ack === "all"
+      ? "Here every write is waiting on B, so the stall becomes <b>write latency for " +
+        "everybody</b>: " + sdrepl_n(r.blocked) + " writes block for up to <b>" +
+        sdrepl_ms(r.worstMs) + "</b>. <b>One slow replica blocks all writes</b> — the " +
+        "page's own row in the §2 table."
+      : cfg.ack === "one"
+        ? "Here the ack came from A, which is fine, so nothing blocks — the stall turns " +
+          "into <b>lag on B only</b>, and no writer waits for it."
+        : "Here nothing waits for anything, so the stall turns entirely into <b>lag</b>. " +
+          "No write slowed down, no error was raised, and no alert fired."));
+
+  f(3, r.lagB > 0 ? "warn" : "ok",
+    "<b>Lag snapshot.</b> Follower A is <b>" + sdrepl_ms(r.lagA) + "</b> behind, " +
+    "follower B is <b>" + sdrepl_ms(r.lagB) + "</b> behind. " +
+    (r.lagB > 0
+      ? "In writes, that is " + sdrepl_n(Math.round(sdrepl_RATE * r.lagB / 1000)) +
+        " records that exist on the leader and not on B. The page is blunt about this " +
+        "one: <b>monitor replication lag and alert on it</b> — it is the single most " +
+        "useful health metric for a replicated database, and it degrades silently " +
+        "before it breaks visibly."
+      : "Zero, by construction: a write is not acked until every replica has it, so " +
+        "there is no such thing as a stale replica here. That is what the previous " +
+        "frame bought."));
+
+  f(4, r.miss1 > 0 ? "bad" : "ok",
+    "<b>" + sdrepl_n(sdrepl_USERS) + " users post a comment and the page reloads " +
+    sdrepl_RELOAD_MS + " ms later.</b> " +
+    (cfg.route === "leader"
+      ? "Reads of a user's <i>own</i> mutable data go to the leader for <b>" +
+        sdrepl_RYW_S + " seconds</b> after they write — the page's pragmatic fix — so " +
+        "all " + sdrepl_n(r.hit1) + " of them see their comment. Note what this is " +
+        "<i>not</i>: it is not leader reads for everything. Scoping it to the user's own " +
+        "recent writes is what keeps leader load small."
+      : "Reads are round-robined across the replicas. A read sees the comment only if " +
+        "that replica's lag is under " + sdrepl_RELOAD_MS + " ms — A at " +
+        sdrepl_ms(r.lagA) + " does, B at " + sdrepl_ms(r.lagB) + " does not. Result: <b>" +
+        sdrepl_n(r.miss1) + " of " + sdrepl_n(sdrepl_USERS) + " users (" +
+        sdrepl_n(sdrepl_pct(r.miss1, sdrepl_USERS), 0) + "%) reload and their own " +
+        "comment is gone.</b> Nothing errored. This is <b>read-your-writes</b>, and it " +
+        "is the bug users actually notice."));
+
+  f(5, r.mono > 0 ? "bad" : "ok",
+    "<b>The same users read again at " + sdrepl_SECOND_MS + " ms</b>, and land " +
+    "wherever routing sends them. " +
+    (r.mono > 0
+      ? "<b>" + sdrepl_n(r.mono) + " of them saw the comment on the first read and not " +
+        "on the second</b> — two successive reads, two replicas, two different lags, and " +
+        "<b>time appears to go backwards</b>. That is <b>monotonic reads</b>, and the fix " +
+        "is the same shape: route a given user consistently to one replica."
+      : "All " + sdrepl_n(sdrepl_USERS) + " see the same thing twice: <b>0 monotonic-read " +
+        "violations</b>. The third anomaly, <b>consistent prefix</b>, cannot be shown here " +
+        "and it would be dishonest to fake it — it needs causally related writes landing " +
+        "in <i>different partitions</i>, and this run has one. Naming all three by name is " +
+        "the signal; this topology can only produce two of them."));
+
+  f(6, r.lost > 0 ? "bad" : "warn",
+    "<b>The leader dies.</b> Step 1 of 4 is <b>DETECT</b>, and until the heartbeat times " +
+    "out nobody knows. The damage is already fixed, though, and it was fixed by the ack " +
+    "policy: <b>" + sdrepl_n(r.lost) + " writes were acknowledged to clients but had not " +
+    "reached any follower</b>" +
+    (r.lost > 0
+      ? " — " + sdrepl_n(sdrepl_RATE) + "/s × the " + sdrepl_ms(r.bestLag) + " lag of the " +
+        "most caught-up follower. Those clients got a 200. The data is on a dead machine."
+      : ", because every ack waited for a replica to have it. This is the entire argument " +
+        "for semi-sync, and it costs " + sdrepl_ms(r.writeMs - sdrepl_LOCAL_MS) +
+        " per write."));
+
+  f(7, "warn",
+    "<b>ELECT · PROMOTE · REDIRECT.</b> The most up-to-date follower is <b>" +
+    r.newLeader + "</b>; it is reconfigured as leader and clients are pointed at it. " +
+    "Detection took " + sdrepl_DETECT_S + " s (the page's heartbeat timeout is typically " +
+    "10–30) and the rest " + sdrepl_PROMOTE_S + " s, so writes were unavailable for <b>" +
+    sdrepl_FAILOVER_S + " seconds</b> — " + sdrepl_n(r.rejected) + " writes rejected. " +
+    "Tuning that down is not free: <b>too short and you fail over on a network blip</b>. " +
+    "And the new leader starts with a <b>cold buffer pool</b>, so it is slow for a while " +
+    "after it is technically healthy.");
+
+  f(8, r.damage > 0 ? "bad" : "ok",
+    "<b>The old leader comes back</b> — it was never dead, just unreachable — still " +
+    "believing it leads, and <b>" + sdrepl_n(Math.round(sdrepl_RATE * sdrepl_STALE_SHR)) +
+    " writes/s</b> of clients are still pointed at it for " + sdrepl_ZOMBIE_S + " s. " +
+    (cfg.fence
+      ? "Every one of those <b>" + sdrepl_n(r.fencedOff) + " writes is rejected by " +
+        "storage</b>: leadership term 1 is stale, the new leader holds term 2, and a " +
+        "<b>fencing token</b> that has gone backwards is refused. That is how you make " +
+        "\"the old leader might still be alive\" <i>safe</i> rather than merely unlikely."
+      : "Nothing stops it. <b>" + sdrepl_n(r.diverged) + " writes land on a leader nobody " +
+        "else knows about</b> while the new leader takes its own — <b>split brain</b>, and " +
+        "the two copies now disagree. A majority quorum for election would have prevented " +
+        "the second leader; a fencing token would have made its writes harmless. This " +
+        "build has neither.") +
+    " <b>Final damage: " + sdrepl_n(r.damage) + " writes</b> that a client was told " +
+    "succeeded and that no longer exist or exist only on the wrong machine.");
+
+  return { id: cfg.id, label: cfg.label, steps: steps, phases: sdrepl_PHASES, r: r, cfg: cfg };
+}
+
+var sdrepl_ASYNC = sdrepl_run({
+  id: "async", label: "Async · replica reads",
+  ack: "async", route: "replica", fence: false,
+  ackWords: "the leader's own commit",
+  opening: "This build acks as soon as the leader has written, serves all reads from " +
+    "replicas, and fails over on a heartbeat. It is the default almost everywhere and " +
+    "it is the fastest thing on this page."
+});
+
+var sdrepl_SEMI = sdrepl_run({
+  id: "semi", label: "Semi-sync · leader window",
+  ack: "one", route: "leader", fence: true,
+  ackWords: "one replica has it",
+  opening: "This build is the page's §7 answer: ack once at least one replica has the " +
+    "write, serve reads from replicas except a user's own data for " + sdrepl_RYW_S +
+    " seconds after they write it, elect by majority and fence the loser."
+});
+
+var sdrepl_SYNC = sdrepl_run({
+  id: "sync", label: "Fully synchronous",
+  ack: "all", route: "replica", fence: true,
+  ackWords: "all " + (sdrepl_NODES - 1) + " replicas have it",
+  opening: "This build waits for every replica before acking. It is the one that sounds " +
+    "safest, and the page calls it a trap worth naming."
+});
+
+var sdrepl_RUNS = [sdrepl_ASYNC, sdrepl_SEMI, sdrepl_SYNC];
+
+function sdrepl_compare(d) {
+  var rows = [], i, run, r;
+  for (i = 0; i < sdrepl_RUNS.length; i++) {
+    run = sdrepl_RUNS[i]; r = run.r;
+    rows.push([
+      run.label,
+      sdrepl_ms(r.writeMs) + (r.blocked ? " / " + sdrepl_ms(r.worstMs) : ""),
+      sdrepl_pc(r.av, 4),
+      sdrepl_n(r.downMin) + " min",
+      sdrepl_n(r.miss1),
+      sdrepl_n(r.lost),
+      sdrepl_n(r.diverged)
+    ]);
+  }
+  rows.push([
+    "Leaderless W=" + sdrepl_W + " R=" + sdrepl_R,
+    sdrepl_ms(sdrepl_QUORUM_MS),
+    sdrepl_pc(sdrepl_QUORUM_AV, 4),
+    sdrepl_n((1 - sdrepl_QUORUM_AV) * sdrepl_MIN_YR, 1) + " min",
+    "0",
+    "0",
+    "0"
+  ]);
+  return d.table(
+    ["policy", "write", "write avail", "down/yr", "own-write misses", "acked lost", "diverged"],
+    rows);
+}
+
+S["sdreplicationandco"] = {
+  title: "Replicate one write stream three ways, then kill the leader",
+  note: "One leader and <b>" + (sdrepl_NODES - 1) + " followers</b> (the page's " +
+    "<b>N&nbsp;=&nbsp;" + sdrepl_NODES + "</b>), <b>" + sdrepl_n(sdrepl_RATE) +
+    " writes/s</b> for <b>" + sdrepl_WINDOW_S + " s</b>, and <b>" + sdrepl_n(sdrepl_USERS) +
+    "</b> users who post and reload <b>" + sdrepl_RELOAD_MS + " ms</b> later, then read " +
+    "again at <b>" + sdrepl_SECOND_MS + " ms</b>. All three tabs run the identical traffic " +
+    "and the identical hardware event: <b>one " + sdrepl_n(sdrepl_STALL_MS) +
+    "&nbsp;ms stall on follower&nbsp;B</b>. They differ only in when a write is acked and " +
+    "where a read is routed. Declared, because the page publishes no such figures: leader " +
+    "commit <b>" + sdrepl_LOCAL_MS + " ms</b>, same-AZ round trip <b>" + sdrepl_RTT_A +
+    "&nbsp;ms</b>, cross-AZ <b>" + sdrepl_RTT_B + "&nbsp;ms</b>, follower A's async lag <b>" +
+    sdrepl_LAG_A + "&nbsp;ms</b>, per-node availability <b>" + sdrepl_pc(sdrepl_AV, 1) +
+    "</b>, and <b>" + sdrepl_n(sdrepl_STALE_SHR * 100) + "%</b> of clients still pointed at " +
+    "the old leader for <b>" + sdrepl_ZOMBIE_S + " s</b> after failover. From the page: " +
+    "detection is a heartbeat timeout of <b>10–30 s</b> (" + sdrepl_DETECT_S +
+    " used here) and the four failover steps are DETECT · ELECT · PROMOTE · REDIRECT, " +
+    "giving the page's <b>~" + sdrepl_FAILOVER_S + " s</b> of write unavailability; the " +
+    "read-your-writes window is the page's <b>" + sdrepl_RYW_S + " s</b>.",
+  interval: 1500,
+  scenarios: sdrepl_RUNS,
+
+  draw: function (step, d, ctx) {
+    var r = step.r, cfg = step.cfg, ph = step.ph, i;
+
+    // ---- phase strip: which part of the run this frame shows -------------
+    var names = (ctx.scenario && ctx.scenario.phases) || sdrepl_PHASES;
+    var chips = [];
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i], flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+
+    // ---- head ------------------------------------------------------------
+    var head = d.cols([
+      d.big(ph >= 1 ? sdrepl_ms(r.writeMs) : "—", "write ack",
+        ph < 1 ? "idle" : r.writeMs <= sdrepl_LOCAL_MS + sdrepl_RTT_A ? "ok" : "warn"),
+      d.stat({
+        label: "write availability",
+        value: ph >= 1 ? sdrepl_pc(r.av, 4) : "—",
+        sub: ph >= 1 ? sdrepl_n(r.downMin) + " min/yr of failed writes"
+          : "needs " + r.nodesNeeded + " of " + sdrepl_NODES + " nodes",
+        flag: ph < 1 ? "idle" : r.av >= sdrepl_AV ? "ok" : "warn"
+      }),
+      d.stat({
+        label: "users who lost their own write",
+        value: ph >= 4 ? sdrepl_n(r.miss1) : "—",
+        sub: ph >= 5 ? sdrepl_n(r.mono) + " also saw time go backwards"
+          : "of " + sdrepl_n(sdrepl_USERS) + " reloads",
+        flag: ph < 4 ? "idle" : r.miss1 ? "bad" : "ok"
+      }),
+      d.stat({
+        label: "acked writes destroyed",
+        value: ph >= 6 ? sdrepl_n(r.damage) : "—",
+        sub: ph >= 8 ? sdrepl_n(r.lost) + " lost at failover · " + sdrepl_n(r.diverged) +
+          " written to a zombie"
+          : ph >= 6 ? sdrepl_n(r.lost) + " not on any follower" : "leader still alive",
+        flag: ph < 6 ? "idle" : r.damage ? "bad" : "ok"
+      })
+    ]);
+
+    // ---- the three nodes --------------------------------------------------
+    var dead = ph >= 6;
+    var promoted = ph >= 7;
+    var zombie = ph >= 8;
+
+    var leaderRows = [
+      { label: "role", value: zombie ? "term 1 — deposed" : dead ? "unreachable" : "leader",
+        flag: dead ? "bad" : "ok" },
+      { label: "acked, not replicated",
+        value: ph >= 6 ? sdrepl_n(r.lost) : "—",
+        flag: ph >= 6 ? (r.lost ? "bad" : "ok") : undefined }
+    ];
+    if (zombie) {
+      leaderRows.push({
+        label: cfg.fence ? "writes fenced off" : "writes accepted anyway",
+        value: sdrepl_n(cfg.fence ? r.fencedOff : r.diverged),
+        flag: cfg.fence ? "ok" : "bad"
+      });
+    }
+
+    var lagPct = function (lag) { return Math.min(100, (lag / sdrepl_STALL_MS) * 100); };
+    var followerCard = function (name, lag, isNew) {
+      var rows = [
+        { label: "role", value: isNew ? "LEADER — term 2" : "follower",
+          flag: isNew ? "ok" : undefined },
+        { label: "records behind",
+          value: ph >= 3 ? sdrepl_n(Math.round(sdrepl_RATE * lag / 1000)) : "—",
+          flag: ph >= 3 ? (lag > 0 ? "warn" : "ok") : undefined }
+      ];
+      if (ph >= 4 && cfg.route === "replica") {
+        rows.push({
+          label: "serves own-write reads",
+          value: lag <= sdrepl_RELOAD_MS ? "current" : "stale",
+          flag: lag <= sdrepl_RELOAD_MS ? "ok" : "bad"
+        });
+      }
+      return d.node({
+        title: name,
+        status: isNew ? "PROMOTED" : ph >= 2 && lag >= sdrepl_STALL_MS ? "LAGGING"
+          : ph >= 2 && lag === 0 ? "IN SYNC" : "FOLLOWING",
+        statusFlag: isNew ? "ok" : lag >= sdrepl_STALL_MS && ph >= 2 ? "warn" : "ok",
+        meta: name === "follower A" ? sdrepl_RTT_A + " ms · same AZ"
+          : sdrepl_RTT_B + " ms · cross-AZ",
+        flag: isNew ? "ok" : ph >= 2 && lag >= sdrepl_STALL_MS ? "warn" : undefined,
+        gauges: [{
+          label: "replication lag",
+          pct: ph >= 2 ? lagPct(lag) : 0,
+          value: ph >= 2 ? sdrepl_ms(lag) : "—",
+          flag: ph < 2 ? "idle" : lag > sdrepl_RELOAD_MS ? "bad" : lag > 0 ? "warn" : "ok"
+        }],
+        rows: rows
+      });
+    };
+
+    var nodes = d.cols([
+      d.node({
+        title: "leader",
+        status: zombie ? "RETURNED" : dead ? "DEAD" : "ACCEPTING WRITES",
+        statusFlag: zombie ? (cfg.fence ? "warn" : "bad") : dead ? "bad" : "ok",
+        meta: "acks after " + cfg.ackWords,
+        flag: dead ? "bad" : undefined,
+        gauges: [{
+          label: ph >= 2 && r.blocked ? "writes blocked by the stall" : "write throughput",
+          pct: dead ? 0 : r.blocked && ph >= 2 ? 100 : ph >= 1 ? 100 : 0,
+          value: dead ? "0 /s"
+            : ph >= 2 && r.blocked ? sdrepl_n(r.blocked) + " stalled"
+            : ph >= 1 ? sdrepl_n(sdrepl_RATE) + " /s" : "—",
+          flag: dead ? "bad" : r.blocked && ph >= 2 ? "bad" : ph >= 1 ? "ok" : "idle"
+        }],
+        rows: leaderRows
+      }),
+      followerCard("follower A", r.lagA, promoted && r.newLeader === "follower A"),
+      followerCard("follower B", r.lagB, promoted && r.newLeader === "follower B")
+    ]);
+
+    // ---- where the hiccup went --------------------------------------------
+    var hiccup = ph >= 2
+      ? d.node({
+          title: "the " + sdrepl_n(sdrepl_STALL_MS) + " ms stall on follower B",
+          status: r.blocked ? "PAID BY WRITERS" : "PAID BY READERS",
+          statusFlag: r.blocked ? "bad" : cfg.route === "leader" ? "ok" : "warn",
+          meta: "the same event in all three tabs",
+          rows: [
+            { label: "became replication lag", value: sdrepl_ms(r.lagB),
+              flag: r.lagB ? "warn" : "ok" },
+            { label: "became blocked writes",
+              value: r.blocked ? sdrepl_n(r.blocked) + " at " + sdrepl_ms(r.worstMs) : "0",
+              flag: r.blocked ? "bad" : "ok" },
+            { label: "became wrong answers",
+              value: ph >= 4 ? sdrepl_n(r.miss1 + r.mono) + " reads" : "not yet measured",
+              flag: ph >= 4 ? (r.miss1 + r.mono ? "bad" : "ok") : undefined }
+          ]
+        })
+      : "";
+
+    // ---- the sampled users -------------------------------------------------
+    var reads = "";
+    if (ph >= 4) {
+      var c1 = [], c2 = [];
+      for (i = 0; i < r.sample.length; i++) {
+        var s = r.sample[i];
+        c1.push({
+          label: s.w1, flag: s.saw1 ? "ok" : "bad",
+          title: "user " + (i + 1) + " reads from " + s.w1 + " at " + sdrepl_RELOAD_MS +
+            " ms — " + (s.saw1 ? "sees their own comment" : "their comment is missing")
+        });
+        c2.push({
+          label: ph >= 5 ? s.w2 : "·",
+          flag: ph < 5 ? "idle" : s.saw2 ? "ok" : "bad",
+          title: ph < 5 ? "not read yet"
+            : "user " + (i + 1) + " reads from " + s.w2 + " at " + sdrepl_SECOND_MS +
+              " ms — " + (s.saw2 ? "comment present" : "comment gone again")
+        });
+      }
+      reads = d.stack([
+        d.lane({ label: "read 1", cells: c1 }),
+        d.lane({ label: "read 2", cells: c2 })
+      ]);
+    }
+
+    // ---- failover progress --------------------------------------------------
+    var fail = "";
+    if (ph >= 6) {
+      var stages = ["DETECT " + sdrepl_DETECT_S + "s", "ELECT", "PROMOTE", "REDIRECT"];
+      var scells = [];
+      for (i = 0; i < stages.length; i++) {
+        scells.push({
+          label: stages[i],
+          flag: ph >= 7 ? "ok" : i === 0 ? "warn" : "idle",
+          title: ph >= 7 ? "done" : i === 0 ? "in progress" : "waiting on detection"
+        });
+      }
+      fail = d.stack([
+        d.cells(scells, { label: "failover · the page's four steps" }),
+        d.cols([
+          d.stat({
+            label: "write unavailability",
+            value: sdrepl_FAILOVER_S + " s",
+            sub: sdrepl_DETECT_S + " s to detect + " + sdrepl_PROMOTE_S + " s to switch",
+            flag: "warn"
+          }),
+          d.stat({
+            label: "writes rejected meanwhile",
+            value: sdrepl_n(r.rejected),
+            sub: sdrepl_n(sdrepl_RATE) + "/s × " + sdrepl_FAILOVER_S + " s",
+            flag: "warn"
+          }),
+          d.stat({
+            label: "new leader's cache",
+            value: ph >= 7 ? "cold" : "—",
+            sub: ph >= 7 ? "degraded after it is technically healthy" : "not promoted yet",
+            flag: ph >= 7 ? "warn" : "idle"
+          }),
+          d.stat({
+            label: "fencing token",
+            value: ph >= 8 ? (cfg.fence ? "term 2 enforced" : "none") : "—",
+            sub: ph >= 8
+              ? (cfg.fence ? sdrepl_n(r.fencedOff) + " stale-term writes refused"
+                 : sdrepl_n(r.diverged) + " writes on two leaders")
+              : "checked when the old leader returns",
+            flag: ph < 8 ? "idle" : cfg.fence ? "ok" : "bad"
+          })
+        ])
+      ]);
+    }
+
+    var tail = ph >= 8
+      ? d.stack([
+          sdrepl_compare(d),
+          d.note("The leaderless row is computed from the same constants rather than run " +
+            "as a tab: <b>W + R = " + (sdrepl_W + sdrepl_R) + " > N = " + sdrepl_NODES +
+            "</b>, so the write set and the read set must share at least " + sdrepl_OVERLAP +
+            " node and a read sees the latest write. The honest caveat is the page's: that " +
+            "is <i>stronger</i> consistency, not <i>strong</i> — concurrent writes, " +
+            "partially-failed writes and restores from backup all break it at the edges.",
+            "ok")
+        ])
+      : d.note(ph >= 4
+          ? "Green read cells saw the user's own comment · red came back without it. " +
+            "<b>L</b> is the leader, <b>A</b> and <b>B</b> the followers."
+          : "Watch one thing across the tabs: the " + sdrepl_n(sdrepl_STALL_MS) +
+            " ms stall on follower B is the same in all three, and each topology charges " +
+            "it to a different person.",
+          ph >= 4 && r.miss1 ? "bad" : undefined);
+
+    return d.stack([
+      d.pills(chips),
+      head,
+      nodes,
+      hiccup,
+      reads,
+      fail,
+      tail
+    ]);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdrequirementsands  (requirements-and-scope.md)
+//
+// The time axis is the scoping phase itself, on the page's own worked
+// example: "Design a URL shortener", §7, question by question. Three
+// candidates get the identical prompt and the identical interviewer, and
+// the machinery is the same in all three tabs — eight question slots, a
+// clock, and the §5 requirement-to-decision map evaluated against whatever
+// the candidate actually knows at that moment.
+//
+// Nothing here is scored by opinion. A map row fires only if a fact
+// establishes it; a fact exists only if it was asked for or assumed; and an
+// assumption is marked wrong only when the interviewer's real answer
+// contradicts it. The clock is the hard constraint: the-framework.md budgets
+// 5 / 3 / 5 / 12 / 15 / 5 minutes, so every minute scoping takes beyond its
+// five comes out of a later phase, and the sim takes it out of the deep dive
+// because that is the phase the framework says the score is decided in.
+//
+// CONFIG — page figures, used verbatim
+//   100,000,000 new URLs a month      §7: "100 million new URLs a month"
+//   reads ≈ 100 × writes              §7: "reads are about 100 times writes"
+//   ~40 writes/s, ~4,000 reads/s      §7, and recomputed here from the two
+//                                     figures above: 100e6 / (30 × 86,400)
+//                                     = 38.6/s, which the page rounds to 40
+//   redirect p99 < 100 ms             §7: "Under 100ms, p99"
+//   custom aliases yes, optional TTL  §7
+//   analytics out of scope            §7
+//   four questions / ninety seconds   §7's closing count of its own dialogue
+//   twenty minutes of questions       §6's mistake row
+//   the eight questions               §2, in the page's order
+//   the ten-row decision map          §5, transcribed and then evaluated
+//   45-minute round, 5/3/5/12/15/5    the-framework.md's phase table
+//
+// CONFIG — declared here, because the page publishes no such figures
+//   18 s per ask-and-answer for the fast run — five asks is then exactly the
+//     page's ninety seconds
+//   60 s per ask for the over-asker, which follows every answer down a level
+//     — twenty asks is then exactly the page's twenty minutes
+//   1.5 minutes to draw, label and justify one component
+//   30-day month, 86,400 s in a day
+// ======================================================================
+
+var sdreq_URLS_MONTH = 100000000;   // page §7
+var sdreq_RATIO      = 100;         // page §7: reads are about 100× writes
+var sdreq_DAYS       = 30;          // declared
+var sdreq_SEC_DAY    = 86400;       // declared: real seconds, not the 100k shortcut
+var sdreq_P99_MS     = 100;         // page §7
+var sdreq_ROUND      = 45;          // the-framework.md
+var sdreq_SCOPE_BUD  = 5;           // the-framework.md phase 1: 0–5
+var sdreq_DEEP_BUD   = 15;          // the-framework.md phase 5: 25–40
+var sdreq_OTHER_MIN  = 3 + 5 + 12 + 5;  // estimation + API + high level + wrap
+var sdreq_FAST_SEC   = 18;          // declared: 5 asks = the page's 90 s
+var sdreq_SLOW_SEC   = 60;          // declared: 20 asks = the page's 20 min
+var sdreq_BUILD_MIN  = 1.5;         // declared: minutes to draw one component
+
+var sdreq_W_SEC = sdreq_URLS_MONTH / (sdreq_DAYS * sdreq_SEC_DAY);
+var sdreq_R_SEC = sdreq_W_SEC * sdreq_RATIO;
+
+function sdreq_n(v, dec) {
+  if (!isFinite(v)) return "—";
+  return Number(v).toLocaleString("en-US", {
+    minimumFractionDigits: dec === undefined ? 0 : dec,
+    maximumFractionDigits: dec === undefined ? 0 : dec
+  });
+}
+function sdreq_clock(sec) {
+  var m = Math.floor(sec / 60), s = Math.round(sec - m * 60);
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+function sdreq_min(sec) { return sec / 60; }
+
+// ----------------------------------------------------------------------
+// §5, transcribed. Each row is a predicate over what the candidate believes,
+// so a row is FIRED, RULED OUT, or UNKNOWN — and "unknown" is the state the
+// page is really writing about.
+// ----------------------------------------------------------------------
+var sdreq_MAP = [
+  { req: "Very read-heavy", forces: "Cache, read replicas, precomputation", k: "readHeavy", want: true },
+  { req: "Write-heavy", forces: "Queue + async workers, batching, LSM", k: "readHeavy", want: false },
+  { req: "Low latency p99", forces: "Cache, CDN, precompute, colocate", k: "lowLatency", want: true },
+  { req: "Stale reads acceptable", forces: "Async replication, cache TTLs", k: "staleOK", want: true },
+  { req: "Strong consistency needed", forces: "Single leader per key, transactions", k: "staleOK", want: false },
+  { req: "Must never lose a write", forces: "Replicated log, ack after quorum", k: "durable", want: true },
+  { req: "Availability over consistency", forces: "Multi-leader or leaderless", k: "availFirst", want: true },
+  { req: "Huge objects", forces: "Object storage + CDN, DB holds metadata", k: "hugeObj", want: true },
+  { req: "Unbounded growth", forces: "Shard from the start, pick a shard key", k: "growth", want: true },
+  { req: "Spiky traffic", forces: "Queue, autoscaling, rate limiting", k: "spiky", want: true }
+];
+
+// what the interviewer would say to every question, if asked
+var sdreq_TRUTH = {
+  readHeavy: true, lowLatency: true, staleOK: true, durable: true,
+  availFirst: true, hugeObj: false, growth: true, spiky: true,
+  customAlias: true, analytics: false, accounts: false, multiRegion: false
+};
+
+// the board a candidate can only draw if the requirement behind it exists
+var sdreq_COMP = [
+  { name: "cache-first redirect", k: "readHeavy" },
+  { name: "CDN at the edge", k: "lowLatency" },
+  { name: "sharded KV store", k: "growth" },
+  { name: "collision-free IDs", k: "customAlias" },
+  { name: "click analytics pipeline", k: "analytics" },
+  { name: "accounts + auth", k: "accounts" },
+  { name: "multi-region active-active", k: "multiRegion" }
+];
+
+var sdreq_IN = ["shorten a URL", "optional custom alias", "optional TTL", "redirect"];
+var sdreq_OUT = ["click analytics", "referrer stats", "user accounts"];
+
+var sdreq_PHASES = [
+  "the prompt", "who + how many", "the core actions", "read : write",
+  "latency + staleness", "out of scope", "the board", "minute 42"
+];
+
+function sdreq_state() {
+  return { b: {}, src: {}, asks: 0, sec: 0 };
+}
+function sdreq_learn(st, k, v, how) { st.b[k] = v; st.src[k] = how; }
+function sdreq_copy(st) {
+  var o = { b: {}, src: {}, asks: st.asks, sec: st.sec }, k;
+  for (k in st.b) if (st.b.hasOwnProperty(k)) o.b[k] = st.b[k];
+  for (k in st.src) if (st.src.hasOwnProperty(k)) o.src[k] = st.src[k];
+  return o;
+}
+
+function sdreq_score(st) {
+  var s = { fired: 0, ruled: 0, unknown: 0, firedShould: 0, asked: 0, assumed: 0,
+    wrong: 0, built: 0, over: 0, missed: 0, rows: [] };
+  var i, row, v, state;
+  for (i = 0; i < sdreq_MAP.length; i++) {
+    row = sdreq_MAP[i];
+    v = st.b[row.k];
+    if (v === undefined) { state = "unknown"; s.unknown++; }
+    else if (v === row.want) { state = "fires"; s.fired++; if (sdreq_TRUTH[row.k] === row.want) s.firedShould++; }
+    else { state = "ruled out"; s.ruled++; }
+    s.rows.push({ req: row.req, forces: row.forces, state: state, src: st.src[row.k] });
+  }
+  // how many of the ten rows the truth would resolve as FIRED
+  s.shouldFire = 0;
+  for (i = 0; i < sdreq_MAP.length; i++) {
+    if (sdreq_TRUTH[sdreq_MAP[i].k] === sdreq_MAP[i].want) s.shouldFire++;
+  }
+  // facts, and how they were obtained
+  var k;
+  for (k in st.b) {
+    if (!st.b.hasOwnProperty(k)) continue;
+    if (st.src[k] === "asked") s.asked++; else s.assumed++;
+    if (sdreq_TRUTH[k] !== undefined && st.b[k] !== sdreq_TRUTH[k]) s.wrong++;
+  }
+  // the board
+  s.comp = [];
+  for (i = 0; i < sdreq_COMP.length; i++) {
+    var c = sdreq_COMP[i];
+    var believe = st.b[c.k] === true;
+    var truth = sdreq_TRUTH[c.k] === true;
+    var verdict = believe && truth ? "justified" : believe ? "over-built"
+      : truth ? "missed" : "correctly absent";
+    if (believe) s.built++;
+    if (believe && !truth) s.over++;
+    if (!believe && truth) s.missed++;
+    s.comp.push({ name: c.name, verdict: verdict });
+  }
+  s.scopeMin = sdreq_min(st.sec);
+  s.overMin = Math.max(0, s.scopeMin - sdreq_SCOPE_BUD);
+  s.deepLeft = Math.max(0, sdreq_ROUND - s.scopeMin - sdreq_OTHER_MIN);
+  s.perMin = s.scopeMin > 0 ? s.fired / s.scopeMin : 0;
+  s.wasteMin = s.over * sdreq_BUILD_MIN;
+  return s;
+}
+
+// ----------------------------------------------------------------------
+// One candidate. `moves` is what happens in each of the eight phases.
+// ----------------------------------------------------------------------
+function sdreq_build(cfg) {
+  var st = sdreq_state();
+  var steps = [];
+
+  function frame(ph, flag, caption) {
+    var snap = sdreq_copy(st);
+    steps.push({ ph: ph, flag: flag, caption: caption, st: snap, sc: sdreq_score(snap), cfg: cfg });
+  }
+  function ask(n, pairs) {
+    st.asks += n; st.sec += n * cfg.secPerAsk;
+    for (var i = 0; i < pairs.length; i += 2) sdreq_learn(st, pairs[i], pairs[i + 1], "asked");
+  }
+  function assume(pairs) {
+    for (var i = 0; i < pairs.length; i += 2) sdreq_learn(st, pairs[i], pairs[i + 1], "assumed");
+  }
+
+  // ---- 0 · the prompt ---------------------------------------------------
+  frame(0, "idle",
+    "<b>\"Design a URL shortener.\"</b> Four words, the clock at 0:00, and ten rows of " +
+    "the requirement-to-decision map with nothing in them. " + cfg.opening +
+    " Press Play.");
+
+  // ---- 1 · who uses it, and how many ------------------------------------
+  if (cfg.mode === "none") {
+    assume(["multiRegion", true]);
+    frame(1, "bad",
+      "<b>No question. The candidate starts drawing.</b> Something has to stand in for " +
+      "an answer, so an assumption does: <i>consumer scale, so design for a billion " +
+      "users</i>. The page lists that one by name — <b>designing for 1B users unasked</b> " +
+      "— and calls over-engineering a finding, not a strength. Note the clock: <b>0:00</b>. " +
+      "This is the only run that saves time here, and it is about to spend it three times over.");
+  } else if (cfg.mode === "fast") {
+    ask(1, ["consumer", true]);
+    frame(1, "ok",
+      "<b>\"Who's using this — a public service like bit.ly, or internal link " +
+      "management?\"</b> → <i>Public.</i> " + sdreq_FAST_SEC + " seconds, and the answer " +
+      "already excludes a whole design: internal link management is a table and a web " +
+      "form. This is the first of the page's three always-ask questions.");
+  } else {
+    ask(3, ["consumer", true]);
+    frame(1, "warn",
+      "<b>\"Who's using this?\"</b> → <i>Public.</i> Then: what regions, what devices, " +
+      "what the business model is. Three asks, <b>" + sdreq_clock(st.sec) + "</b> gone, and " +
+      "exactly one of them changed anything. Every question here is a reasonable question. " +
+      "That is what makes this failure mode hard to see from the inside.");
+  }
+
+  // ---- 2 · the top three actions ----------------------------------------
+  if (cfg.mode === "none") {
+    assume(["customAlias", true, "analytics", true, "accounts", true]);
+    frame(2, "bad",
+      "<b>Still no question — and the functional core is now a guess too.</b> The " +
+      "assumption is \"everything bit.ly has\": shorten, redirect, <i>custom aliases</i>, " +
+      "<i>click analytics</i>, <i>user accounts</i>. Two of those five are about to turn " +
+      "out to be explicitly out of scope, and the candidate will spend design minutes on " +
+      "them anyway.");
+  } else if (cfg.mode === "fast") {
+    ask(1, ["customAlias", true]);
+    frame(2, "ok",
+      "<b>\"Do users need custom aliases, and do links expire?\"</b> → <i>Custom aliases " +
+      "yes. Expiry, optional TTL.</i> That is the functional core: <b>shorten and " +
+      "redirect</b>, with two modifiers. Everything not named here is now something the " +
+      "candidate is <i>entitled to defer</i> — which is the real reason this question is " +
+      "asked second.");
+  } else {
+    ask(3, ["customAlias", true]);
+    frame(2, "warn",
+      "<b>Same answer, three asks.</b> Custom aliases, TTL — then whether aliases can be " +
+      "reserved, whether TTLs can be edited, whether deletion is soft or hard. All " +
+      "sensible. All answerable in the deep dive, for free, from a design that exists. " +
+      "Clock: <b>" + sdreq_clock(st.sec) + "</b>.");
+  }
+
+  // ---- 3 · read-heavy or write-heavy ------------------------------------
+  if (cfg.mode === "none") {
+    assume(["readHeavy", true, "growth", true]);
+    frame(3, "warn",
+      "<b>The most decision-changing question in the round, and it is not asked.</b> The " +
+      "candidate guesses read-heavy, and guesses that growth is unbounded. <b>Both guesses " +
+      "happen to be right</b> — and that is the point worth sitting with: the candidate " +
+      "has no way to know which of their guesses are the right ones, so none of them can " +
+      "be cited later. A guess cannot be pointed at when the interviewer asks <i>why</i>.");
+  } else if (cfg.mode === "fast") {
+    ask(1, ["readHeavy", true, "growth", true]);
+    frame(3, "ok",
+      "<b>\"Roughly what scale — writes per day, and read-to-write ratio?\"</b> → <i>" +
+      sdreq_n(sdreq_URLS_MONTH / 1000000) + " million new URLs a month, and reads are " +
+      "about " + sdreq_RATIO + " times writes.</i> One ask, and the arithmetic is " +
+      "immediate: " + sdreq_n(sdreq_URLS_MONTH) + " ÷ (" + sdreq_DAYS + " × " +
+      sdreq_n(sdreq_SEC_DAY) + ") = <b>" + sdreq_n(sdreq_W_SEC, 1) + " writes/s</b> — the " +
+      "page calls it about 40 — and × " + sdreq_RATIO + " = <b>" + sdreq_n(sdreq_R_SEC) +
+      " reads/s</b>, its 4,000. Two map rows fire off this single answer, and the " +
+      "conclusion is the design: <b>reads dominate, so the redirect path is the problem.</b>");
+  } else {
+    ask(4, ["readHeavy", true, "growth", true]);
+    frame(3, "warn",
+      "<b>Same answer, and the same " + sdreq_n(sdreq_W_SEC, 1) + " writes/s and " +
+      sdreq_n(sdreq_R_SEC) + " reads/s fall out of it</b> — plus three follow-ups on " +
+      "seasonality, growth rate and regional split. The information is real. The clock is " +
+      "at <b>" + sdreq_clock(st.sec) + "</b> against a five-minute budget, and the design " +
+      "phase has not started.");
+  }
+
+  // ---- 4 · latency, staleness, the cost of being wrong -------------------
+  if (cfg.mode === "none") {
+    frame(4, "bad",
+      "<b>Nothing is asked about latency, staleness, or the cost of downtime — so the " +
+      "non-functional requirements do not exist.</b> The page is exact about what this " +
+      "produces: <i>candidates who list only functional requirements end up designing a " +
+      "CRUD app for every prompt.</i> Without a p99 target nothing in the design is sized " +
+      "for the tail, and there is no number to check the finished design against.");
+  } else if (cfg.mode === "fast") {
+    ask(1, ["lowLatency", true]);
+    frame(4, "ok",
+      "<b>\"Latency target on the redirect?\"</b> → <i>Under " + sdreq_P99_MS +
+      " ms, p99.</i> At p99, not average — averages hide the tail, and the tail is what " +
+      "users experience as slow. That single number now constrains every later choice: a " +
+      "redirect that has to be under " + sdreq_P99_MS + " ms at the 99th percentile cannot " +
+      "be a database round trip on a miss, so the cache is not decoration.");
+  } else {
+    ask(6, ["lowLatency", true, "staleOK", true, "availFirst", true, "durable", true, "spiky", true]);
+    frame(4, "warn",
+      "<b>Six asks, and genuinely more than the fast run has.</b> p99 under " +
+      sdreq_P99_MS + " ms, staleness tolerated, availability preferred to consistency, a " +
+      "shortened link must not be lost, traffic is spiky around viral links. <b>Five map " +
+      "rows resolved in one phase</b> — and the clock now reads <b>" + sdreq_clock(st.sec) +
+      "</b>, past the whole phase-1 budget and into the estimation and API phases.");
+  }
+
+  // ---- 5 · anything out of scope -----------------------------------------
+  if (cfg.mode === "none") {
+    frame(5, "bad",
+      "<b>Nobody asks what is out of scope, so nothing is.</b> The assumed feature list " +
+      "from two frames ago is now the plan, and the board is about to grow a click " +
+      "analytics pipeline and an accounts service. The page's warning about this one is " +
+      "not about wasted effort — it is that <b>scoping protects you</b>. There is no " +
+      "contract here to be protected by.");
+  } else if (cfg.mode === "fast") {
+    ask(1, ["analytics", false, "accounts", false]);
+    frame(5, "ok",
+      "<b>\"Last one — analytics? Click counts, referrers?\"</b> → <i>Out of scope.</i> " +
+      "The cheapest ask on the page: it costs " + sdreq_FAST_SEC + " seconds and it " +
+      "deletes an entire subsystem. Interviewers usually have a component they want you " +
+      "to reach, and asking gives them permission to steer — which is what they wanted to " +
+      "do anyway.");
+  } else {
+    ask(2, ["analytics", false, "accounts", false]);
+    frame(5, "warn",
+      "<b>Out of scope: analytics, accounts.</b> The same answer the fast run got, " +
+      "obtained at <b>" + sdreq_clock(st.sec) + "</b> instead of 1:30. Nothing about the " +
+      "questions was wrong. The exchange rate was.");
+  }
+
+  // ---- 6 · write it down ---------------------------------------------------
+  if (cfg.mode === "none") {
+    frame(6, "bad",
+      "<b>Nothing goes on the board.</b> No in-scope list, no out-of-scope list, no " +
+      "non-functional line. The page's five lines pay for themselves three times — they " +
+      "stop you drifting, they make skipping something look deliberate rather than " +
+      "forgetful, and they " +
+      "give you the summary you need at minute 42. This run has none of the three, and " +
+      "the design phase is now starting from " + sdreq_score(sdreq_copy(st)).assumed +
+      " assumptions and " + sdreq_score(sdreq_copy(st)).asked + " answers.");
+  } else if (cfg.mode === "fast") {
+    sdreq_learn(st, "staleOK", true, "asked");
+    sdreq_learn(st, "availFirst", true, "asked");
+    frame(6, "ok",
+      "<b>The restatement, and it is free.</b> <i>\"So: in scope, shorten with optional " +
+      "custom alias and TTL, and redirect. Out of scope, analytics and user accounts. " +
+      "Non-functional: " + sdreq_n(sdreq_R_SEC) + " read QPS, redirect p99 under " +
+      sdreq_P99_MS + " ms, high availability — a redirect failing is worse than it being " +
+      "briefly stale — and short codes must never collide. Sound right?\"</i> Two more " +
+      "map rows resolve inside that sentence, because stating a requirement and having it " +
+      "confirmed is as good as asking for it. Clock: <b>" + sdreq_clock(st.sec) +
+      "</b> — the page's ninety seconds, from five asks at " + sdreq_FAST_SEC + " s each.");
+  } else {
+    ask(2, ["hugeObj", false]);
+    frame(6, "bad",
+      "<b>The board gets written, correctly and completely, at <b>" + sdreq_clock(st.sec) +
+      "</b>.</b> Twenty asks. Every non-functional requirement established, <b>" +
+      sdreq_score(sdreq_copy(st)).unknown + " of the " + sdreq_MAP.length + " map rows " +
+      "left unknown</b> — and the page's timebox was five minutes. What happens next is " +
+      "arithmetic, not judgement: " + sdreq_ROUND + " minutes total, " +
+      sdreq_n(sdreq_min(st.sec), 0) + " gone, and " + sdreq_OTHER_MIN + " still owed to " +
+      "estimation, API, high-level design and the wrap.");
+  }
+
+  // ---- 7 · minute 42 --------------------------------------------------------
+  var fin = sdreq_score(st);
+  if (cfg.mode === "none") {
+    frame(7, "bad",
+      "<b>Minute 42, and the reveal.</b> Of " + (fin.asked + fin.assumed) +
+      " beliefs this design rests on, <b>" + fin.assumed + " are assumptions and <b>" +
+      fin.wrong + " of them are wrong</b></b> — analytics, accounts and multi-region were " +
+      "never wanted. <b>" + fin.over + " components were built with no requirement behind " +
+      "them</b> (" + sdreq_n(fin.wasteMin, 1) + " minutes of board time at " +
+      sdreq_BUILD_MIN + " min each) and <b>" + fin.missed + "</b> that the real " +
+      "requirements demand " + (fin.missed === 1 ? "is" : "are") + " missing. " +
+      "The deep dive got its " + sdreq_n(fin.deepLeft, 1) + " minutes — <b>on the wrong " +
+      "system</b>. The page's sentence is the verdict: a candidate who scoped something " +
+      "out at minute three and ran out of time <i>delivered what they promised</i>; one " +
+      "who never scoped has simply not finished.");
+  } else if (cfg.mode === "fast") {
+    frame(7, "ok",
+      "<b>Minute 42, and every decision has a citation.</b> <b>" + fin.fired +
+      " of the ten map rows fired</b>, all of them from answers rather than guesses, " +
+      "<b>0 wrong beliefs</b>, <b>0 components with nothing behind them</b>. Scoping cost " +
+      "<b>" + sdreq_clock(fin.scopeMin * 60) + "</b> of its five-minute budget, so the " +
+      "deep dive has <b>" + sdreq_n(fin.deepLeft, 1) + " minutes</b> against the " +
+      "framework's " + sdreq_DEEP_BUD + ". Three rows are still <i>unknown</i> — " +
+      "durability, object size, spikiness — and saying so out loud is not the same as " +
+      "missing them: <b>you can ask a question at minute 20; you cannot get minute 20 " +
+      "back at minute 40.</b>");
+  } else {
+    frame(7, "bad",
+      "<b>Minute 42 never arrives with anything to show.</b> This run has the <i>best " +
+      "requirements in the sim</i> — <b>" + fin.fired + " of ten rows resolved, " +
+      fin.wrong + " wrong beliefs</b> — and <b>" + sdreq_n(fin.deepLeft, 1) +
+      " minutes of deep dive</b>, because " + sdreq_n(fin.scopeMin, 0) + " minutes of " +
+      "questions came out of the one phase the framework says decides the score. " +
+      "The exchange rate is the whole lesson: <b>" + sdreq_n(fin.perMin, 2) +
+      " map rows per minute</b> here against <b>" +
+      sdreq_n(sdreq_FASTRUN_PERMIN, 2) + "</b> for the ninety-second run — " +
+      sdreq_n(sdreq_FASTRUN_PERMIN / (fin.perMin || 1), 0) + "× worse for information " +
+      "that was, in the end, mostly the same information.");
+  }
+
+  return { id: cfg.id, label: cfg.label, steps: steps, phases: sdreq_PHASES,
+    fin: fin, cfg: cfg };
+}
+
+// the fast run is built first so the over-asker can quote its exchange rate
+var sdreq_FASTRUN_PERMIN = 0;
+
+var sdreq_FAST = sdreq_build({
+  id: "fast", label: "Four questions, 90 s",
+  mode: "fast", secPerAsk: sdreq_FAST_SEC,
+  opening: "This run is the page's own worked opening from §7, ask for ask."
+});
+sdreq_FASTRUN_PERMIN = sdreq_FAST.fin.perMin;
+
+var sdreq_NONE = sdreq_build({
+  id: "none", label: "No questions",
+  mode: "none", secPerAsk: sdreq_FAST_SEC,
+  opening: "This run treats the prompt as the problem statement and starts designing. " +
+    "It is the page's first scoping mistake and the top line of the rubric."
+});
+
+var sdreq_SLOW = sdreq_build({
+  id: "slow", label: "Twenty minutes of questions",
+  mode: "slow", secPerAsk: sdreq_SLOW_SEC,
+  opening: "This run asks everything, follows every answer down a level, and never " +
+    "notices the clock. It is the page's second mistake, and the harder one to see."
+});
+
+var sdreq_RUNS = [sdreq_NONE, sdreq_FAST, sdreq_SLOW];
+
+function sdreq_compare(d) {
+  var rows = [], i, r, f;
+  for (i = 0; i < sdreq_RUNS.length; i++) {
+    r = sdreq_RUNS[i]; f = r.fin;
+    rows.push([
+      r.label,
+      String(r.steps[r.steps.length - 1].st.asks),
+      sdreq_clock(f.scopeMin * 60),
+      f.fired + " / " + sdreq_MAP.length,
+      f.scopeMin > 0 ? sdreq_n(f.perMin, 2) : "—",
+      String(f.wrong),
+      String(f.over),
+      sdreq_n(f.deepLeft, 1) + " min"
+    ]);
+  }
+  return d.table(
+    ["run", "asks", "on scope", "rows fired", "rows/min", "wrong beliefs",
+      "over-built", "deep dive left"],
+    rows);
+}
+
+S["sdrequirementsands"] = {
+  title: "Scope one prompt three ways, on the clock",
+  note: "One prompt — <b>\"Design a URL shortener\"</b> — and the page's §7 interviewer, " +
+    "who gives the same answers to whoever asks. The three tabs differ only in which of " +
+    "the page's <b>eight questions</b> get asked and how long each one takes. The " +
+    "requirement-to-decision map is §5, transcribed row for row and then <i>evaluated</i>: " +
+    "a row fires only when a belief establishes it, and a belief is either an answer or a " +
+    "guess. Page figures: <b>" + sdreq_n(sdreq_URLS_MONTH) + "</b> new URLs a month, reads " +
+    "<b>" + sdreq_RATIO + "×</b> writes, redirect <b>p99 &lt; " + sdreq_P99_MS + " ms</b>, " +
+    "custom aliases and optional TTL in, analytics out — from which <b>" +
+    sdreq_n(sdreq_W_SEC, 1) + " writes/s</b> and <b>" + sdreq_n(sdreq_R_SEC) +
+    " reads/s</b> are recomputed here (the page rounds them to 40 and 4,000). Declared, " +
+    "because the page gives no per-question timing: <b>" + sdreq_FAST_SEC + " s</b> per " +
+    "ask for the fast run, which makes its five asks exactly the page's <i>ninety " +
+    "seconds</i>, and <b>" + sdreq_SLOW_SEC + " s</b> for the over-asker, which makes its " +
+    "twenty asks exactly the page's <i>twenty minutes</i>. The clock consequence is " +
+    "the-framework.md's budget — " + sdreq_ROUND + " minutes split 5 / 3 / 5 / 12 / 15 / 5 " +
+    "— with every minute over the scoping budget taken from the deep dive.",
+  interval: 1500,
+
+  scenarios: sdreq_RUNS,
+
+  draw: function (step, d, ctx) {
+    var sc = step.sc, st = step.st, cfg = step.cfg, ph = step.ph, i;
+
+    var names = (ctx.scenario && ctx.scenario.phases) || sdreq_PHASES;
+    var chips = [];
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i], flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+
+    // ---- head --------------------------------------------------------------
+    var overBudget = sc.scopeMin > sdreq_SCOPE_BUD;
+    var head = d.cols([
+      d.big(sdreq_clock(st.sec), "spent on scope",
+        st.sec === 0 ? (ph === 0 ? "idle" : "bad") : overBudget ? "bad" : "ok"),
+      d.stat({
+        label: "answers established",
+        value: String(sc.asked),
+        sub: sc.assumed ? sc.assumed + " assumed instead" : st.asks + " asks so far",
+        flag: ph === 0 ? "idle" : sc.assumed ? "bad" : sc.asked ? "ok" : "warn"
+      }),
+      d.stat({
+        label: "map rows fired",
+        value: sc.fired + " / " + sdreq_MAP.length,
+        sub: sc.unknown + " still unknown",
+        flag: ph === 0 ? "idle" : sc.fired >= 5 ? "ok" : sc.fired ? "warn" : "bad"
+      }),
+      d.stat({
+        label: "deep dive left",
+        value: sdreq_n(sc.deepLeft, 1) + " min",
+        sub: "framework budgets " + sdreq_DEEP_BUD,
+        flag: sc.deepLeft >= sdreq_DEEP_BUD ? "ok" : sc.deepLeft > 5 ? "warn" : "bad"
+      })
+    ]);
+
+    // ---- the clock, as a bar over the 45-minute round ------------------------
+    var clockBar = d.stack([
+      d.bar({
+        label: "phase 1 budget · " + sdreq_SCOPE_BUD + " min",
+        pct: Math.min(100, (sc.scopeMin / sdreq_SCOPE_BUD) * 100),
+        value: sdreq_clock(st.sec) + " of " + sdreq_SCOPE_BUD + ":00",
+        flag: overBudget ? "bad" : sc.scopeMin > 0 ? "ok" : "idle"
+      }),
+      d.bar({
+        label: "deep dive remaining · phase 5",
+        pct: Math.min(100, (sc.deepLeft / sdreq_DEEP_BUD) * 100),
+        value: sdreq_n(sc.deepLeft, 1) + " min",
+        flag: sc.deepLeft >= sdreq_DEEP_BUD ? "ok" : sc.deepLeft > 5 ? "warn" : "bad"
+      })
+    ]);
+
+    // ---- the §5 map ----------------------------------------------------------
+    var mapRows = [];
+    for (i = 0; i < sc.rows.length; i++) {
+      var r = sc.rows[i];
+      mapRows.push([
+        r.req,
+        r.state === "fires" ? "FIRES" + (r.src === "assumed" ? " (guess)" : "")
+          : r.state === "ruled out" ? "ruled out" : "— unknown —",
+        r.state === "fires" ? r.forces : ""
+      ]);
+    }
+    var map = d.table(["requirement", "state", "forces"], mapRows);
+
+    // ---- the board ------------------------------------------------------------
+    var board = "";
+    if (ph >= 5) {
+      var wrote = cfg.mode !== "none" && ph >= 6;
+      var inRows = [], outRows = [];
+      for (i = 0; i < sdreq_IN.length; i++) {
+        inRows.push({ label: sdreq_IN[i], value: wrote ? "on the board" : "—",
+          flag: wrote ? "ok" : undefined });
+      }
+      for (i = 0; i < sdreq_OUT.length; i++) {
+        outRows.push({
+          label: sdreq_OUT[i],
+          value: wrote ? "scoped out" : st.b.analytics === true || st.b.accounts === true
+            ? "being built anyway" : "—",
+          flag: wrote ? "ok" : st.b.analytics === true ? "bad" : undefined
+        });
+      }
+      board = d.cols([
+        d.node({
+          title: "IN SCOPE", status: wrote ? "WRITTEN DOWN" : "NOTHING WRITTEN",
+          statusFlag: wrote ? "ok" : "bad", meta: "board, top-left, all round",
+          flag: wrote ? "ok" : "bad", rows: inRows
+        }),
+        d.node({
+          title: "OUT OF SCOPE", status: wrote ? "WRITTEN DOWN" : "NOTHING WRITTEN",
+          statusFlag: wrote ? "ok" : "bad",
+          meta: wrote ? "a visible contract" : "nothing to point at",
+          flag: wrote ? "ok" : "bad", rows: outRows
+        })
+      ]);
+    }
+
+    // ---- the board that results, and the comparison ----------------------------
+    var tail;
+    if (ph >= 7) {
+      var cells = [];
+      for (i = 0; i < sc.comp.length; i++) {
+        var c = sc.comp[i];
+        cells.push({
+          label: c.name,
+          flag: c.verdict === "justified" ? "ok" : c.verdict === "over-built" ? "bad"
+            : c.verdict === "missed" ? "warn" : "idle",
+          title: c.verdict === "justified" ? "built, and a requirement demands it"
+            : c.verdict === "over-built" ? "built with nothing behind it — the page calls this a finding"
+            : c.verdict === "missed" ? "the real requirements demand this and it is not there"
+            : "correctly absent"
+        });
+      }
+      tail = d.stack([
+        d.cells(cells, { label: "what ends up on the board" }),
+        sdreq_compare(d),
+        d.note("Green is a component a requirement demands · <b>red is a component with " +
+          "nothing behind it</b> · amber is one the requirements demand and nobody built · " +
+          "grey is correctly absent. Asking questions and then ignoring the answers is " +
+          "worse than not asking — but so is answering questions nobody asked.",
+          sc.over ? "bad" : "ok")
+      ]);
+    } else {
+      tail = d.note(ph === 0
+        ? "Ten rows, no state. Every one of them is a decision waiting for a requirement " +
+          "that has not been established yet."
+        : "<b>FIRES</b> means a requirement now forces a later decision · <b>ruled out</b> " +
+          "means it was established and does not apply · <b>unknown</b> means nobody asked, " +
+          "and it is the state that quietly decides the round.",
+        sc.assumed ? "bad" : undefined);
+    }
+
+    return d.stack([
+      d.pills(chips),
+      head,
+      clockBar,
+      map,
+      board,
+      tail
+    ]);
+  }
+};
 
   // ====================================================================
   // ======================================================================
@@ -12460,6 +28611,1803 @@ S["sdapidesign"] = {
           "the <b>table</b>; an index's cost grows with the <b>postings of the query's " +
           "terms</b> — and the second number is the one the index exists to shrink.",
           step.flag === "bad" ? "bad" : step.flag === "ok" ? "ok" : undefined
+        )
+      ]);
+    }
+  };
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdsharding  (sharding.md)
+//
+// The time axis is one query crossing a sharded store, then one write, then
+// one more machine being added — the same three events on the same data
+// under three different shard keys. The page says the key is "the single
+// most consequential decision in the design"; this is that decision costed
+// out, because every number below is the same workload routed differently.
+//
+// The three tabs are the page's own examples:
+//   hash(tweet_id) % N     high cardinality, even, and NOT in the query —
+//                          the property the page says candidates miss
+//   hash(author_id)        the §7 answer, consistent hashing with vnodes
+//   range on created_at    range scans work, and "sequential keys create a
+//                          hot spot: every new write lands on the last shard"
+//
+// CONFIG — page figures, used verbatim
+//   100 shards          §1: "with 100 shards you are sampling the tail of
+//                       the latency distribution 100 times"
+//   1024 logical shards over 4 physical machines     §5
+//   ~150 ring points per physical server (virtual nodes)   §2
+//   100 salt buckets, key "post:12345:likes:{0-99}"        §3
+//   100,000,000 followers for the celebrity                §3
+//   ~1,000,000 follower threshold for skipping fan-out     §7
+//   five celebrity timelines merged at read time           §3
+//   Snowflake: 41-bit timestamp / 10-bit machine / 12-bit sequence, 64 bits
+//                       §4 — and ~69 years, 1024 machines and 4096 per ms
+//                       are RECOMPUTED here from those bit widths
+//   "a scatter-gather query is as slow as your slowest shard"  §1
+//
+// CONFIG — declared here, because the page publishes no such figures
+//   10,000 reads/s of the dominant query, "tweets by author, newest first"
+//   1,000 writes/s of new tweets
+//   per-shard p50 10 ms and p99 100 ms — so by definition 1% of shard
+//     responses exceed 100 ms, which is the only input the tail maths needs
+//   LIMIT 20 per page; 300 tweets per user; 24 months of activity
+//   one author is trending and takes 10% of all by-author reads
+//
+// The tail figures are not asserted: with k shards touched, the share of
+// fan-out queries exceeding the per-shard p99 is 1 − 0.99^k, and the p99 of
+// the fan-out query is the single-shard 0.99^(1/k) percentile. At k = 100
+// that is 63% and the 99.99th percentile — which is what the page means by
+// "a p99 that looks fine per-shard becomes a p50 problem".
+// ======================================================================
+
+var sdshard_SHARDS   = 100;          // page §1
+var sdshard_READS    = 10000;        // declared: by-author reads/s
+var sdshard_WRITES   = 1000;         // declared: new tweets/s
+var sdshard_P99_RATE = 0.01;         // definition of a p99
+var sdshard_P50_MS   = 10;           // declared
+var sdshard_P99_MS   = 100;          // declared
+var sdshard_LIMIT    = 20;           // declared page size
+var sdshard_PER_USER = 300;          // declared tweets per user
+var sdshard_MONTHS   = 24;           // declared months of activity
+var sdshard_CELEB_SHARE = 0.10;      // declared: the trending author's read share
+var sdshard_FOLLOWERS = 100000000;   // page §3
+var sdshard_THRESHOLD = 1000000;     // page §7: "over about a million followers"
+var sdshard_MERGE_N  = 5;            // page §3: "merging five celebrity timelines"
+var sdshard_SALT     = 100;          // page §3: {0-99}
+var sdshard_LOGICAL  = 1024;         // page §5
+var sdshard_PHYSICAL = 4;            // page §5
+var sdshard_VNODES   = 150;          // page §2
+
+// Snowflake, recomputed from the page's bit widths
+var sdshard_BITS_T = 41, sdshard_BITS_M = 10, sdshard_BITS_S = 12;
+var sdshard_SNOW_BITS = 1 + sdshard_BITS_T + sdshard_BITS_M + sdshard_BITS_S;
+var sdshard_SNOW_YEARS = Math.pow(2, sdshard_BITS_T) / (1000 * 60 * 60 * 24 * 365.25);
+var sdshard_SNOW_MACHINES = Math.pow(2, sdshard_BITS_M);
+var sdshard_SNOW_PER_MS = Math.pow(2, sdshard_BITS_S);
+
+function sdshard_n(v, dec) {
+  if (!isFinite(v)) return "—";
+  return Number(v).toLocaleString("en-US", {
+    minimumFractionDigits: dec === undefined ? 0 : dec,
+    maximumFractionDigits: dec === undefined ? 0 : dec
+  });
+}
+function sdshard_pc(v, dec) { return sdshard_n(v * 100, dec === undefined ? 1 : dec) + "%"; }
+function sdshard_x(v) { return sdshard_n(v, v >= 10 ? 0 : 1) + "×"; }
+function sdshard_qps(v) { return sdshard_n(v, v < 10 ? 1 : 0) + "/s"; }
+
+// ----------------------------------------------------------------------
+// One shard key, costed against the identical workload.
+// ----------------------------------------------------------------------
+function sdshard_solve(cfg) {
+  var r = {};
+
+  // --- routing ----------------------------------------------------------
+  r.shardsRead = cfg.inQuery ? 1 : sdshard_SHARDS;
+  r.shardReqs = sdshard_READS * r.shardsRead;
+  r.perShardRead = r.shardReqs / sdshard_SHARDS;
+
+  // --- the tail: k independent draws from the same distribution ---------
+  r.tailOver = 1 - Math.pow(1 - sdshard_P99_RATE, r.shardsRead);
+  r.fanPctile = 100 * Math.pow(1 - sdshard_P99_RATE, 1 / r.shardsRead);
+
+  // --- writes -----------------------------------------------------------
+  r.writeEven = sdshard_WRITES / sdshard_SHARDS;
+  r.maxWrite = cfg.hot === "sequential" ? sdshard_WRITES : r.writeEven;
+  r.writeHotX = r.writeEven ? r.maxWrite / r.writeEven : 1;
+
+  // --- reads, once one author is trending -------------------------------
+  // with a scattered key the celebrity's rows are spread over every shard,
+  // so there is no read hot spot to create — every shard is already hot.
+  r.maxRead = cfg.hot === "celebrity"
+    ? sdshard_CELEB_SHARE * sdshard_READS +
+      (1 - sdshard_CELEB_SHARE) * sdshard_READS / sdshard_SHARDS
+    : r.perShardRead;
+  r.readHotX = r.perShardRead ? r.maxRead / r.perShardRead : 1;
+
+  // --- what sharding breaks, costed -------------------------------------
+  r.limitRows = sdshard_LIMIT * r.shardsRead;
+  r.userShards = cfg.id === "author" ? 1
+    : cfg.id === "created" ? sdshard_MONTHS
+    : sdshard_SHARDS * (1 - Math.pow(1 - 1 / sdshard_SHARDS, sdshard_PER_USER));
+
+  // --- adding one machine ------------------------------------------------
+  r.moveFrac = cfg.reshard === "modulo" ? 1 - 1 / (sdshard_SHARDS + 1)
+    : cfg.reshard === "ring" ? 1 / (sdshard_SHARDS + 1)
+    : 0;
+  r.ringPoints = sdshard_VNODES * sdshard_PHYSICAL;
+
+  // --- the celebrity, as the page frames it ------------------------------
+  r.fanoutWrites = sdshard_FOLLOWERS;
+  r.hybridWrites = 0;
+  r.mergeReads = sdshard_MERGE_N;
+
+  // a single score for the head: shard-requests per second is the honest one
+  r.work = r.shardReqs;
+  return r;
+}
+
+var sdshard_PHASES = [
+  "the key", "three properties", "route one read", "fan-out cost", "the tail",
+  "the write path", "what it breaks", "add a machine", "verdict"
+];
+
+function sdshard_build(cfg) {
+  var r = sdshard_solve(cfg);
+  var steps = [];
+  function f(ph, flag, caption) {
+    steps.push({ ph: ph, flag: flag, caption: caption, r: r, cfg: cfg });
+  }
+
+  f(0, "idle",
+    "<b>" + sdshard_n(sdshard_SHARDS) + " shards, " + sdshard_qps(sdshard_READS) +
+    " of the dominant read — <i>tweets by author, newest first</i> — and " +
+    sdshard_qps(sdshard_WRITES) + " of new tweets.</b> This tab shards on <code>" +
+    cfg.key + "</code>. " + cfg.opening + " Press Play.");
+
+  f(1, cfg.inQuery ? "ok" : "bad",
+    "<b>The three properties, checked.</b> Cardinality: <b>" + cfg.cardWord +
+    "</b> — " + cfg.cardNote + ". Even distribution: <b>" + (cfg.even ? "yes" : "no") +
+    "</b> — " + cfg.evenNote + ". Present in your queries: <b>" +
+    (cfg.inQuery ? "yes" : "no") + "</b> — " + cfg.queryNote + ". " +
+    (cfg.inQuery
+      ? "All three, which is rarer than it sounds; you usually cannot have all three."
+      : "<b>The third is the one candidates miss</b>, and it is the one that decides " +
+        "everything below."));
+
+  f(2, cfg.inQuery ? "ok" : "bad",
+    "<b>One read arrives: \"the last " + sdshard_LIMIT + " tweets by author 42\".</b> " +
+    (cfg.inQuery
+      ? "The router hashes <code>author_id</code> and sends it to <b>one shard</b>. The " +
+        "other " + (sdshard_SHARDS - 1) + " never hear about this query."
+      : "The router has no idea which shard holds that author's tweets, because the key " +
+        "it shards on is not in the filter. So it asks <b>all " + sdshard_SHARDS +
+        "</b> and merges the answers. That is a <b>scatter-gather</b>, and it is not a " +
+        "tuning problem — it is the key choice, showing up as a query pattern."));
+
+  f(3, r.shardsRead === 1 ? "ok" : "bad",
+    "<b>" + sdshard_qps(sdshard_READS) + " of those, and the store is now doing <b>" +
+    sdshard_n(r.shardReqs) + " shard-requests a second</b></b> — " +
+    sdshard_n(sdshard_READS) + " × " + r.shardsRead + " shards touched. Per shard that " +
+    "is <b>" + sdshard_qps(r.perShardRead) + "</b>" +
+    (r.shardsRead === 1
+      ? ", which is the read rate divided by the shard count — the thing sharding is " +
+        "supposed to buy you."
+      : " — every shard is serving <i>every</i> query, so adding shards has bought " +
+        "storage and bought no read capacity at all."));
+
+  f(4, r.tailOver > 0.5 ? "bad" : "ok",
+    "<b>The tail, which is where this actually hurts.</b> A shard's p99 is " +
+    sdshard_P99_MS + " ms, so 1 in 100 shard responses is slower than that. A query is " +
+    "as slow as its <i>slowest</i> shard, so the share of queries that exceed " +
+    sdshard_P99_MS + " ms is <b>1 − 0.99<sup>" + r.shardsRead + "</sup> = " +
+    sdshard_pc(r.tailOver, 2) + "</b>" +
+    (r.tailOver > 0.5
+      ? ". Over half. <b>A p99 that looks fine per-shard has become a p50 problem for the " +
+        "fan-out query</b> — the page's sentence, and it is arithmetic, not rhetoric. Put " +
+        "the other way: this query's p99 is the single shard's <b>" +
+        sdshard_n(r.fanPctile, 2) + "th percentile</b>, and nobody tunes for that."
+      : ", which is just the shard's own p99, because there is only one shard in the " +
+        "query. The fan-out query's p99 and the shard's p99 are the same number."));
+
+  f(5, cfg.hot === "none" ? "ok" : "bad",
+    "<b>Now the writes: " + sdshard_qps(sdshard_WRITES) + " of new tweets.</b> " +
+    (cfg.hot === "sequential"
+      ? "The key is ordered and the clock only goes one way, so <b>every new write lands " +
+        "on the last shard</b>: " + sdshard_qps(r.maxWrite) + " on one machine while " +
+        (sdshard_SHARDS - 1) + " sit at zero. <b>" + sdshard_x(r.writeHotX) +
+        " the even load</b>, and no amount of adding shards fixes it — the next shard " +
+        "becomes the hot one. The fixes are the page's: hash the key, or prefix it with a " +
+        "bucket so the composite is <code>(bucket, timestamp)</code>."
+      : cfg.hot === "celebrity"
+        ? "Writes are even at " + sdshard_qps(r.writeEven) + " a shard. The <i>reads</i> " +
+          "are not: one author is trending and takes " + sdshard_pc(sdshard_CELEB_SHARE, 0) +
+          " of all by-author reads, and every one of their tweets is on <b>one shard</b> " +
+          "by construction. That shard is at <b>" + sdshard_qps(r.maxRead) + "</b> against " +
+          "an average of " + sdshard_qps(r.perShardRead) + " — <b>" + sdshard_x(r.readHotX) +
+          "</b>. <b>Even distribution of keys is not even distribution of load</b>, and " +
+          "this is the price of co-location."
+        : "Even at " + sdshard_qps(r.writeEven) + " a shard, and — genuinely — <b>no " +
+          "celebrity problem</b>: a trending author's tweets are spread over every shard, " +
+          "so no single shard inherits them. This key wins the hot-spot argument and has " +
+          "already lost the round on the previous two frames."));
+
+  f(6, r.userShards > 1 ? "warn" : "ok",
+    "<b>What sharding broke, and what this key did about it.</b> Joins and cross-shard " +
+    "transactions are gone for every key — that is the point of no return. What the key " +
+    "decides is how often you hit them: one user's " + sdshard_PER_USER + " tweets live " +
+    "on <b>" + sdshard_n(r.userShards, r.userShards < 10 ? 0 : 1) + " shard" +
+    (r.userShards >= 1.5 ? "s" : "") + "</b> here" +
+    (r.userShards <= 1
+      ? ", so the common transaction stays single-shard. <b>\"Keep related data on the " +
+        "same shard\" is the design move that avoids most of this</b> — choosing the key " +
+        "so your transactions do not cross shards beats engineering distributed ones."
+      : ", so a transaction over a user's own data is a distributed transaction, and " +
+        "every ORDER BY + LIMIT " + sdshard_LIMIT + " fetches <b>" +
+        sdshard_n(r.limitRows) + " rows to return " + sdshard_LIMIT + "</b>.") +
+    " IDs are Snowflake either way: <b>" + sdshard_BITS_T + " + " + sdshard_BITS_M + " + " +
+    sdshard_BITS_S + " bits</b> gives " + sdshard_n(sdshard_SNOW_YEARS, 1) + " years, " +
+    sdshard_n(sdshard_SNOW_MACHINES) + " machines and " + sdshard_n(sdshard_SNOW_PER_MS) +
+    " per millisecond each, with no allocator on the write path.");
+
+  f(7, r.moveFrac > 0.5 ? "bad" : "ok",
+    "<b>You are at capacity. Add one machine — shard " + (sdshard_SHARDS + 1) +
+    ".</b> " + cfg.reshardNote + " <b>" + sdshard_pc(r.moveFrac, 2) + " of keys move.</b> " +
+    "And the move everyone forgets: with <b>" + sdshard_n(sdshard_LOGICAL) +
+    " logical shards</b> mapped onto " + sdshard_PHYSICAL + " machines, " +
+    "<code>shard = hash(key) % " + sdshard_n(sdshard_LOGICAL) + "</code> <i>never " +
+    "changes</i> — growth moves logical shards between machines, so <b>0% of keys change " +
+    "their logical shard</b> and rebalancing is a data move plus a mapping update rather " +
+    "than a rehash. Without it, the live migration is six steps — add, dual-write, " +
+    "backfill, verify by checksum, shift reads, stop dual-writing — and <b>every step is " +
+    "reversible until the last one</b>.");
+
+  f(8, cfg.verdictFlag, cfg.verdict(r));
+
+  return { id: cfg.id, label: cfg.label, steps: steps, phases: sdshard_PHASES,
+    r: r, cfg: cfg };
+}
+
+var sdshard_TWEET = sdshard_build({
+  id: "tweet", label: "hash(tweet_id)",
+  key: "tweet_id", reshard: "modulo",
+  cardWord: "very high", cardNote: "one value per tweet, which is as high as it gets",
+  even: true, evenNote: "a hash spreads them perfectly, and a celebrity cannot dent it",
+  inQuery: false,
+  queryNote: "the dominant read filters by <code>author_id</code>, which this key knows " +
+    "nothing about",
+  hot: "none",
+  opening: "It looks like the textbook answer: maximum cardinality, perfectly even, and " +
+    "no hot spot anywhere.",
+  reshardNote: "Plain <code>hash(tweet_id) % N</code>, so N changing rehashes everything:",
+  verdictFlag: "bad",
+  verdict: function (r) {
+    return "<b>Two of the three properties, and it loses on the third.</b> Perfect " +
+      "distribution, no celebrity problem, and <b>" + sdshard_n(r.shardReqs) +
+      " shard-requests a second</b> to serve " + sdshard_n(sdshard_READS) +
+      " queries, with <b>" + sdshard_pc(r.tailOver, 1) + "</b> of them slower than the " +
+      "per-shard p99. Adding shards makes both numbers <i>worse</i>, which is the " +
+      "diagnostic: if scaling out does not help, the key is not in the query. <b>Shard on " +
+      "whatever the dominant read filters by</b> — everything else is a tie-breaker.";
+  }
+});
+
+var sdshard_AUTHOR = sdshard_build({
+  id: "author", label: "hash(author_id)",
+  key: "author_id", reshard: "ring",
+  cardWord: "high", cardNote: "one value per user, millions of them",
+  even: true,
+  evenNote: "even by key — and the page names the exception, celebrity <code>user_id</code>",
+  inQuery: true,
+  queryNote: "the dominant read <i>is</i> \"posts by this author, newest first\"",
+  hot: "celebrity",
+  opening: "This is the page's §7 answer: consistent hashing with virtual nodes, chosen " +
+    "because the dominant read is by author and it keeps a user's posts co-located.",
+  reshardNote: "Consistent hashing with " + sdshard_VNODES + " ring points per server, " +
+    "so a key only moves if the new server lands between it and its old owner:",
+  verdictFlag: "ok",
+  verdict: function (r) {
+    return "<b>" + sdshard_n(r.shardReqs) + " shard-requests a second instead of " +
+      sdshard_n(sdshard_TWEET.r.shardReqs) + " — " +
+      sdshard_x(sdshard_TWEET.r.shardReqs / r.shardReqs) + " less work for the identical " +
+      "traffic</b>, a fan-out p99 that is just the shard's p99, and one user's data on one " +
+      "shard. The costs are real and worth volunteering: the follower graph cannot be " +
+      "joined and lives separately, global aggregates need precomputing, and <b>the " +
+      "trending author's shard is at " + sdshard_x(r.readHotX) + " the average</b>. That " +
+      "last one has the page's canonical answer — a hybrid: fan out on write for the long " +
+      "tail, and for accounts over about " + sdshard_n(sdshard_THRESHOLD / 1000000) +
+      "M followers skip fan-out entirely and merge them in at read time. One write to " +
+      sdshard_n(sdshard_FOLLOWERS / 1000000) + " million timelines is not a thing you do; " +
+      "merging " + sdshard_MERGE_N + " celebrity timelines at read time is cheap.";
+  }
+});
+
+var sdshard_CREATED = sdshard_build({
+  id: "created", label: "range by created_at",
+  key: "created_at", reshard: "range",
+  cardWord: "high", cardNote: "a timestamp per tweet — but ordered, which is the problem",
+  even: false,
+  evenNote: "sequential keys create a hot spot: every new write lands on the last shard",
+  inQuery: false,
+  queryNote: "\"by author, newest first\" filters by author; the time filter only narrows " +
+    "within a shard",
+  hot: "sequential",
+  opening: "Range sharding by month. It is the right answer for a different question, " +
+    "and watching it fail this one is how you learn which question.",
+  reshardNote: "New ranges take new data, so nothing existing has to move:",
+  verdictFlag: "bad",
+  verdict: function (r) {
+    return "<b>The only key here that gets growth for free — <b>" +
+      sdshard_pc(r.moveFrac, 0) + " of keys move when you add a machine</b> — and the " +
+      "only one that can do a range scan.</b> It also puts <b>" +
+      sdshard_qps(r.maxWrite) + " on one shard</b> while " + (sdshard_SHARDS - 1) +
+      " idle, and still scatter-gathers every read, at <b>" + sdshard_pc(r.tailOver, 1) +
+      "</b> over the per-shard p99. <b>The lesson is not that range sharding is bad</b> — " +
+      "it is that the key must match the dominant access pattern, and the dominant access " +
+      "pattern here is by author. For time-series with range queries this key wins; for " +
+      "this workload it loses twice.";
+  }
+});
+
+var sdshard_RUNS = [sdshard_TWEET, sdshard_AUTHOR, sdshard_CREATED];
+
+function sdshard_compare(d) {
+  var rows = [], i, run, r;
+  for (i = 0; i < sdshard_RUNS.length; i++) {
+    run = sdshard_RUNS[i]; r = run.r;
+    rows.push([
+      run.label,
+      String(r.shardsRead),
+      sdshard_n(r.shardReqs),
+      sdshard_pc(r.tailOver, 1),
+      sdshard_qps(r.maxWrite),
+      sdshard_x(Math.max(r.readHotX, r.writeHotX)),
+      sdshard_n(r.limitRows),
+      sdshard_pc(r.moveFrac, 1)
+    ]);
+  }
+  return d.table(
+    ["key", "shards / read", "shard-req/s", "over p99", "hottest write",
+      "hot factor", "rows for " + sdshard_LIMIT, "keys moved"],
+    rows);
+}
+
+S["sdsharding"] = {
+  title: "Route the same workload under three shard keys",
+  note: "<b>" + sdshard_n(sdshard_SHARDS) + " shards</b> (the page's own figure), <b>" +
+    sdshard_qps(sdshard_READS) + "</b> of the dominant read — <i>tweets by author, newest " +
+    "first</i> — and <b>" + sdshard_qps(sdshard_WRITES) + "</b> of new tweets. The three " +
+    "tabs change the shard key and nothing else. Declared, because the page publishes no " +
+    "such figures: a shard's p50 is <b>" + sdshard_P50_MS + " ms</b> and its p99 <b>" +
+    sdshard_P99_MS + " ms</b> (so by definition 1 response in 100 is slower), pages are " +
+    "<b>LIMIT " + sdshard_LIMIT + "</b>, a user has <b>" + sdshard_PER_USER +
+    "</b> tweets over <b>" + sdshard_MONTHS + "</b> months, and one trending author takes " +
+    "<b>" + sdshard_pc(sdshard_CELEB_SHARE, 0) + "</b> of by-author reads. The tail " +
+    "figures are derived, not asserted: with <i>k</i> shards touched, <b>1 − 0.99<sup>k</sup" +
+    "></b> of queries exceed the per-shard p99 and the fan-out p99 is the shard's <b>0.99" +
+    "<sup>1/k</sup></b> percentile. Snowflake's <b>" + sdshard_n(sdshard_SNOW_YEARS, 1) +
+    " years</b>, <b>" + sdshard_n(sdshard_SNOW_MACHINES) + " machines</b> and <b>" +
+    sdshard_n(sdshard_SNOW_PER_MS) + "/ms</b> are recomputed from the page's " +
+    sdshard_BITS_T + "/" + sdshard_BITS_M + "/" + sdshard_BITS_S + " bit widths.",
+  interval: 1500,
+
+  scenarios: sdshard_RUNS,
+
+  draw: function (step, d, ctx) {
+    var r = step.r, cfg = step.cfg, ph = step.ph, i;
+
+    var names = (ctx.scenario && ctx.scenario.phases) || sdshard_PHASES;
+    var chips = [];
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i], flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+
+    // ---- head ---------------------------------------------------------------
+    var head = d.cols([
+      d.big(ph >= 2 ? String(r.shardsRead) : "—", "shards per read",
+        ph < 2 ? "idle" : r.shardsRead === 1 ? "ok" : "bad"),
+      d.stat({
+        label: "shard-requests / s",
+        value: ph >= 3 ? sdshard_n(r.shardReqs) : "—",
+        sub: ph >= 3 ? sdshard_qps(r.perShardRead) + " on every shard"
+          : sdshard_n(sdshard_READS) + " queries/s arriving",
+        flag: ph < 3 ? "idle" : r.shardsRead === 1 ? "ok" : "bad"
+      }),
+      d.stat({
+        label: "queries over the per-shard p99",
+        value: ph >= 4 ? sdshard_pc(r.tailOver, 2) : "—",
+        sub: ph >= 4 ? "fan-out p99 = shard p" + sdshard_n(r.fanPctile, 2)
+          : "1 − 0.99^k, k = shards touched",
+        flag: ph < 4 ? "idle" : r.tailOver > 0.5 ? "bad" : "ok"
+      }),
+      d.stat({
+        label: "hottest shard",
+        value: ph >= 5 ? sdshard_x(Math.max(r.readHotX, r.writeHotX)) : "—",
+        sub: ph >= 5
+          ? (r.writeHotX > 1 ? sdshard_qps(r.maxWrite) + " of writes"
+             : r.readHotX > 1 ? sdshard_qps(r.maxRead) + " of reads" : "load is even")
+          : "keys even ≠ load even",
+        flag: ph < 5 ? "idle" : Math.max(r.readHotX, r.writeHotX) > 1 ? "bad" : "ok"
+      })
+    ]);
+
+    // ---- the three properties -------------------------------------------------
+    var props = d.cols([
+      d.node({
+        title: "high cardinality",
+        status: ph >= 1 ? cfg.cardWord.toUpperCase() : "—",
+        statusFlag: ph < 1 ? "idle" : "ok",
+        meta: "enough distinct values to spread",
+        flag: ph < 1 ? "idle" : "ok"
+      }),
+      d.node({
+        title: "even distribution",
+        status: ph < 1 ? "—" : cfg.even ? "YES" : "NO",
+        statusFlag: ph < 1 ? "idle" : cfg.even ? "ok" : "bad",
+        meta: ph >= 5 && cfg.hot === "celebrity" ? "by key, not by load" : "no shard takes more",
+        flag: ph < 1 ? "idle" : cfg.even ? (ph >= 5 && cfg.hot === "celebrity" ? "warn" : "ok") : "bad"
+      }),
+      d.node({
+        title: "present in your queries",
+        status: ph < 1 ? "—" : cfg.inQuery ? "YES" : "NO",
+        statusFlag: ph < 1 ? "idle" : cfg.inQuery ? "ok" : "bad",
+        meta: "the one candidates miss",
+        flag: ph < 1 ? "idle" : cfg.inQuery ? "ok" : "bad"
+      })
+    ]);
+
+    // ---- the shard grid: what this frame lights up -----------------------------
+    var mode = ph >= 5 ? "write" : ph >= 2 ? "read" : "idle";
+    var cells = [];
+    for (i = 0; i < sdshard_SHARDS; i++) {
+      var flag, title;
+      if (mode === "idle") {
+        flag = "idle"; title = "shard " + (i + 1) + " — idle";
+      } else if (mode === "read") {
+        var touched = r.shardsRead > 1 || i === 41 % sdshard_SHARDS;
+        var hot = cfg.hot === "celebrity" && i === 7;
+        flag = !touched ? "idle" : hot ? "bad" : r.shardsRead > 1 ? "warn" : "ok";
+        title = "shard " + (i + 1) + (touched
+          ? " — asked, " + sdshard_qps(hot ? r.maxRead : r.perShardRead)
+          : " — never hears about this query");
+      } else {
+        var seqHot = cfg.hot === "sequential" && i === sdshard_SHARDS - 1;
+        var celHot = cfg.hot === "celebrity" && i === 7;
+        flag = seqHot || celHot ? "bad" : cfg.hot === "sequential" ? "idle" : "ok";
+        title = "shard " + (i + 1) + " — " +
+          (seqHot ? sdshard_qps(r.maxWrite) + " of writes, all of them"
+           : celHot ? sdshard_qps(r.maxRead) + " of reads, the trending author"
+           : cfg.hot === "sequential" ? "0 writes — its range is in the past"
+           : sdshard_qps(r.writeEven) + " of writes");
+      }
+      cells.push({ label: "", flag: flag, title: title });
+    }
+    var grid = d.cells(cells, {
+      label: mode === "idle" ? sdshard_n(sdshard_SHARDS) + " shards"
+        : mode === "read" ? "shards asked by one read · hover for load"
+        : "write and read load per shard · hover for the figure",
+      dense: true
+    });
+
+    // ---- the tail -----------------------------------------------------------
+    var tail = "";
+    if (ph >= 4) {
+      tail = d.stack([
+        d.bar({
+          label: "queries slower than the per-shard p99 (" + sdshard_P99_MS + " ms)",
+          pct: r.tailOver * 100,
+          value: sdshard_pc(r.tailOver, 2),
+          flag: r.tailOver > 0.5 ? "bad" : "ok"
+        }),
+        d.bar({
+          label: "single-shard percentile this query's p99 actually lands on",
+          pct: (r.fanPctile - 99) / (100 - 99) * 100,
+          value: "p" + sdshard_n(r.fanPctile, 2) +
+            (r.shardsRead === 1 ? " — its own p99" : ""),
+          flag: r.fanPctile > 99.9 ? "bad" : "ok"
+        })
+      ]);
+    }
+
+    // ---- what it breaks -------------------------------------------------------
+    var breaks = "";
+    if (ph >= 6) {
+      breaks = d.table(
+        ["breaks", "cost under this key", "what you do"],
+        [
+          ["Joins", "the follower graph is on other machines",
+            "denormalise, or join in the application"],
+          ["Transactions", "a user's data spans " +
+            sdshard_n(r.userShards, r.userShards < 10 ? 0 : 1) + " shard" +
+            (r.userShards >= 1.5 ? "s" : ""),
+            r.userShards <= 1 ? "co-located — stays single-shard" : "sagas, or redesign the key"],
+          ["Unique constraints", "uniqueness is per-shard",
+            "central ID service, or fold the shard into the key"],
+          ["COUNT(*)", sdshard_n(sdshard_SHARDS) + " shards visited",
+            "precompute, or an analytics store"],
+          ["ORDER BY + LIMIT " + sdshard_LIMIT,
+            sdshard_n(r.limitRows) + " rows fetched to return " + sdshard_LIMIT,
+            "fetch k from each shard, merge"],
+          ["Autoincrement IDs", sdshard_SNOW_BITS + "-bit Snowflake instead",
+            sdshard_n(sdshard_SNOW_YEARS, 1) + " yr · " + sdshard_n(sdshard_SNOW_MACHINES) +
+            " machines · " + sdshard_n(sdshard_SNOW_PER_MS) + "/ms"],
+          ["Rebalancing", sdshard_pc(r.moveFrac, 2) + " of keys move per added machine",
+            sdshard_n(sdshard_LOGICAL) + " logical shards → 0% move"]
+        ]);
+    }
+
+    // ---- growth / hot-spot fixes ------------------------------------------------
+    var growth = "";
+    if (ph >= 7) {
+      growth = d.cols([
+        d.stat({
+          label: "plain modulo",
+          value: sdshard_pc(1 - 1 / (sdshard_SHARDS + 1), 0),
+          sub: "of keys move when N changes",
+          flag: "bad"
+        }),
+        d.stat({
+          label: "consistent hashing",
+          value: sdshard_pc(1 / (sdshard_SHARDS + 1), 2),
+          sub: r.ringPoints + " ring points (" + sdshard_VNODES + " × " + sdshard_PHYSICAL + ")",
+          flag: "ok"
+        }),
+        d.stat({
+          label: sdshard_n(sdshard_LOGICAL) + " logical shards",
+          value: "0%",
+          sub: "hash never changes — only the mapping",
+          flag: "ok"
+        }),
+        d.stat({
+          label: "salting a viral counter",
+          value: sdshard_SALT + "×",
+          sub: "writes spread " + sdshard_SALT + "× · reads cost " + sdshard_SALT + " lookups",
+          flag: "warn"
+        })
+      ]);
+    }
+
+    var foot = ph >= 8
+      ? d.stack([
+          sdshard_compare(d),
+          d.note("The celebrity row of the page's hot-spot table is the one that survives a " +
+            "good key: <b>" + sdshard_n(sdshard_FOLLOWERS) + " followers</b> means fan-out " +
+            "on write costs " + sdshard_n(sdshard_FOLLOWERS) + " timeline writes for one " +
+            "tweet, so above about " + sdshard_n(sdshard_THRESHOLD) + " followers you skip " +
+            "fan-out and merge " + sdshard_MERGE_N + " celebrity timelines at read time " +
+            "instead. Neither pure strategy survives the distribution; the hybrid does.",
+            "ok")
+        ])
+      : d.note(ph >= 5
+          ? "Each block is a shard. <b>Red is a shard taking disproportionate load</b> · " +
+            "green is a shard doing its share · grey is a shard doing nothing."
+          : ph >= 2
+            ? "Each block is a shard. Amber blocks were asked this query; grey ones never " +
+              "heard about it. <b>A scatter-gather is as slow as your slowest shard.</b>"
+            : "Same " + sdshard_n(sdshard_SHARDS) + " shards, same traffic, in all three " +
+              "tabs. Only the key changes.",
+          ph >= 5 && Math.max(r.readHotX, r.writeHotX) > 1 ? "bad" : undefined);
+
+    return d.stack([
+      d.pills(chips),
+      head,
+      props,
+      grid,
+      tail,
+      breaks,
+      growth,
+      foot
+    ]);
+  }
+};
+
+  // ====================================================================
+// ======================================================================
+// SIM · sdtheframework  (the-framework.md)
+//
+// The time axis is phase 5 — the deep dive, minutes 25 to 40 — because that
+// is the phase the page says the score is decided in, and it is the only
+// phase whose content the page specifies exactly: the fan-out worker taken
+// to level 1, level 2 and level 3, in its own words.
+//
+// (The 45-minute clock across all six phases is already the axis of the
+// anti-patterns sim. This one zooms into the fifteen minutes that page
+// calls "the longest phase and where the score is decided".)
+//
+// Three candidates get the identical board, the identical fifteen minutes
+// and the identical interviewer. The machinery is the same in all three:
+// touching a component opens three probes (one per level), answering a
+// level closes one, and the clock is hard — a move gets min(what it needs,
+// what is left), so an answer started at minute 38 that needs four minutes
+// is cut off at 40 and closes nothing.
+//
+// CONFIG — page figures, used verbatim
+//   deep dive = minutes 25–40, 15 minutes      §1 phase table
+//   the phase's deliverable: "one or two components taken three levels
+//     down"                                     §1 phase table
+//   the three levels of the fan-out worker      §6 table, quoted below
+//   800-entry capped list, trimmed on insert    §6 level 2
+//   idempotent on tweet_id, visibility timeout, celebrity carve-out  §6 L3
+//   "I could go deep on the fan-out path … or on how the timeline cache is
+//     sharded and kept warm. Which is more useful?"   §6
+//   "If they say you pick, pick the hardest thing you can actually defend"
+//   "I haven't used it — I'd reach for X here; how does it differ?"   §8
+//   "Bluffing loses more than not knowing."                          §8
+//   the seven boxes are §5's diagram, minus the client
+//
+// CONFIG — declared here, because the page publishes no such figures
+//   a level-1 answer takes 1 minute, level 2 takes 2, level 3 takes 4 — so
+//     one component taken all the way costs 7 of the 15 minutes and two
+//     costs 14, which is why the page says "one or two"
+//   the offer costs 30 seconds
+//   a bluffed answer costs 2 minutes, closes nothing, and opens 2 new probes
+//   the §8 recovery move costs 30 seconds and closes the probe honestly
+// ======================================================================
+
+var sdframe_START = 25;      // page: the deep dive opens at minute 25
+var sdframe_END   = 40;      // page: and closes at 40
+var sdframe_WIN   = sdframe_END - sdframe_START;
+var sdframe_WRAP  = 5;       // page: phase 6 is 40–45
+var sdframe_MIN   = [0, 1, 2, 4];   // declared: minutes for a level-1/2/3 answer
+var sdframe_OFFER = 0.5;     // declared
+var sdframe_BLUFF = 2;       // declared
+var sdframe_RECOV = 0.5;     // declared
+var sdframe_PROBES = 3;      // one probe per level, opened when you touch a box
+var sdframe_GOAL = 1;        // page: "one or two components three levels down"
+var sdframe_CAP = 800;       // page §6 level 2: a capped list of 800 entries
+
+var sdframe_BOX = [
+  "load balancer", "write service", "tweet store", "queue",
+  "fan-out worker", "timeline cache", "read service"
+];
+
+// The page's own ladder, quoted. Anything not in the page's table is marked
+// as the sim's own wording in the note.
+var sdframe_LADDER = {
+  "fan-out worker": [
+    "\"A worker pushes each new tweet into followers' timeline caches.\"",
+    "\"It reads from a queue, batches by follower shard, and writes with a capped list " +
+      "per user — " + sdframe_CAP + " entries, trimmed on insert.\"",
+    "\"Delivery is at-least-once, so writes are idempotent on <code>tweet_id</code>. A " +
+      "crashed worker's messages are reclaimed by the consumer group after a visibility " +
+      "timeout. For users with millions of followers, fan-out is skipped entirely and " +
+      "their tweets are merged in at read time — otherwise one write costs millions.\""
+  ],
+  "timeline cache": [
+    "\"Timelines are precomputed and read from a cache.\"",
+    "\"Sharded by <code>user_id</code>, one capped list per user, written by the fan-out " +
+      "worker and read whole on a timeline request.\"",
+    "\"A lost node is a cold read, not a wrong one: a miss rebuilds from the tweet store, " +
+      "so the store has to be sized for the miss rate we assumed, not the one we hoped " +
+      "for. Eviction is the whole design — an inactive user's timeline should not be " +
+      "occupying memory, so entries expire and are rebuilt on the next visit.\""
+  ],
+  "queue": [
+    "\"A queue absorbs the write spike and the workers drain it.\"",
+    "\"Consumer groups, one partition per follower shard, with a lag alarm.\"",
+    "— the level-3 question is where this run comes apart."
+  ],
+  "load balancer": [
+    "\"Requests hit a load balancer and it spreads them over the app servers.\"",
+    "\"Health-checked, least-connections, and it drains a server before removing it.\"",
+    "— not reached in any run here."
+  ],
+  "write service": [
+    "\"The write service validates the tweet and stores it.\"",
+    "\"Stateless, so the LB can shoot one at any time; it writes the tweet, then " +
+      "publishes to the queue.\"",
+    "— not reached in any run here."
+  ],
+  "tweet store": [
+    "\"Tweets live in a sharded store.\"",
+    "\"Sharded by author, because the dominant read is by author.\"",
+    "— not reached in any run here."
+  ],
+  "read service": [
+    "\"The read service serves the timeline from cache.\"",
+    "\"One cache lookup on the hit path, cursor-paginated, " + sdframe_CAP +
+      " entries available before it has to fall back.\"",
+    "— not reached in any run here."
+  ]
+};
+
+function sdframe_n(v, dec) {
+  if (!isFinite(v)) return "—";
+  return Number(v).toLocaleString("en-US", {
+    minimumFractionDigits: dec === undefined ? 0 : dec,
+    maximumFractionDigits: dec === undefined ? 0 : dec
+  });
+}
+function sdframe_clock(t) {
+  var total = sdframe_START + t;
+  var m = Math.floor(total + 1e-9);
+  var s = Math.round((total - m) * 60);
+  if (s === 60) { m += 1; s = 0; }
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+// ----------------------------------------------------------------------
+// The machinery. One move at a time, against a clock that does not care.
+// ----------------------------------------------------------------------
+function sdframe_state() {
+  return {
+    t: 0, touch: {}, opened: 0, closed: 0, bluffs: 0, recovered: 0,
+    offered: false, cutOff: null, wasted: 0, useful: 0, focus: null, last: null
+  };
+}
+function sdframe_snap(st) {
+  var o = { t: st.t, touch: {}, opened: st.opened, closed: st.closed,
+    bluffs: st.bluffs, recovered: st.recovered, offered: st.offered,
+    cutOff: st.cutOff, wasted: st.wasted, useful: st.useful,
+    focus: st.focus, last: st.last }, k;
+  for (k in st.touch) if (st.touch.hasOwnProperty(k)) o.touch[k] = st.touch[k];
+  o.open = o.opened - o.closed;
+  o.atL3 = 0; o.deepest = 0; o.touched = 0;
+  for (k in o.touch) {
+    if (!o.touch.hasOwnProperty(k)) continue;
+    o.touched++;
+    if (o.touch[k] >= 3) o.atL3++;
+    if (o.touch[k] > o.deepest) o.deepest = o.touch[k];
+  }
+  o.left = Math.max(0, sdframe_WIN - o.t);
+  o.delivered = o.atL3 >= sdframe_GOAL;
+  return o;
+}
+
+function sdframe_move(st, kind, box, level) {
+  var want = kind === "depth" ? sdframe_MIN[level]
+    : kind === "offer" ? sdframe_OFFER
+    : kind === "bluff" ? sdframe_BLUFF
+    : sdframe_RECOV;
+  var left = Math.max(0, sdframe_WIN - st.t);
+  var got = Math.min(want, left);
+  st.t += got;
+  var complete = got >= want - 1e-9 && got > 0;
+
+  if (kind === "depth") {
+    if (st.touch[box] === undefined) { st.touch[box] = 0; st.opened += sdframe_PROBES; }
+    if (complete) {
+      if (level > st.touch[box]) st.touch[box] = level;
+      st.closed += 1;
+      st.useful += got;
+    } else {
+      st.cutOff = { box: box, level: level, got: got, want: want };
+      st.wasted += got;
+    }
+    st.focus = box;
+  } else if (kind === "bluff") {
+    st.opened += 2; st.bluffs += 1; st.wasted += got;
+  } else if (kind === "recover") {
+    st.closed += 1; st.recovered += 1; st.useful += got;
+  } else {
+    st.offered = true; st.useful += got;
+  }
+  st.last = { kind: kind, box: box, level: level, got: got };
+  return st;
+}
+
+function sdframe_build(cfg) {
+  var st = sdframe_state();
+  var steps = [];
+  function frame(flag, caption) {
+    steps.push({ flag: flag, caption: caption, s: sdframe_snap(st), cfg: cfg,
+      ph: steps.length });
+  }
+  function run(moves) {
+    for (var i = 0; i < moves.length; i++) {
+      sdframe_move(st, moves[i][0], moves[i][1], moves[i][2]);
+    }
+  }
+  return { st: st, steps: steps, frame: frame, run: run, cfg: cfg };
+}
+
+// ----------------------------------------------------------------------
+// Tab 1 · six boxes, one level deep
+// ----------------------------------------------------------------------
+function sdframe_breadth() {
+  var b = sdframe_build({ id: "breadth", label: "Touch every box" });
+  var st = b.st;
+
+  b.frame("idle",
+    "<b>Minute " + sdframe_START + ". The board has " + sdframe_BOX.length +
+    " boxes and the deep dive has " + sdframe_WIN + " minutes.</b> This candidate " +
+    "does not offer a choice — they walk the diagram left to right, explaining each " +
+    "box. It is the most natural thing to do and it is the run that scores worst. " +
+    "Press Play.");
+
+  b.run([["depth", "load balancer", 1], ["depth", "write service", 1]]);
+  b.frame("warn",
+    "<b>Load balancer, then the write service — one level each.</b> Every box touched " +
+    "opens <b>" + sdframe_PROBES + " probes</b>: the interviewer now wants to know how " +
+    "each one behaves under load, and what happens when it dies. Two minutes gone, " +
+    "<b>" + sdframe_snap(st).open + " questions open</b>, none of them answered.");
+
+  b.run([["depth", "tweet store", 1], ["depth", "queue", 1]]);
+  b.frame("warn",
+    "<b>The store and the queue.</b> Both are single sentences: <i>tweets live in a " +
+    "sharded store</i>, <i>a queue absorbs the spike</i>. Both are correct. Both are " +
+    "level 1, which the page describes as <b>what everyone says</b> — the answers that " +
+    "distinguish nobody.");
+
+  b.run([["depth", "fan-out worker", 1], ["depth", "timeline cache", 1],
+         ["depth", "read service", 1]]);
+  b.frame("warn",
+    "<b>All " + sdframe_BOX.length + " boxes touched at minute " +
+    sdframe_clock(st.t) + ".</b> The board is fully narrated and the diagram is " +
+    "complete. <b>" + sdframe_snap(st).opened + " probes opened, " +
+    sdframe_snap(st).closed + " closed, " + sdframe_snap(st).open +
+    " open</b> — and the deepest anything has been taken is level 1.");
+
+  b.run([["depth", "fan-out worker", 2]]);
+  b.frame("warn",
+    "<b>\"Can you say more about the fan-out worker?\"</b> — the interviewer has to ask, " +
+    "which is itself a finding. Level 2 lands: reads from a queue, batches by follower " +
+    "shard, a capped list of <b>" + sdframe_CAP + " entries trimmed on insert</b>. Two " +
+    "minutes for one probe. There are <b>" + sdframe_snap(st).left +
+    "</b> left and " + sdframe_snap(st).open + " probes still open.");
+
+  b.run([["depth", "timeline cache", 2]]);
+  b.frame("warn",
+    "<b>The cache, level 2.</b> Sharded by <code>user_id</code>, one capped list each. " +
+    "Good, and still the level everybody reaches. The page's ladder puts the interview " +
+    "one step further on: <b>level 3 is where the failure modes, the idempotency and the " +
+    "celebrity carve-out live</b>, and each of those is a probe that is currently open.");
+
+  b.run([["depth", "load balancer", 2]]);
+  b.frame("bad",
+    "<b>Back to the load balancer for a second level, at minute " + sdframe_clock(st.t) +
+    ".</b> Health checks and connection draining — fine, and the cheapest box on the " +
+    "board to be spending minute 37 on. The expensive thing this run keeps doing is " +
+    "<b>spreading the remaining minutes evenly</b>, which guarantees nothing gets to " +
+    "the bottom.");
+
+  b.run([["depth", "write service", 2]]);
+  var fin = sdframe_snap(st);
+  b.frame("bad",
+    "<b>Minute " + sdframe_END + ".</b> " + fin.touched + " components touched, " +
+    "deepest level <b>" + fin.deepest + "</b>, <b>" + fin.atL3 +
+    " taken three levels down</b> against the phase's stated deliverable of one or two. " +
+    "<b>" + fin.open + " probes left open</b> — every one of them a question the " +
+    "interviewer asked implicitly and did not get answered. Nothing here was wrong. The " +
+    "page's sentence is the whole verdict: <b>the depth score comes from one component " +
+    "explored properly, not six touched.</b>");
+
+  return { id: "breadth", label: "Touch every box", steps: b.steps, fin: fin,
+    phases: ["25:00", "LB + write", "store + queue", "all seven", "fan-out L2",
+      "cache L2", "LB L2", "40:00"] };
+}
+
+// ----------------------------------------------------------------------
+// Tab 2 · offer a choice, then three levels, twice
+// ----------------------------------------------------------------------
+function sdframe_deep() {
+  var b = sdframe_build({ id: "deep", label: "Offer, then three levels" });
+  var st = b.st;
+
+  b.frame("idle",
+    "<b>Minute " + sdframe_START + ", the same board and the same " + sdframe_WIN +
+    " minutes.</b> A level-1 answer costs about a minute, level 2 about two, level 3 " +
+    "about four — so one component taken all the way is <b>" +
+    (sdframe_MIN[1] + sdframe_MIN[2] + sdframe_MIN[3]) + " minutes</b> and two is <b>" +
+    2 * (sdframe_MIN[1] + sdframe_MIN[2] + sdframe_MIN[3]) + "</b>. That arithmetic is " +
+    "why the page says <i>one or two</i>. Press Play.");
+
+  b.run([["offer", null, 0]]);
+  b.frame("ok",
+    "<b>The offer, and it costs thirty seconds.</b> <i>\"I could go deep on the fan-out " +
+    "path and the celebrity problem, or on how the timeline cache is sharded and kept " +
+    "warm. Which is more useful?\"</i> It shows judgement, and — the practical part — it " +
+    "lets the interviewer steer to the rubric line they are filling in. If they say " +
+    "<i>you pick</i>, pick the hardest thing you can actually defend.");
+
+  b.run([["depth", "fan-out worker", 1]]);
+  b.frame("warn",
+    "<b>Fan-out worker, level 1.</b> <i>\"A worker pushes each new tweet into followers' " +
+    "timeline caches.\"</i> One minute, one probe closed, and the page is blunt about " +
+    "where this sits: <b>levels 1 and 2 are what everyone says.</b> Stopping here is the " +
+    "previous tab.");
+
+  b.run([["depth", "fan-out worker", 2]]);
+  b.frame("warn",
+    "<b>Level 2.</b> <i>\"It reads from a queue, batches by follower shard, and writes " +
+    "with a capped list per user — " + sdframe_CAP + " entries, trimmed on insert.\"</i> " +
+    "Now there are mechanisms and a number. Still, every competent candidate arrives " +
+    "here, and the clock is at " + sdframe_clock(st.t) + " with <b>" +
+    sdframe_snap(st).left + " minutes</b> in hand.");
+
+  b.run([["depth", "fan-out worker", 3]]);
+  b.frame("ok",
+    "<b>Level 3 — the interview.</b> <i>\"Delivery is at-least-once, so writes are " +
+    "idempotent on <code>tweet_id</code>. A crashed worker's messages are reclaimed by " +
+    "the consumer group after a visibility timeout. For users with millions of " +
+    "followers, fan-out is skipped entirely and their tweets are merged in at read " +
+    "time — otherwise one write costs millions.\"</i> Three sentences, four minutes, and " +
+    "<b>all three of this component's probes are now closed</b>: what it does, how it " +
+    "does it, and what happens when it goes wrong.");
+
+  b.run([["depth", "timeline cache", 1]]);
+  b.frame("warn",
+    "<b>Second component, and the one the offer named.</b> Level 1 on the timeline " +
+    "cache at minute " + sdframe_clock(st.t) + ", with <b>" + sdframe_snap(st).left +
+    " minutes</b> left — exactly what a full ladder costs. The budget was not luck: it " +
+    "is why the offer was made at minute " + sdframe_START + " rather than at 32.");
+
+  b.run([["depth", "timeline cache", 2]]);
+  b.frame("warn",
+    "<b>Level 2.</b> Sharded by <code>user_id</code>, one capped list per user, written " +
+    "by the fan-out worker and read whole. The same shape as before: <i>what</i>, then " +
+    "<i>how</i>, then the part that is actually being scored.");
+
+  b.run([["depth", "timeline cache", 3]]);
+  var fin = sdframe_snap(st);
+  b.frame("ok",
+    "<b>Minute " + sdframe_clock(st.t) + ", and level 3 lands with " +
+    sdframe_n(fin.left, 1) + " minute to spare.</b> A lost cache node is a cold read, not " +
+    "a wrong one — which means the store must be sized for the miss rate we <i>assumed</i>. " +
+    "<b>" + fin.atL3 + " components taken three levels down, " + fin.open +
+    " probes open, and the phase-6 wrap starts on time at minute " + sdframe_END +
+    ".</b> That last clause matters: naming the assumption your design most depends on " +
+    "is the strongest closing sentence available, and it needs the " + sdframe_WRAP +
+    " minutes this run did not spend.");
+
+  return { id: "deep", label: "Offer, then three levels", steps: b.steps, fin: fin,
+    phases: ["25:00", "the offer", "fan-out L1", "fan-out L2", "fan-out L3",
+      "cache L1", "cache L2", "40:00"] };
+}
+
+// ----------------------------------------------------------------------
+// Tab 3 · deep on something you cannot defend
+// ----------------------------------------------------------------------
+function sdframe_bluff() {
+  var b = sdframe_build({ id: "bluff", label: "Deep on what you can't defend" });
+  var st = b.st;
+
+  b.frame("idle",
+    "<b>Minute " + sdframe_START + ", same board, same " + sdframe_WIN +
+    " minutes.</b> This candidate takes the page's advice to pick the hardest thing — " +
+    "and drops the four words that make it advice: <i>that you can actually defend</i>. " +
+    "They pick exactly-once delivery in the queue. Press Play.");
+
+  b.run([["depth", "queue", 1]]);
+  b.frame("warn",
+    "<b>Queue, level 1.</b> <i>\"A queue absorbs the write spike and the workers drain " +
+    "it.\"</i> Fine. Three probes open on this box now, and the third of them is the one " +
+    "this run cannot answer.");
+
+  b.run([["depth", "queue", 2]]);
+  b.frame("warn",
+    "<b>Level 2.</b> Consumer groups, a partition per follower shard, a lag alarm. Also " +
+    "fine — and the clock is at " + sdframe_clock(st.t) + " with <b>" +
+    sdframe_snap(st).left + " minutes</b> left, which is still enough for two full " +
+    "ladders. Nothing has gone wrong yet.");
+
+  b.run([["bluff", "queue", 3]]);
+  b.frame("bad",
+    "<b>The level-3 probe names a technology this candidate has not used.</b> <i>\"How " +
+    "does exactly-once interact with a consumer-group rebalance?\"</i> They answer " +
+    "anyway. The move costs <b>" + sdframe_BLUFF + " minutes</b>, closes <b>nothing</b>, " +
+    "and — this is the mechanism, not a penalty — <b>opens 2 more probes</b>, because a " +
+    "confident wrong answer is something an interviewer follows.");
+
+  b.run([["bluff", "queue", 3]]);
+  b.frame("bad",
+    "<b>They pull the thread, and it is pulled with a second bluff.</b> Clock " +
+    sdframe_clock(st.t) + ", <b>" + sdframe_snap(st).open + " probes open</b>, " +
+    sdframe_snap(st).closed + " closed all round. Every minute in this thread is a " +
+    "minute the deep dive is not getting back, and the page's rule — <b>bluffing loses " +
+    "more than not knowing</b> — is about exactly this compounding, not about honesty " +
+    "for its own sake.");
+
+  b.run([["bluff", "queue", 3]]);
+  b.frame("bad",
+    "<b>Third bluff, minute " + sdframe_clock(st.t) + ".</b> <b>" +
+    sdframe_n(st.wasted, 1) + " of the " + sdframe_WIN + " minutes</b> have now gone " +
+    "into a thread that has closed nothing and opened " + (st.bluffs * 2) + " new " +
+    "questions. The board still has nothing below level 2 on it.");
+
+  b.run([["recover", "queue", 3], ["depth", "fan-out worker", 1]]);
+  b.frame("warn",
+    "<b>The recovery move, five minutes late.</b> <i>\"I haven't used it — I'd reach for " +
+    "X here; how does it differ?\"</i> Thirty seconds, and it closes the probe honestly. " +
+    "Then a restart on a component this candidate can defend: fan-out worker, level 1, " +
+    "clock " + sdframe_clock(st.t) + ". <b>Had this sentence been said at " +
+    sdframe_clock(3) + " it would have cost " + sdframe_RECOV + " minutes instead of " +
+    sdframe_n(st.wasted + sdframe_RECOV, 1) + ".</b>");
+
+  b.run([["depth", "fan-out worker", 2]]);
+  b.frame("warn",
+    "<b>Level 2 on the fan-out worker: queue, batches by follower shard, " + sdframe_CAP +
+    "-entry capped list.</b> This is good material, delivered well, at minute " +
+    sdframe_clock(st.t) + " with <b>" + sdframe_n(sdframe_snap(st).left, 1) +
+    " minutes</b> left. Level 3 needs <b>" + sdframe_MIN[3] + "</b>.");
+
+  b.run([["depth", "fan-out worker", 3]]);
+  var fin = sdframe_snap(st);
+  b.frame("bad",
+    "<b>Minute " + sdframe_END + " arrives mid-sentence.</b> The level-3 answer got <b>" +
+    sdframe_n(fin.cutOff ? fin.cutOff.got : 0, 1) + " of the " + sdframe_MIN[3] +
+    " minutes it needed</b>, so it closes nothing: at-least-once delivery and the " +
+    "celebrity carve-out were where this candidate was heading and the clock got there " +
+    "first. <b>" + fin.atL3 + " components three levels down, " + fin.open +
+    " probes open, " + fin.bluffs + " answers on the record that were not true.</b> The " +
+    "material was there. <b>" + sdframe_n(fin.wasted, 1) + " minutes of " + sdframe_WIN +
+    "</b> went into defending a box instead of examining one.");
+
+  return { id: "bluff", label: "Deep on what you can't defend", steps: b.steps, fin: fin,
+    phases: ["25:00", "queue L1", "queue L2", "the bluff", "the thread", "and again",
+      "recover + restart", "fan-out L2", "40:00"] };
+}
+
+var sdframe_RUNS = [sdframe_breadth(), sdframe_deep(), sdframe_bluff()];
+
+function sdframe_compare(d) {
+  var rows = [], i, run, f;
+  for (i = 0; i < sdframe_RUNS.length; i++) {
+    run = sdframe_RUNS[i]; f = run.fin;
+    rows.push([
+      run.label,
+      String(f.touched),
+      String(f.deepest),
+      String(f.atL3),
+      f.closed + " / " + f.opened,
+      String(f.open),
+      sdframe_n(f.wasted, 1) + " min",
+      f.delivered ? "yes" : "no"
+    ]);
+  }
+  return d.table(
+    ["run", "boxes", "deepest", "at level 3", "probes closed", "left open",
+      "minutes closing nothing", "deliverable"],
+    rows);
+}
+
+S["sdtheframework"] = {
+  title: "Spend the deep dive's fifteen minutes three ways",
+  note: "Phase 5 only — <b>minutes " + sdframe_START + " to " + sdframe_END +
+    "</b>, the page's longest phase and the one it says decides the score. Same board " +
+    "(§5's <b>" + sdframe_BOX.length + " boxes</b>), same interviewer, same " +
+    sdframe_WIN + " minutes. Touching a box opens <b>" + sdframe_PROBES +
+    " probes</b> — what it does, how it does it, what happens when it breaks — and each " +
+    "level answered closes one. The clock is hard: a move gets the smaller of what it " +
+    "needs and what is left, so an answer begun at minute 38 that needs four minutes is " +
+    "cut off at " + sdframe_END + " and closes nothing. Declared, because the page gives " +
+    "no timings: <b>" + sdframe_MIN[1] + " / " + sdframe_MIN[2] + " / " + sdframe_MIN[3] +
+    " minutes</b> for a level-1, level-2 and level-3 answer (so one full ladder is <b>" +
+    (sdframe_MIN[1] + sdframe_MIN[2] + sdframe_MIN[3]) + " minutes</b> and two is <b>" +
+    2 * (sdframe_MIN[1] + sdframe_MIN[2] + sdframe_MIN[3]) + "</b> — which is the " +
+    "arithmetic behind the page's <i>one or two</i>), <b>" + sdframe_OFFER +
+    " min</b> for the offer, and <b>" + sdframe_BLUFF + " min</b> for a bluff, which " +
+    "closes nothing and opens 2 further probes. The fan-out worker's three levels are " +
+    "quoted from the §6 table verbatim, including its " + sdframe_CAP +
+    "-entry capped list; the timeline cache's ladder is this sim's wording in the same " +
+    "shape.",
+  interval: 1600,
+
+  scenarios: sdframe_RUNS,
+
+  draw: function (step, d, ctx) {
+    var s = step.s, ph = step.ph, i;
+
+    var names = (ctx.scenario && ctx.scenario.phases) || [];
+    var chips = [];
+    for (i = 0; i < names.length; i++) {
+      chips.push({ label: names[i], flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+    }
+
+    // ---- head ---------------------------------------------------------------
+    var head = d.cols([
+      d.big(sdframe_clock(s.t), "clock",
+        s.left <= 0 ? "bad" : s.left < 4 ? "warn" : "ok"),
+      d.stat({
+        label: "components at level 3",
+        value: String(s.atL3),
+        sub: "the phase leaves with one or two",
+        flag: s.atL3 >= sdframe_GOAL ? "ok" : ph === 0 ? "idle" : "bad"
+      }),
+      d.stat({
+        label: "probes open",
+        value: String(s.open),
+        sub: s.closed + " closed of " + s.opened + " opened",
+        flag: ph === 0 ? "idle" : s.open === 0 ? "ok" : s.open > 5 ? "bad" : "warn"
+      }),
+      d.stat({
+        label: "minutes that closed nothing",
+        value: sdframe_n(s.wasted, 1),
+        sub: s.bluffs ? s.bluffs + " bluffed answers" : "of " + sdframe_WIN + " in the phase",
+        flag: ph === 0 ? "idle" : s.wasted > 0 ? "bad" : "ok"
+      })
+    ]);
+
+    // ---- the clock, spent and left --------------------------------------------
+    var bars = d.stack([
+      d.bar({
+        label: "phase 5 · minutes " + sdframe_START + "–" + sdframe_END,
+        pct: (s.t / sdframe_WIN) * 100,
+        value: sdframe_n(s.t, 1) + " of " + sdframe_WIN,
+        flag: s.left <= 0 ? "bad" : "ok"
+      }),
+      d.bar({
+        label: "of that, minutes that closed a probe",
+        pct: s.t > 0 ? (s.useful / s.t) * 100 : 0,
+        value: sdframe_n(s.useful, 1) + " min",
+        flag: s.t === 0 ? "idle" : s.wasted > 0 ? "warn" : "ok"
+      })
+    ]);
+
+    // ---- the board, with the depth reached on each box ------------------------
+    var cells = [];
+    for (i = 0; i < sdframe_BOX.length; i++) {
+      var lvl = s.touch[sdframe_BOX[i]];
+      cells.push({
+        label: sdframe_BOX[i] + (lvl ? "  L" + lvl : ""),
+        flag: lvl === undefined ? "idle" : lvl >= 3 ? "ok" : lvl === 2 ? "warn" : "bad",
+        title: lvl === undefined ? "not touched — no probes opened"
+          : "level " + lvl + " of 3 · " + (sdframe_PROBES - lvl) + " probe" +
+            (sdframe_PROBES - lvl === 1 ? "" : "s") + " still open on this box"
+      });
+    }
+    var board = d.cells(cells, { label: "the board · depth reached on each box" });
+
+    // ---- the ladder for whatever this frame is talking about -------------------
+    var focus = s.focus;
+    var ladder = "";
+    if (focus) {
+      var text = sdframe_LADDER[focus];
+      var reached = s.touch[focus] || 0;
+      var cards = [];
+      for (i = 1; i <= 3; i++) {
+        var have = reached >= i;
+          var body = text ? text[i - 1] : "—";
+        cards.push(d.node({
+          title: "level " + i,
+          status: have ? "GIVEN" : "OPEN",
+          statusFlag: have ? (i === 3 ? "ok" : "warn") : "bad",
+          meta: i === 1 ? "what it does" : i === 2 ? "how it does it" : "what happens when it breaks",
+          flag: have ? (i === 3 ? "ok" : "warn") : "idle",
+          rows: [
+            { label: "costs", value: sdframe_MIN[i] + " min" },
+            { label: "probe", value: have ? "closed" : "open", flag: have ? "ok" : "bad" }
+          ],
+          body: have ? "<i>" + body + "</i>" : ""
+        }));
+      }
+      ladder = d.stack([
+        d.note("<b>" + focus + "</b> — the ladder the page describes, and how far up it " +
+          "this run has got.", reached >= 3 ? "ok" : "warn"),
+        d.cols(cards)
+      ]);
+    }
+
+    // ---- the wrap, and the comparison -------------------------------------------
+    var last = ctx.i === ctx.n;
+    var tail;
+    if (last) {
+      tail = d.stack([
+        d.cols([
+          d.stat({
+            label: "phase 5 deliverable",
+            value: s.delivered ? "produced" : "not produced",
+            sub: "\"one or two components taken three levels down\"",
+            flag: s.delivered ? "ok" : "bad"
+          }),
+          d.stat({
+            label: "answer cut off at " + sdframe_END,
+            value: s.cutOff ? s.cutOff.box + " L" + s.cutOff.level : "none",
+            sub: s.cutOff
+              ? sdframe_n(s.cutOff.got, 1) + " of the " + s.cutOff.want + " min it needed"
+              : "the phase ended on a finished sentence",
+            flag: s.cutOff ? "bad" : "ok"
+          }),
+          d.stat({
+            label: "phase 6 · failure & wrap",
+            value: sdframe_WRAP + " min",
+            sub: s.cutOff ? "starts behind, mid-answer" : "starts on time",
+            flag: s.cutOff ? "warn" : "ok"
+          })
+        ]),
+        sdframe_compare(d),
+        d.note("<b>Level 3 is the interview. Levels 1 and 2 are what everyone says.</b> " +
+          "The three runs spend the identical fifteen minutes; what separates them is " +
+          "how many probes each minute closes.", s.delivered ? "ok" : "bad")
+      ]);
+    } else {
+      tail = d.note(ph === 0
+        ? "Each box on the board carries three unasked questions. Fifteen minutes, and " +
+          "every minute either closes one or does not."
+        : "Green is a box taken all three levels down · amber reached level 2 · " +
+          "<b>red was touched and left shallow, which is worse than not touching it: it " +
+          "opened " + sdframe_PROBES + " questions and answered one</b> · grey is " +
+          "untouched.",
+        s.bluffs ? "bad" : undefined);
+    }
+
+    return d.stack([
+      d.pills(chips),
+      head,
+      bars,
+      board,
+      ladder,
+      tail
+    ]);
+  }
+};
+
+  // ====================================================================
+  // ======================================================================
+  // SIM · sdtradeoffs  (tradeoffs.md)
+  //
+  // The page's own claim is that naming a trade-off scores nothing and
+  // resolving it scores — and §18 gives the machinery: a four-part form,
+  // NAME → RESOLVE → JUSTIFY FROM A REQUIREMENT → STATE THE COST. That form
+  // is the time axis. One design round raises eight of the page's eighteen
+  // trade-offs, in page order, and three candidates walk the identical eight
+  // through the identical four parts.
+  //
+  //   1. "it depends"       names all eight, resolves none
+  //   2. the four-part form the page's own decision rule for each
+  //   3. strictest-side     resolves all eight to the safe side, from no
+  //                         requirement and with no cost stated — the page's
+  //                         named failure: "designing everything to the
+  //                         strictest requirement is how you get something
+  //                         slow *and* fragile"
+  //
+  // CONFIG — the page's figures, quoted:
+  //   four-part form        4 parts                        §18
+  //   the catalogue         18 numbered trade-offs         the page itself
+  //   stop condition        5 items                        "Stop condition"
+  //   rule bar              "ten of these"                 stop condition 1
+  //   read : write          100 : 1                        §4 "At 100:1 reads"
+  //   per-service uptime    99.9%                          §12
+  //   services              5                              §12 "five services"
+  //
+  // CALIBRATION. §12 says "availability multiplies downward; five services at
+  // 99.9% is 99.5%". The sim computes 0.999^5 = 99.50%, which reproduces the
+  // page's figure exactly, so the same multiplication is then trusted to price
+  // each run's own request path. Nothing here is transcribed.
+  //
+  // DECLARED BY THE SIM, because the page does not publish it: a trade-off
+  // resolved to the strict side puts one more service on the SYNCHRONOUS
+  // request path. Request availability is then 0.999^(deps) — the page's own
+  // multiplication, applied to the path each run actually built. §16 is marked
+  // as adding no dependency: it costs money, not availability, which is the
+  // page's point about the trade-off candidates forget exists. Every side,
+  // rule, requirement and cost quoted on screen is the page's wording.
+  // ======================================================================
+
+  var sdtradeoffs_FORM = ["NAME", "RESOLVE", "JUSTIFY", "COST"];  // §18
+  var sdtradeoffs_PER = 0.999;        // §12 "99.9%"
+  var sdtradeoffs_SVC = 5;            // §12 "five services"
+  var sdtradeoffs_RATIO = 100;        // §4 "At 100:1 reads, precompute"
+  var sdtradeoffs_CATALOGUE = 18;     // the page's numbered entries
+  var sdtradeoffs_RULE_BAR = 10;      // stop condition 1: "ten of these"
+
+  // The eight the round raises, in the page's own order.
+  // perOp  = the page resolves this one per operation, not per system
+  // addsDep= choosing the strict side puts a service on the sync path
+  // keepStrict = the page's OWN resolution still leaves one sync path here
+  var sdtradeoffs_E = [
+    {
+      sec: 2, a: "consistency", b: "availability",
+      strictSide: "consistency everywhere",
+      pageSide: "availability for the feed, consistency for the payment path",
+      rule: "decide per operation, not per system",
+      req: "a stale follower count costs nothing and downtime costs sign-ups",
+      cost: "a few seconds of staleness on the count a reader sees",
+      perOp: true, addsDep: true, keepStrict: false
+    },
+    {
+      sec: 4, a: "fan-out on write", b: "fan-out on read",
+      strictSide: "fan-out on read — assemble from N sources, never stale",
+      pageSide: "fan-out on write — precompute the timeline",
+      rule: "put the work where the traffic is not",
+      req: "reads are " + 100 + "× writes",   // replaced below from RATIO
+      cost: "staleness, and a much more expensive write path for very large followings",
+      perOp: false, addsDep: true, keepStrict: false
+    },
+    {
+      sec: 7, a: "strong consistency", b: "eventual consistency",
+      strictSide: "strong everywhere — coordination on every write",
+      pageSide: "eventual for the feed, strong confined to money and uniqueness",
+      rule: "ask what a stale read actually costs",
+      req: "a stale feed read costs nothing; an oversold item costs money",
+      cost: "anomalies you must design around",
+      perOp: true, addsDep: true, keepStrict: false
+    },
+    {
+      sec: 8, a: "synchronous", b: "asynchronous",
+      strictSide: "synchronous all the way down",
+      pageSide: "post synchronously, fan out asynchronously",
+      rule: "synchronous for what the user is waiting on, asynchronous for everything downstream",
+      req: "the author is waiting on their own post; nobody is waiting on the fan-out",
+      cost: "a delay before the post appears in other people's feeds, which is why the author's own view is written inline",
+      perOp: false, addsDep: true, keepStrict: true
+    },
+    {
+      sec: 13, a: "short TTL", b: "long TTL",
+      strictSide: "no cache — the origin answers every read",
+      pageSide: "long TTL, jittered, with a cold-cache plan",
+      rule: "set the TTL from what a stale read costs, then jitter it",
+      req: "a stale read costs nothing here, and the origin cannot survive 0% hit rate",
+      cost: "staler data, and a cache you now depend on rather than merely benefit from",
+      perOp: false, addsDep: true, keepStrict: false
+    },
+    {
+      sec: 14, a: "fail closed", b: "fail open",
+      strictSide: "fail closed everywhere, limiter included",
+      pageSide: "the limiter fails open, the permissions check fails closed",
+      rule: "fail closed where wrongful access costs more than wrongful denial",
+      req: "an outage caused by your own protection is worse than the abuse it prevents",
+      cost: "unthrottled abuse for as long as the limiter's store is down",
+      perOp: true, addsDep: true, keepStrict: true
+    },
+    {
+      sec: 16, a: "the impressive number", b: "the dominant cost line",
+      strictSide: "tune the servers and serve the original",
+      pageSide: "egress, not compute — serve a correctly sized variant",
+      rule: "name the dominant cost line and optimise that, not the impressive one",
+      req: "for a media system the dominant cost is bandwidth, not QPS",
+      cost: "a variant pipeline to build, store and invalidate",
+      perOp: false, addsDep: false, keepStrict: false
+    },
+    {
+      sec: 17, a: "exact count", b: "approximate structure",
+      strictSide: "count every event exactly",
+      pageSide: "HyperLogLog — ~2% error, kilobytes for billions",
+      rule: "ask whether anyone acts differently on an exact number",
+      req: "nobody behaves differently at 1,240,001 than at 1.24M",
+      cost: "~2% error, and no exact total to audit later",
+      perOp: false, addsDep: true, keepStrict: false
+    }
+  ];
+
+  // §4's requirement is the page's ratio, not a typed string.
+  sdtradeoffs_E[1].req = "reads are " + sdtradeoffs_RATIO + "× writes";
+
+  var sdtradeoffs_N = sdtradeoffs_E.length;
+  var sdtradeoffs_MAX = sdtradeoffs_N * sdtradeoffs_FORM.length;
+  // §12 reproduced: 0.999^5. The page states 99.5%.
+  var sdtradeoffs_CALIB = Math.pow(sdtradeoffs_PER, sdtradeoffs_SVC);
+  // §4's ratio, as the share of operations that are reads.
+  var sdtradeoffs_READSHARE = sdtradeoffs_RATIO / (sdtradeoffs_RATIO + 1);
+
+  /** What a run actually says about one entry. The four parts follow from it. */
+  function sdtradeoffs_say(e, mode) {
+    if (mode === "name") {
+      return {
+        named: true, choice: null, strict: false, req: null, cost: null, rule: null,
+        line: "“There's a trade-off between " + e.a + " and " + e.b + " here.”"
+      };
+    }
+    if (mode === "strict") {
+      return {
+        named: true, choice: e.strictSide, strict: true, req: null, cost: null, rule: null,
+        line: "“" + e.strictSide + " — it's the safe one.”"
+      };
+    }
+    return {
+      named: true, choice: e.pageSide, strict: false, req: e.req, cost: e.cost, rule: e.rule,
+      line: "“" + e.pageSide + ", because " + e.req + " — which costs me " + e.cost + ".”"
+    };
+  }
+
+  /** Synchronous services this resolution puts on the request path. */
+  function sdtradeoffs_deps(e, said) {
+    if (!e.addsDep) return 0;
+    if (!said.choice) return 0;          // undecided resolves nothing
+    if (said.strict) return 1;
+    return e.keepStrict ? 1 : 0;         // the page's rule keeps one sync path
+  }
+
+  function sdtradeoffs_count(parts) {
+    var k = 0, i;
+    for (i = 0; i < parts.length; i++) if (parts[i]) k++;
+    return k;
+  }
+
+  /** Fold a whole run without building frames — used for the verdict table. */
+  function sdtradeoffs_summary(mode) {
+    var i, e, said, s = {
+      score: 0, named: 0, resolved: 0, justified: 0, costed: 0,
+      rules: 0, pageWins: 0, deps: 0, perOpWins: 0, perOpTotal: 0,
+      s14: false, s16: false
+    };
+    for (i = 0; i < sdtradeoffs_N; i++) {
+      e = sdtradeoffs_E[i];
+      said = sdtradeoffs_say(e, mode);
+      s.score += sdtradeoffs_count([said.named, !!said.choice, !!said.req, !!said.cost]);
+      if (said.named) s.named++;
+      if (said.choice) s.resolved++;
+      if (said.req) s.justified++;
+      if (said.cost) s.costed++;
+      if (said.rule) s.rules++;
+      if (said.choice === e.pageSide) s.pageWins++;
+      if (e.perOp) {
+        s.perOpTotal++;
+        if (said.choice === e.pageSide) s.perOpWins++;
+      }
+      if (e.sec === 14 && said.choice === e.pageSide) s.s14 = true;
+      if (e.sec === 16 && said.choice === e.pageSide) s.s16 = true;
+      s.deps += sdtradeoffs_deps(e, said);
+    }
+    s.avail = s.resolved ? Math.pow(sdtradeoffs_PER, s.deps) : null;
+    // the page's five stop-condition items, evaluated against the fold
+    s.stop = [
+      s.rules === sdtradeoffs_N,
+      s.perOpTotal > 0 && s.perOpWins === s.perOpTotal,
+      s.s14,
+      s.s16,
+      s.costed > 0
+    ];
+    s.stopHit = sdtradeoffs_count(s.stop);
+    return s;
+  }
+
+  var sdtradeoffs_SUM = {
+    name: sdtradeoffs_summary("name"),
+    form: sdtradeoffs_summary("form"),
+    strict: sdtradeoffs_summary("strict")
+  };
+
+  var sdtradeoffs_STOPNAMES = [
+    "the decision rule, not just the two sides",
+    "consistency per operation, not per system",
+    "fail-open limiter, fail-closed permissions",
+    "egress named as the dominant cost",
+    "any trade-off in the four-part form, ending with its cost"
+  ];
+
+  function sdtradeoffs_pct(x, dp) {
+    return (x * 100).toFixed(dp === undefined ? 2 : dp) + "%";
+  }
+
+  function sdtradeoffs_phases() {
+    var p = ["brief"], i;
+    for (i = 0; i < sdtradeoffs_N; i++) p.push("§" + sdtradeoffs_E[i].sec);
+    p.push("verdict");
+    return p;
+  }
+
+  function sdtradeoffs_build(id, label, mode, intro, closer, closeFlag, stepFlag) {
+    var steps = [], i, e, said, parts, hit, per = [];
+    var score = 0, named = 0, resolved = 0, justified = 0, costed = 0;
+    var rules = 0, deps = 0, add;
+
+    steps.push({
+      idx: -1, verdict: false, mode: mode, said: null, parts: null,
+      score: 0, named: 0, resolved: 0, justified: 0, costed: 0, rules: 0,
+      deps: 0, per: [], flag: "idle", caption: intro
+    });
+
+    for (i = 0; i < sdtradeoffs_N; i++) {
+      e = sdtradeoffs_E[i];
+      said = sdtradeoffs_say(e, mode);
+      parts = [said.named, !!said.choice, !!said.req, !!said.cost];
+      hit = sdtradeoffs_count(parts);
+      score += hit;
+      if (said.named) named++;
+      if (said.choice) resolved++;
+      if (said.req) justified++;
+      if (said.cost) costed++;
+      if (said.rule) rules++;
+      add = sdtradeoffs_deps(e, said);
+      deps += add;
+      per = per.concat([{ sec: e.sec, hit: hit, page: said.choice === e.pageSide }]);
+
+      steps.push({
+        idx: i, verdict: false, mode: mode, said: said, parts: parts,
+        score: score, named: named, resolved: resolved, justified: justified,
+        costed: costed, rules: rules, deps: deps, add: add, per: per,
+        flag: hit === sdtradeoffs_FORM.length ? "ok" : hit >= 2 ? "warn" : "bad",
+        caption: sdtradeoffs_caption(e, said, mode, hit, score, deps, resolved, add)
+      });
+    }
+
+    steps.push({
+      idx: -1, verdict: true, mode: mode, said: null, parts: null,
+      score: score, named: named, resolved: resolved, justified: justified,
+      costed: costed, rules: rules, deps: deps, per: per,
+      flag: closeFlag, caption: closer
+    });
+
+    return { id: id, label: label, steps: steps, phases: sdtradeoffs_phases(), mode: mode };
+  }
+
+  function sdtradeoffs_caption(e, said, mode, hit, score, deps, resolved, add) {
+    var head = "<b>§" + e.sec + " · " + e.a + " vs " + e.b + "</b> — ";
+    var tail = " Form <b>" + hit + "/" + sdtradeoffs_FORM.length +
+      "</b>, running <b>" + score + "/" + sdtradeoffs_MAX + "</b>.";
+    if (mode === "name") {
+      return head + "named and left open. <i>" + said.line + "</i> Nothing was chosen, " +
+        "so the design is still undetermined here." + tail;
+    }
+    if (mode === "strict") {
+      return head + "resolved to the safe side. <i>" + said.line + "</i> No requirement " +
+        "was cited and no cost was volunteered" +
+        (add ? ", and the request path now carries <b>" + deps + "</b> synchronous " +
+          (deps === 1 ? "dependency" : "dependencies") : ", and this one costs money rather than availability") +
+        "." + tail;
+    }
+    return head + "resolved by the page's rule, <i>" + e.rule + "</i>. <i>" + said.line +
+      "</i>" + (add ? " One synchronous dependency stays, deliberately — total <b>" +
+        deps + "</b>." : " Nothing synchronous added.") + tail;
+  }
+
+  function sdtradeoffs_catLane(step, d) {
+    var cells = [], i, rec, e;
+    for (i = 0; i < sdtradeoffs_N; i++) {
+      e = sdtradeoffs_E[i];
+      rec = step.per[i];
+      cells.push({
+        label: "§" + e.sec,
+        flag: !rec ? "idle" : rec.hit === sdtradeoffs_FORM.length ? "ok"
+          : rec.hit >= 2 ? "warn" : "bad",
+        title: e.a + " vs " + e.b +
+          (rec ? " — " + rec.hit + "/" + sdtradeoffs_FORM.length + " of the form" +
+            (rec.page ? ", the page's resolution" : "") : " — not yet raised")
+      });
+    }
+    return d.lane({ label: "catalogue", cells: cells });
+  }
+
+  function sdtradeoffs_formLane(step, d) {
+    var cells = [], i;
+    for (i = 0; i < sdtradeoffs_FORM.length; i++) {
+      cells.push({
+        label: sdtradeoffs_FORM[i],
+        flag: !step.parts ? "idle" : step.parts[i] ? "ok" : "bad",
+        title: sdtradeoffs_FORM[i] + (step.parts ? (step.parts[i] ? " — delivered" : " — missing") : " — not yet")
+      });
+    }
+    return d.lane({ label: "four-part form", cells: cells });
+  }
+
+  function sdtradeoffs_stopLane(sum, d) {
+    var cells = [], i;
+    for (i = 0; i < sdtradeoffs_STOPNAMES.length; i++) {
+      cells.push({
+        label: String(i + 1),
+        flag: sum.stop[i] ? "ok" : "bad",
+        title: sdtradeoffs_STOPNAMES[i] + (sum.stop[i] ? " — met" : " — not met")
+      });
+    }
+    return d.lane({ label: "stop condition", cells: cells });
+  }
+
+  function sdtradeoffs_verdictTable(d) {
+    var order = [
+      ["“it depends”", sdtradeoffs_SUM.name],
+      ["four-part form", sdtradeoffs_SUM.form],
+      ["strictest side", sdtradeoffs_SUM.strict]
+    ];
+    var rows = [], i, s;
+    for (i = 0; i < order.length; i++) {
+      s = order[i][1];
+      rows.push([
+        order[i][0],
+        s.score + "/" + sdtradeoffs_MAX,
+        s.resolved + "/" + sdtradeoffs_N,
+        s.justified + "/" + sdtradeoffs_N,
+        s.costed + "/" + sdtradeoffs_N,
+        s.resolved ? String(s.deps) : "—",
+        s.avail === null ? "—" : sdtradeoffs_pct(s.avail),
+        s.stopHit + "/" + sdtradeoffs_STOPNAMES.length
+      ]);
+    }
+    return d.table(
+      ["run", "form", "resolved", "from a req.", "cost stated", "sync deps", "availability", "stop cond."],
+      rows
+    );
+  }
+
+  S["sdtradeoffs"] = {
+    title: "Resolve eight trade-offs three ways",
+    note: "One design round raises <b>" + sdtradeoffs_N + " of the page's " +
+      sdtradeoffs_CATALOGUE + "</b> trade-offs, in page order, and three candidates walk " +
+      "the same eight through §18's four-part form — <b>NAME · RESOLVE · " +
+      "JUSTIFY FROM A REQUIREMENT · STATE THE COST</b>. Every side, rule, requirement " +
+      "and cost on screen is the page's own wording; the scores are the four predicates run " +
+      "against what each candidate actually said. The system each one builds is priced with " +
+      "§12's arithmetic: availability multiplies downward, and <b>" +
+      sdtradeoffs_PER.toFixed(3) + "<sup>" + sdtradeoffs_SVC + "</sup> = " +
+      sdtradeoffs_pct(sdtradeoffs_CALIB, 1) + "</b>, which is the page's own figure for five " +
+      "services at 99.9%, reproduced. <b>Declared by the sim</b>, because the page does not " +
+      "publish it: a trade-off resolved to the strict side puts one more service on the " +
+      "synchronous request path, so request availability is " + sdtradeoffs_PER.toFixed(3) +
+      "<sup>deps</sup>. §16 adds none — it costs money, not availability. " +
+      "§4's requirement is the page's ratio: at <b>" + sdtradeoffs_RATIO + ":1</b>, " +
+      sdtradeoffs_pct(sdtradeoffs_READSHARE, 1) + " of operations are reads, which is why the " +
+      "work moves to the write path.",
+    interval: 1600,
+
+    scenarios: [
+      sdtradeoffs_build(
+        "depends", "“It depends”", "name",
+        "The brief: reads are <b>" + sdtradeoffs_RATIO + "×</b> writes, a stale follower " +
+        "count costs nothing, downtime costs sign-ups, and the design is <b>" +
+        sdtradeoffs_SVC + "</b> services at <b>" + sdtradeoffs_pct(1 - sdtradeoffs_PER, 1) +
+        "</b> failure each. First candidate: name every trade-off, resolve none.",
+        "<b>" + sdtradeoffs_SUM.name.score + "/" + sdtradeoffs_MAX + " on the form.</b> Eight " +
+        "trade-offs named, <b>zero</b> resolved — so there is no system to price, and " +
+        "<b>0/" + sdtradeoffs_STOPNAMES.length + "</b> of the page's stop condition. " +
+        "<i>“There's a trade-off between consistency and availability” scores " +
+        "nothing.</i> That is the page's first sentence, measured.",
+        "bad"
+      ),
+      sdtradeoffs_build(
+        "form", "The four-part form", "form",
+        "Same brief, same eight. This candidate gives the page's <b>decision rule</b> for each, " +
+        "resolves it, cites the requirement that tips it, and volunteers what the choice costs " +
+        "— before being asked.",
+        "<b>" + sdtradeoffs_SUM.form.score + "/" + sdtradeoffs_MAX + ", all four parts on all " +
+        "eight.</b> Only <b>" + sdtradeoffs_SUM.form.deps + "</b> synchronous dependencies " +
+        "survive — the author's own post (§8) and the permissions check (§14) " +
+        "— so the request path runs at <b>" + sdtradeoffs_pct(sdtradeoffs_SUM.form.avail) +
+        "</b>, against " + sdtradeoffs_pct(sdtradeoffs_CALIB, 1) + " for all " +
+        sdtradeoffs_SVC + " in line. <b>" + sdtradeoffs_SUM.form.stopHit + "/" +
+        sdtradeoffs_STOPNAMES.length + "</b> of the stop condition.",
+        "ok"
+      ),
+      sdtradeoffs_build(
+        "strict", "Strictest side", "strict",
+        "Same brief again. This candidate resolves every one — confidently, quickly, and " +
+        "always to the safe side. Watch the form score and the request path move in opposite " +
+        "directions.",
+        "<b>" + sdtradeoffs_SUM.strict.resolved + "/" + sdtradeoffs_N + " resolved, and still " +
+        "only " + sdtradeoffs_SUM.strict.score + "/" + sdtradeoffs_MAX + " on the form</b> " +
+        "— nothing was justified from a requirement and no cost was ever stated. The " +
+        "system is the page's prediction: <b>" + sdtradeoffs_SUM.strict.deps + "</b> " +
+        "synchronous dependencies at <b>" + sdtradeoffs_pct(sdtradeoffs_SUM.strict.avail) +
+        "</b>, below the " + sdtradeoffs_pct(sdtradeoffs_CALIB, 1) + " of five services in " +
+        "line. <i>Slow and fragile</i>, arrived at by being careful.",
+        "bad"
+      )
+    ],
+
+    draw: function (step, d, ctx) {
+      var names = (ctx.scenario && ctx.scenario.phases) || [];
+      var chips = [], i;
+      for (i = 0; i < names.length; i++) {
+        chips.push({ label: names[i], flag: i < ctx.i ? "ok" : i === ctx.i ? "warn" : undefined });
+      }
+
+      var sum = sdtradeoffs_SUM[step.mode] || sdtradeoffs_SUM.name;
+      var e = step.idx >= 0 ? sdtradeoffs_E[step.idx] : null;
+      var avail = step.resolved ? Math.pow(sdtradeoffs_PER, step.deps) : null;
+      var scorePct = sdtradeoffs_MAX
+        ? (step.score / sdtradeoffs_MAX) * 100 : 0;
+
+      var head = d.cols([
+        d.big(step.score + "/" + sdtradeoffs_MAX, "four-part form",
+          !step.score ? "idle" : step.score === sdtradeoffs_MAX ? "ok"
+            : scorePct >= 50 ? "warn" : "bad"),
+        d.stat({
+          label: "resolved",
+          value: step.resolved + " / " + sdtradeoffs_N,
+          sub: step.named + " named · " + step.costed + " costed",
+          flag: !step.resolved ? "bad" : step.resolved === sdtradeoffs_N ? "ok" : "warn"
+        }),
+        d.stat({
+          label: "request availability",
+          value: avail === null ? "—" : sdtradeoffs_pct(avail),
+          sub: avail === null ? "nothing decided yet"
+            : step.deps + " synchronous " + (step.deps === 1 ? "dependency" : "dependencies"),
+          flag: avail === null ? "idle" : avail >= sdtradeoffs_CALIB ? "ok" : "bad"
+        })
+      ]);
+
+      var rows = [];
+      var body = [];
+
+      if (e) {
+        rows.push({ label: "the two sides", value: e.a + "  vs  " + e.b });
+        rows.push({
+          label: "the page's decision rule",
+          value: step.said.rule ? e.rule : "not given",
+          flag: step.said.rule ? "ok" : "bad"
+        });
+        rows.push({
+          label: "resolved to",
+          value: step.said.choice ? step.said.choice : "nothing — left open",
+          flag: !step.said.choice ? "bad" : step.said.strict ? "warn" : "ok"
+        });
+        rows.push({
+          label: "justified from",
+          value: step.said.req ? step.said.req : "no stated requirement",
+          flag: step.said.req ? "ok" : "bad"
+        });
+        rows.push({
+          label: "cost volunteered",
+          value: step.said.cost ? step.said.cost : "none",
+          flag: step.said.cost ? "ok" : "bad"
+        });
+        rows.push({
+          label: "synchronous deps added",
+          value: e.addsDep ? String(step.add) : "0 — this one costs money, not availability",
+          flag: step.add ? "warn" : "ok"
+        });
+        body.push(sdtradeoffs_formLane(step, d));
+        body.push(d.mono(step.said.line));
+      } else if (step.verdict) {
+        rows.push({
+          label: "form score",
+          value: step.score + " / " + sdtradeoffs_MAX,
+          flag: step.score === sdtradeoffs_MAX ? "ok" : "bad"
+        });
+        rows.push({
+          label: "decision rule given",
+          value: step.rules + " / " + sdtradeoffs_N +
+            "  (the page's bar is " + sdtradeoffs_RULE_BAR + " of " + sdtradeoffs_CATALOGUE + ")",
+          flag: step.rules === sdtradeoffs_N ? "ok" : "bad"
+        });
+        rows.push({
+          label: "justified from a requirement",
+          value: step.justified + " / " + sdtradeoffs_N,
+          flag: step.justified === sdtradeoffs_N ? "ok" : "bad"
+        });
+        rows.push({
+          label: "cost stated before being asked",
+          value: step.costed + " / " + sdtradeoffs_N,
+          flag: step.costed === sdtradeoffs_N ? "ok" : "bad"
+        });
+        rows.push({
+          label: "request path",
+          value: avail === null
+            ? "undetermined — nothing was resolved"
+            : step.deps + " sync deps · " + sdtradeoffs_pct(avail),
+          flag: avail === null ? "bad" : avail >= sdtradeoffs_CALIB ? "ok" : "bad"
+        });
+        body.push(sdtradeoffs_stopLane(sum, d));
+        body.push(sdtradeoffs_verdictTable(d));
+      } else {
+        rows.push({ label: "reads : writes", value: sdtradeoffs_RATIO + " : 1  (§4)" });
+        rows.push({
+          label: "share of operations that are reads",
+          value: sdtradeoffs_pct(sdtradeoffs_READSHARE, 1)
+        });
+        rows.push({
+          label: "services at " + sdtradeoffs_pct(sdtradeoffs_PER, 1) + " each (§12)",
+          value: sdtradeoffs_SVC + " in line → " + sdtradeoffs_pct(sdtradeoffs_CALIB, 1)
+        });
+        rows.push({
+          label: "trade-offs this round raises",
+          value: sdtradeoffs_N + " of the catalogue's " + sdtradeoffs_CATALOGUE
+        });
+        body.push(sdtradeoffs_formLane(step, d));
+      }
+
+      body.push(sdtradeoffs_catLane(step, d));
+
+      var node = d.node({
+        title: e ? "§" + e.sec + " · " + e.a + " vs " + e.b
+          : step.verdict ? "the round, scored" : "the brief",
+        status: e ? (step.parts && sdtradeoffs_count(step.parts) === sdtradeoffs_FORM.length
+            ? "ALL FOUR PARTS"
+            : sdtradeoffs_count(step.parts) + "/" + sdtradeoffs_FORM.length)
+          : step.verdict ? sum.stopHit + "/" + sdtradeoffs_STOPNAMES.length + " STOP COND."
+          : "READY",
+        statusFlag: step.flag,
+        badge: ctx.scenario ? ctx.scenario.label : "",
+        meta: "form " + step.score + "/" + sdtradeoffs_MAX + " · deps " +
+          (step.resolved ? step.deps : 0) + " · raised " +
+          step.per.length + "/" + sdtradeoffs_N,
+        flag: step.flag,
+        rows: rows,
+        body: d.stack(body)
+      });
+
+      return d.stack([
+        d.pills(chips),
+        head,
+        node,
+        d.note(
+          step.verdict
+            ? "All three columns come from the same eight trade-offs and the same four " +
+              "predicates. The only variable is what the candidate said."
+            : "Catalogue: <b>green</b> is all four parts of §18's form, <b>amber</b> two " +
+              "or three, <b>red</b> one, grey not yet raised.",
+          step.verdict ? step.flag : undefined
         )
       ]);
     }

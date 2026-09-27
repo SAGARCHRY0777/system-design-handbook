@@ -32,6 +32,12 @@ than "to stop abuse".
 
 ---
 
+```sim
+sdratelimiting
+```
+
+---
+
 ## 2 · The five algorithms
 
 ### Fixed window

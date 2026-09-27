@@ -31,6 +31,12 @@ delivered what they promised. One who never scoped has simply not finished.
 
 ---
 
+```sim
+sdrequirementsands
+```
+
+---
+
 ## 2 · The question set
 
 Not all of these every time. The first three, always.

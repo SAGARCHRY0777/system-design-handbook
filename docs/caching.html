@@ -60,6 +60,7 @@ answer for small, slow-changing config; the wrong answer for anything a user
 just edited. Saying that distinction out loud is a depth signal.</p>
 </blockquote>
 <hr>
+<div class="sim" data-sim="sdcaching"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-the-read-patterns"><a class="anchor" href="#2-the-read-patterns">#</a>2 · The read patterns</h2><h3 id="cache-aside-lazy-loading-the-default"><a class="anchor" href="#cache-aside-lazy-loading-the-default">#</a>Cache-aside (lazy loading) — the default</h3><p>The application owns the logic.</p>
 <pre class="code"><code class="language-python">def get_user(user_id):
     key = f&quot;user:{user_id}&quot;

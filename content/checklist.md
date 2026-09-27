@@ -31,6 +31,12 @@ go deep wherever you find most interesting."*
 
 ---
 
+```sim
+sdchecklist
+```
+
+---
+
 ## 2 · Scoping questions
 
 ```

@@ -49,6 +49,12 @@ minute 30 is the difference:
 
 ---
 
+```sim
+sddesignurlshorten
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

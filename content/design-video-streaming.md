@@ -39,6 +39,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignvideostrea
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

@@ -41,6 +41,12 @@ The canonical question, in the order it happens:
 
 ---
 
+```sim
+sdnetworking
+```
+
+---
+
 ## 2 · DNS
 
 Hierarchical name resolution, cached at every layer.

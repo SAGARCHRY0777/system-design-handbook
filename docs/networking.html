@@ -64,6 +64,7 @@ ocean at 150 ms per round trip, that is 300–450 ms of pure latency — which i
 why connection reuse, HTTP/2 and CDNs matter more than shaving server time.</p>
 </blockquote>
 <hr>
+<div class="sim" data-sim="sdnetworking"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-dns"><a class="anchor" href="#2-dns">#</a>2 · DNS</h2><p>Hierarchical name resolution, cached at every layer.</p>
 <div class="table-scroll"><table><thead><tr><th>Record</th><th>Maps</th></tr></thead><tbody><tr><td><strong>A / AAAA</strong></td><td>Name → IPv4 / IPv6 address</td></tr><tr><td><strong>CNAME</strong></td><td>Name → another name</td></tr><tr><td><strong>MX</strong></td><td>Mail servers</td></tr><tr><td><strong>TXT</strong></td><td>Arbitrary text — domain verification, SPF</td></tr><tr><td><strong>NS</strong></td><td>Which servers are authoritative</td></tr></tbody></table></div><p><strong>Routing policies</strong> — how DNS becomes a traffic tool:</p>
 <div class="table-scroll"><table><thead><tr><th>Policy</th><th>Behaviour</th></tr></thead><tbody><tr><td>Simple</td><td>One answer</td></tr><tr><td><strong>Weighted</strong></td><td>Split by percentage — canary releases</td></tr><tr><td><strong>Latency / geo</strong></td><td>Nearest or fastest region</td></tr><tr><td>Failover</td><td>Secondary when the health check fails</td></tr><tr><td>Round robin</td><td>Rotate answers — crude balancing</td></tr></tbody></table></div><blockquote>
