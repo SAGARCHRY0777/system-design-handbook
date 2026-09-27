@@ -47,6 +47,12 @@ label.
 
 ---
 
+```sim
+sdcapandconsistenc
+```
+
+---
+
 ## 2 · PACELC — the more useful version
 
 CAP only describes the partition case, which is rare. **PACELC covers the normal

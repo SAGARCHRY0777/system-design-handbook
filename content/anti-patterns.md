@@ -58,6 +58,12 @@ Phase 6 is a rubric line most candidates never get to, and it is easy marks.
 
 ---
 
+```sim
+sdantipatterns
+```
+
+---
+
 ## 2 · Technical anti-patterns
 
 ### Over-engineering

@@ -45,6 +45,12 @@ The reasons, in order of how much they matter:
 
 ---
 
+```sim
+sdcdnandstorage
+```
+
+---
+
 ## 2 · The upload path
 
 **This is the deep dive**, and the naive answer — client uploads to your API,

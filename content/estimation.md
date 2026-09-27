@@ -31,6 +31,12 @@ text. A 5 MB photo changes the answer in a way a 300-byte tweet does not.
 
 ---
 
+```sim
+sdestimation
+```
+
+---
+
 ## 2 · Numbers to memorise
 
 Eleven numbers. They are enough.

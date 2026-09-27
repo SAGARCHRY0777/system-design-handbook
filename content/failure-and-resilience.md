@@ -38,6 +38,12 @@ summary: Timeouts, retries that make outages worse, circuit breakers, bulkheads,
 
 ---
 
+```sim
+sdfailureandresili
+```
+
+---
+
 ## 2 · Timeouts
 
 **Every network call needs a timeout, and the default in most libraries is

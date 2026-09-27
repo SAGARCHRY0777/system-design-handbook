@@ -64,6 +64,7 @@ for minutes. That is why serious deployments use anycast or a health-checked
 global LB for failover and treat DNS as coarse routing only.</p>
 </blockquote>
 <hr>
+<div class="sim" data-sim="sdloadbalancing"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-l4-versus-l7"><a class="anchor" href="#2-l4-versus-l7">#</a>2 · L4 versus L7</h2><p>The distinction the interviewer is checking for:</p>
 <div class="table-scroll"><table><thead><tr><th></th><th>L4 (transport)</th><th>L7 (application)</th></tr></thead><tbody><tr><td><strong>Sees</strong></td><td>IP + port</td><td>Method, path, headers, cookies, body</td></tr><tr><td><strong>Can route on</strong></td><td>Connection tuple only</td><td><code>/api/*</code> vs <code>/static/*</code>, tenant header, version</td></tr><tr><td><strong>TLS</strong></td><td>Passes through</td><td>Usually terminates</td></tr><tr><td><strong>Throughput</strong></td><td>Millions of connections/node</td><td>Lower — it parses every request</td></tr><tr><td><strong>Retries</strong></td><td>No — it does not know what a request is</td><td>Yes, safely, on idempotent methods</td></tr><tr><td><strong>Examples</strong></td><td>AWS NLB, IPVS, Maglev</td><td>AWS ALB, Envoy, NGINX, HAProxy</td></tr></tbody></table></div><p><strong>The practical answer is usually both:</strong> L4 at the front for raw throughput and
 DDoS absorption, L7 behind it for routing, TLS, retries, and observability.</p>

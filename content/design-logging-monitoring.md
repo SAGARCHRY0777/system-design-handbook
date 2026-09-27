@@ -42,6 +42,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignloggingmon
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

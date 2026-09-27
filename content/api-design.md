@@ -60,6 +60,12 @@ render one screen.
 
 ---
 
+```sim
+sdapidesign
+```
+
+---
+
 ## 2 · REST done properly
 
 ```

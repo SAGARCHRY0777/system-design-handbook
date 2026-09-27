@@ -44,6 +44,12 @@ And the costs, which you should volunteer:
 
 ---
 
+```sim
+sdqueuesandstreams
+```
+
+---
+
 ## 2 · Queue versus log
 
 The distinction that matters most, and the one candidates blur.

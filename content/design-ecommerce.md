@@ -44,6 +44,12 @@ NON-FUNCTIONAL
 
 ---
 
+```sim
+sddesignecommerce
+```
+
+---
+
 ## 2 · Estimation (5–8)
 
 ```

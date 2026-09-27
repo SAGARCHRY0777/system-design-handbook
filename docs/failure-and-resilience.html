@@ -55,6 +55,7 @@ connection pools, and propagates upward until the whole system is unavailable
 strong senior signal.</p>
 </blockquote>
 <hr>
+<div class="sim" data-sim="sdfailureandresili"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-timeouts"><a class="anchor" href="#2-timeouts">#</a>2 · Timeouts</h2><p><strong>Every network call needs a timeout, and the default in most libraries is
 infinite.</strong> That is the root cause of an enormous share of real outages.</p>
 <div class="table-scroll"><table><thead><tr><th>Rule</th><th>Detail</th></tr></thead><tbody><tr><td><strong>Set one everywhere</strong></td><td>Connect, read, and total-request separately</td></tr><tr><td><strong>Base it on p99, not average</strong></td><td>A timeout below p99 fails healthy requests</td></tr><tr><td><strong>Budget downward</strong></td><td>If you owe an answer in 1s, your dependency gets less</td></tr><tr><td><strong>Deadline propagation</strong></td><td>Pass the remaining budget down the call chain</td></tr></tbody></table></div><p><strong>Deadline propagation is the detail worth naming.</strong> Without it, a service near

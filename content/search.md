@@ -42,6 +42,12 @@ Elasticsearch when relevance tuning, faceting, or scale demand it.
 
 ---
 
+```sim
+sdsearch
+```
+
+---
+
 ## 2 · The inverted index
 
 **The one data structure to be able to explain.**

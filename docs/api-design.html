@@ -63,6 +63,7 @@ canonical case is a mobile app that would otherwise make six REST calls to
 render one screen.</p>
 <p><strong>GraphQL&#39;s real costs — name them, because they are what the follow-up probes:</strong></p>
 <div class="table-scroll"><table><thead><tr><th>Cost</th><th>Detail</th></tr></thead><tbody><tr><td><strong>The N+1 problem</strong></td><td>A query for 100 posts, each with an author, becomes 101 database calls unless you batch. Fixed with DataLoader-style per-request batching — <strong>know this name</strong></td></tr><tr><td><strong>Query cost is unbounded</strong></td><td>A client can request a deeply nested graph. You need depth limits, complexity scoring, or persisted queries</td></tr><tr><td><strong>Caching is largely lost</strong></td><td>One POST endpoint defeats HTTP caching; you cache at the resolver instead</td></tr><tr><td><strong>Rate limiting is harder</strong></td><td>&quot;100 requests&quot; is meaningless when one request can cost 1000× another. Price by computed cost</td></tr></tbody></table></div><hr>
+<div class="sim" data-sim="sdapidesign"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-rest-done-properly"><a class="anchor" href="#2-rest-done-properly">#</a>2 · REST done properly</h2><pre class="code"><code>GET    /v1/users/{id}                 -&gt; 200 the user
 GET    /v1/users/{id}/posts?limit=20  -&gt; 200 a page
 POST   /v1/posts                      -&gt; 201 + Location header

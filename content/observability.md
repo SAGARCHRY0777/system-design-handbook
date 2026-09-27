@@ -35,6 +35,12 @@ logs you cannot use.
 
 ---
 
+```sim
+sdobservability
+```
+
+---
+
 ## 2 · Percentiles, and the mistake
 
 **Averages hide everything that matters.**

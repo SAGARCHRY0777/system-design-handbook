@@ -50,6 +50,7 @@ derivable under pressure; all of it makes the estimation phase fast.</p>
 SSD    : disk seek  = 1 : 100         -&gt; why SSDs changed database design
 DC hop : intercontinental = 1 : 300   -&gt; why you use a CDN, and why
                                          multi-region writes are hard</code></pre><hr>
+<div class="sim" data-sim="sdnumberstoknow"><p class="sim__fallback">Interactive simulation — needs JavaScript.</p></div><hr>
 <h2 id="2-capacity-per-commodity-machine"><a class="anchor" href="#2-capacity-per-commodity-machine">#</a>2 · Capacity per commodity machine</h2><div class="table-scroll"><table><thead><tr><th>Component</th><th>Capacity</th></tr></thead><tbody><tr><td>Web/app server</td><td>10k–50k QPS (simple requests)</td></tr><tr><td><strong>SQL database writes</strong></td><td><strong>5k–10k/s per primary</strong></td></tr><tr><td>SQL database reads</td><td>10k–50k/s (more with replicas)</td></tr><tr><td>Redis / Memcached</td><td>~100k QPS per node</td></tr><tr><td>Kafka broker</td><td>~100k messages/s</td></tr><tr><td>Nginx / Envoy</td><td>~50k–100k connections</td></tr><tr><td>WebSocket connections</td><td>10k–50k per server</td></tr><tr><td>Server RAM</td><td>64–256 GB</td></tr><tr><td>Server SSD</td><td>1–10 TB</td></tr><tr><td>NIC</td><td>10–25 Gbps</td></tr></tbody></table></div><blockquote>
 <p><strong>The 5k–10k writes per primary figure earns its keep more than any other.</strong>
 It is the number that decides &quot;one database&quot; versus &quot;shard&quot;, and being able to

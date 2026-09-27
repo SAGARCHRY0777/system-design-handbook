@@ -45,6 +45,12 @@ DC hop : intercontinental = 1 : 300   -> why you use a CDN, and why
 
 ---
 
+```sim
+sdnumberstoknow
+```
+
+---
+
 ## 2 · Capacity per commodity machine
 
 | Component | Capacity |
