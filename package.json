@@ -8,6 +8,11 @@
     "build": "node scripts/build.mjs",
     "serve": "node scripts/serve.mjs"
   },
-  "devDependencies": { "marked": "^14.1.3" },
-  "engines": { "node": ">=20" }
+  "devDependencies": {
+    "marked": "^14.1.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "homepage": "https://SAGARCHRY0777.github.io/system-design-handbook/"
 }
