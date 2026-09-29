@@ -3,7 +3,7 @@
 The system design interview round: a repeatable 45-minute framework, the
 building blocks, and worked designs with the trade-offs stated out loud.
 
-**Live site:** https://SAGARCHRY0777.github.io/system-design-handbook/
+**Read it here → [sagarchry0777.github.io/system-design-handbook](https://sagarchry0777.github.io/system-design-handbook/)**
 
 ---
 
