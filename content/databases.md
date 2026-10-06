@@ -39,6 +39,10 @@ advance?**
 > and move the timeline table to Cassandra when write volume justifies it"* is a
 > stronger answer than either extreme.
 
+If Postgres is your default, know what it does under the load you are about to
+put on it — [Postgres internals](postgres-internals.md) covers the index types,
+MVCC and the vacuum behaviour that decide whether that default holds.
+
 **When to genuinely leave relational:**
 
 | Signal | Choose |

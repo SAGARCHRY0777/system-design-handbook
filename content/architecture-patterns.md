@@ -143,6 +143,8 @@ is dramatically cheaper.
 ## 3 · Event-driven architecture
 
 Services emit events; other services react. No synchronous call between them.
+The bus below is a queue or a log, and which one you pick changes what the
+architecture can promise — see [queues and streams](queues-and-streams.md).
 
 ```mermaid
 flowchart LR

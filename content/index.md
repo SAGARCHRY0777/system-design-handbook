@@ -136,3 +136,7 @@ defend under follow-ups — and follow-ups are the round.
 | This one | The system design round |
 
 Start with [the framework](the-framework.md).
+
+If the round you are preparing for is machine coding rather than architecture,
+go to [low-level design](low-level-design.md) instead — same vocabulary, classes
+rather than services, and confusing the two is the fastest way to fail either.

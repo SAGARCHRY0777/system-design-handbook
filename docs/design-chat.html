@@ -119,7 +119,10 @@ Bob?</p>
     MS --&gt; Q[[&quot;Router / pub-sub&quot;]]
     Q --&gt; G2[&quot;Gateway 412&quot;]
     G2 --&gt;|WebSocket| B[&quot;Bob&quot;]
-    MS -.-&gt;|&quot;offline&quot;| PUSH[&quot;Push notification&lt;br/&gt;APNs / FCM&quot;]</pre><p><strong>The order of operations is the correctness question:</strong></p>
+    MS -.-&gt;|&quot;offline&quot;| PUSH[&quot;Push notification&lt;br/&gt;APNs / FCM&quot;]</pre><p>Delivery to an offline user is a different system with different guarantees —
+<a href="design-notifications.html">notifications</a> is that design, and the fan-out maths
+there is the reason it is separate.</p>
+<p><strong>The order of operations is the correctness question:</strong></p>
 <pre class="code"><code>1. Alice&#39;s client sends {client_msg_id, conversation_id, text}
 2. Gateway -&gt; message service
 3. PERSIST to the message store          &lt;- BEFORE anything else

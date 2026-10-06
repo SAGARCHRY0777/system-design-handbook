@@ -120,7 +120,9 @@ receipt, scheduled jobs — and keep the steady-state request path on ordinary
 servers.</p>
 </blockquote>
 <hr>
-<h2 id="3-event-driven-architecture"><a class="anchor" href="#3-event-driven-architecture">#</a>3 · Event-driven architecture</h2><p>Services emit events; other services react. No synchronous call between them.</p>
+<h2 id="3-event-driven-architecture"><a class="anchor" href="#3-event-driven-architecture">#</a>3 · Event-driven architecture</h2><p>Services emit events; other services react. No synchronous call between them.
+The bus below is a queue or a log, and which one you pick changes what the
+architecture can promise — see <a href="queues-and-streams.html">queues and streams</a>.</p>
 <pre class="mermaid">flowchart LR
     O[&quot;Order service&quot;] --&gt;|&quot;OrderPlaced&quot;| B[[&quot;Event bus&quot;]]
     B --&gt; I[&quot;Inventory&quot;]

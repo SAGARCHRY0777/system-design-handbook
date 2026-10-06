@@ -120,6 +120,10 @@ flowchart TD
     MS -.->|"offline"| PUSH["Push notification<br/>APNs / FCM"]
 ```
 
+Delivery to an offline user is a different system with different guarantees —
+[notifications](design-notifications.md) is that design, and the fan-out maths
+there is the reason it is separate.
+
 **The order of operations is the correctness question:**
 
 ```

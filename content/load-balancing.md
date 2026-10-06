@@ -41,6 +41,10 @@ to show depth:
 | **L4** | TCP/UDP, connection-level | Connections → machines | Immediate |
 | **L7** | HTTP-aware proxy | Requests → services | Immediate |
 
+Three of those four levels are decisions about the network rather than about
+your services — [networking](networking.md) covers the DNS, TCP and TLS
+behaviour each one inherits.
+
 > **DNS is a poor failover mechanism** and this is worth knowing: clients and
 > resolvers cache records past the TTL, so a dead region keeps receiving traffic
 > for minutes. That is why serious deployments use anycast or a health-checked

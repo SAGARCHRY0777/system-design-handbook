@@ -71,7 +71,10 @@ the round.</p>
     L4 --&gt; L7[&quot;L7 LB / gateway&lt;br/&gt;HTTP, routing, TLS&quot;]
     L7 --&gt; S1[&quot;Service instances&quot;]</pre><p><strong>Load balancing happens at four levels, not one</strong>, and saying so is a quick way
 to show depth:</p>
-<div class="table-scroll"><table><thead><tr><th>Level</th><th>Mechanism</th><th>Balances</th><th>Cost of change</th></tr></thead><tbody><tr><td><strong>DNS</strong></td><td>Multiple A records, geo or weighted routing</td><td>Users → regions</td><td>Minutes to hours (TTL)</td></tr><tr><td><strong>Anycast</strong></td><td>Same IP announced from many sites</td><td>Packets → nearest PoP</td><td>Seconds</td></tr><tr><td><strong>L4</strong></td><td>TCP/UDP, connection-level</td><td>Connections → machines</td><td>Immediate</td></tr><tr><td><strong>L7</strong></td><td>HTTP-aware proxy</td><td>Requests → services</td><td>Immediate</td></tr></tbody></table></div><blockquote>
+<div class="table-scroll"><table><thead><tr><th>Level</th><th>Mechanism</th><th>Balances</th><th>Cost of change</th></tr></thead><tbody><tr><td><strong>DNS</strong></td><td>Multiple A records, geo or weighted routing</td><td>Users → regions</td><td>Minutes to hours (TTL)</td></tr><tr><td><strong>Anycast</strong></td><td>Same IP announced from many sites</td><td>Packets → nearest PoP</td><td>Seconds</td></tr><tr><td><strong>L4</strong></td><td>TCP/UDP, connection-level</td><td>Connections → machines</td><td>Immediate</td></tr><tr><td><strong>L7</strong></td><td>HTTP-aware proxy</td><td>Requests → services</td><td>Immediate</td></tr></tbody></table></div><p>Three of those four levels are decisions about the network rather than about
+your services — <a href="networking.html">networking</a> covers the DNS, TCP and TLS
+behaviour each one inherits.</p>
+<blockquote>
 <p><strong>DNS is a poor failover mechanism</strong> and this is worth knowing: clients and
 resolvers cache records past the TTL, so a dead region keeps receiving traffic
 for minutes. That is why serious deployments use anycast or a health-checked

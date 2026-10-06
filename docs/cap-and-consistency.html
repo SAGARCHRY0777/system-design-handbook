@@ -96,7 +96,8 @@ Else (normal operation): choose Latency or Consistency.</strong></p>
 </blockquote>
 <p><strong>The &quot;else&quot; branch is where your system actually lives.</strong> Every synchronous
 replication decision is a latency-versus-consistency trade made while the network
-is perfectly healthy.</p>
+is perfectly healthy. <a href="replication-and-consistency.html">Replication and consistency</a>
+works through the topologies that trade is made in.</p>
 <div class="table-scroll"><table><thead><tr><th>System</th><th>Classification</th><th>Meaning</th></tr></thead><tbody><tr><td>Cassandra (default)</td><td>PA/EL</td><td>Available under partition; fast over consistent normally</td></tr><tr><td>DynamoDB</td><td>PA/EL (tunable)</td><td>Same, with strongly-consistent reads available on request</td></tr><tr><td>MongoDB</td><td>PC/EC</td><td>Consistent under partition; consistent normally</td></tr><tr><td>Spanner</td><td>PC/EC</td><td>Consistency always, and pays latency for it</td></tr><tr><td>Postgres (single node)</td><td>CA-ish</td><td>No partition to tolerate; not a distributed system</td></tr></tbody></table></div><blockquote>
 <p><strong>Bringing up PACELC unprompted is one of the highest-value things you can say
 in a design round.</strong> It signals you understand the trade-off exists during

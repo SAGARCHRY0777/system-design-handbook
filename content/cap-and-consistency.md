@@ -63,7 +63,8 @@ case too**, and it is the extension worth naming:
 
 **The "else" branch is where your system actually lives.** Every synchronous
 replication decision is a latency-versus-consistency trade made while the network
-is perfectly healthy.
+is perfectly healthy. [Replication and consistency](replication-and-consistency.md)
+works through the topologies that trade is made in.
 
 | System | Classification | Meaning |
 |---|---|---|

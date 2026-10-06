@@ -159,6 +159,10 @@ sequenceDiagram
 > not a reason to avoid it — it is a reason to use a well-tested library rather
 > than write it in an interview, and saying so is the mature answer.
 
+CRDTs also show up where the unit is a file rather than a character: see the
+conflict handling in [file sync](design-file-sync.md), which has the same
+problem at a coarser granularity.
+
 ### CRDTs — conflict-free replicated data types
 
 **Change the data structure so conflicts cannot arise.** Instead of positions,

@@ -160,6 +160,9 @@ Several published algorithms were later shown to have convergence bugs. That is
 not a reason to avoid it — it is a reason to use a well-tested library rather
 than write it in an interview, and saying so is the mature answer.</p>
 </blockquote>
+<p>CRDTs also show up where the unit is a file rather than a character: see the
+conflict handling in <a href="design-file-sync.html">file sync</a>, which has the same
+problem at a coarser granularity.</p>
 <h3 id="crdts-conflict-free-replicated-data-types"><a class="anchor" href="#crdts-conflict-free-replicated-data-types">#</a>CRDTs — conflict-free replicated data types</h3><p><strong>Change the data structure so conflicts cannot arise.</strong> Instead of positions,
 every character gets a <strong>unique, immutable, densely-orderable identifier</strong>.</p>
 <pre class="code"><code>Rather than &quot;insert at index 5&quot;, each character carries an ID that
