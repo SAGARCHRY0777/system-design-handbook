@@ -31,3 +31,15 @@ jobs:
             git --no-pager diff --stat -- docs
             exit 1
           fi
+
+      # The build renders a sim fence whether or not the sim behind it is
+      # registered, and the runtime catches a throwing sim into .sim--failed
+      # so the page still loads. Nothing else in this workflow executes a
+      # line of sim code, so a sim that never advances, draws NaN, or leaves
+      # a frame uncaptioned ships silently without this. The runner has
+      # Chrome preinstalled, which is why puppeteer-core is enough and the
+      # browser-bundling `puppeteer` package is not a dependency.
+      - name: Sims mount and advance
+        run: npm run check:sims
+        env:
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
