@@ -20,6 +20,13 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # Catches what the build will happily render anyway: a link to a page
+      # nobody wrote, a duplicate slug (one page silently overwrites the
+      # other in docs/), a page in a module the nav does not know about.
+      # Warnings do not fail the build; errors do.
+      - name: Content checks
+        run: npm run check
+
       - run: npm run build
       # docs/ is committed so GitHub Pages can serve it straight from the
       # branch with no Pages-source change. That only stays true if it is
