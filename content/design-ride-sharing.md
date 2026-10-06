@@ -39,7 +39,7 @@ NON-FUNCTIONAL
 > **The requirement pair that shapes everything:** location is high-volume,
 > approximate and disposable; the match is low-volume and must be exactly
 > correct. **Two subsystems with opposite properties** — the same split as
-> browse/book in [ticketing](design-ticketing.html).
+> browse/book in [ticketing](design-ticketing.md).
 
 ---
 
@@ -205,7 +205,7 @@ flowchart TD
 ```
 
 > **Step 5 is the whole correctness story, and it is
-> [optimistic concurrency](design-ticketing.html#3--the-core-problem--no-double-booking),
+> [optimistic concurrency](design-ticketing.md#3--the-core-problem--no-double-booking),
 > not a lock.** A driver near three simultaneous requests must be offered to
 > exactly one. A conditional update on driver state is atomic in the database;
 > two requests race and one gets zero affected rows and moves on. **A Redis lock
@@ -236,7 +236,7 @@ time than one 2 km away on the same road. Straight-line distance is the
 | **Batch to the analytics pipeline** | Historical traces go to a stream, not the live store |
 
 > **The TTL trick is the elegant part**, the same mechanism as presence in
-> [chat](design-chat.html): you never need a reliable "driver went offline"
+> [chat](design-chat.md): you never need a reliable "driver went offline"
 > event, because you will not get one when a phone loses signal. Expiry does the
 > work.
 

@@ -97,7 +97,7 @@ board proves it.
 ## 3 · Phase 2 — Estimation (5–8)
 
 Not arithmetic for its own sake. **One number that changes a decision**, then
-move on. See [estimation](estimation.html) for the method and the numbers.
+move on. See [estimation](estimation.md) for the method and the numbers.
 
 The three that usually matter:
 
@@ -293,4 +293,4 @@ You are ready to move on when you can:
 4. describe the difference between a level-2 and a level-3 answer, and
 5. name three recovery moves.
 
-Next: [requirements and scope](requirements-and-scope.html).
+Next: [requirements and scope](requirements-and-scope.md).

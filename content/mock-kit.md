@@ -157,18 +157,18 @@ different shapes.
 
 | # | Prompt | Shape | Write-up |
 |---|---|---|---|
-| 1 | URL shortener | Read-heavy key lookup | [design](design-url-shortener.html) |
-| 2 | Rate limiter | Algorithms, distributed counting | [block](rate-limiting.html) |
-| 3 | News feed | Fan-out, hot keys | [design](design-news-feed.html) |
-| 4 | Chat | Stateful connections | [design](design-chat.html) |
-| 5 | Ticket booking | Strong consistency | [design](design-ticketing.html) |
-| 6 | Web crawler | Queues, politeness, dedup | [design](design-web-crawler.html) |
-| 7 | Video platform | Pipelines, bandwidth economics | [design](design-video-streaming.html) |
-| 8 | Ride-sharing | Geospatial | [design](design-ride-sharing.html) |
-| 9 | E-commerce | Breadth + inventory correctness | [design](design-ecommerce.html) |
-| 10 | Key-value store | Distributed systems, undisguised | [design](design-key-value-store.html) |
-| 11 | Logging & monitoring | Write-heavy, cardinality | [design](design-logging-monitoring.html) |
-| 12 | Collaborative editor | Conflict resolution | [design](design-collaborative-editor.html) |
+| 1 | URL shortener | Read-heavy key lookup | [design](design-url-shortener.md) |
+| 2 | Rate limiter | Algorithms, distributed counting | [block](rate-limiting.md) |
+| 3 | News feed | Fan-out, hot keys | [design](design-news-feed.md) |
+| 4 | Chat | Stateful connections | [design](design-chat.md) |
+| 5 | Ticket booking | Strong consistency | [design](design-ticketing.md) |
+| 6 | Web crawler | Queues, politeness, dedup | [design](design-web-crawler.md) |
+| 7 | Video platform | Pipelines, bandwidth economics | [design](design-video-streaming.md) |
+| 8 | Ride-sharing | Geospatial | [design](design-ride-sharing.md) |
+| 9 | E-commerce | Breadth + inventory correctness | [design](design-ecommerce.md) |
+| 10 | Key-value store | Distributed systems, undisguised | [design](design-key-value-store.md) |
+| 11 | Logging & monitoring | Write-heavy, cardinality | [design](design-logging-monitoring.md) |
+| 12 | Collaborative editor | Conflict resolution | [design](design-collaborative-editor.md) |
 
 **If you only manage six: 1, 3, 5, 8, 9, 10.** They cover six of the eight
 shapes.

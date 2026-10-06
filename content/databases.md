@@ -228,4 +228,4 @@ You know this block when you can:
 4. name four isolation anomalies and three fixes for the lost update, and
 5. say why a low-selectivity index is worse than a scan.
 
-Next: [sharding](sharding.html).
+Next: [sharding](sharding.md).

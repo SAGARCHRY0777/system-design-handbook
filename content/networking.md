@@ -183,7 +183,7 @@ so it must only carry idempotent requests.
 | **Polling** | Client asks repeatedly | Infrequent updates; simple and wasteful |
 | **Long polling** | Client asks, server holds the request open | A fallback where WebSockets are blocked |
 | **SSE** | Server → client, one way, over plain HTTP | Feeds, notifications, progress |
-| **WebSocket** | Full duplex | [Chat](design-chat.html), collaborative editing, games |
+| **WebSocket** | Full duplex | [Chat](design-chat.md), collaborative editing, games |
 
 **Server-sent events are underrated in interviews.** If updates only flow one
 way, SSE is plain HTTP — it reconnects automatically, passes through proxies,

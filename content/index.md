@@ -135,4 +135,4 @@ defend under follow-ups — and follow-ups are the round.
 | [LLM Handbook](https://SAGARCHRY0777.github.io/llm-handbook/) | ML/LLM systems — RAG, evaluation, serving, agents |
 | This one | The system design round |
 
-Start with [the framework](the-framework.html).
+Start with [the framework](the-framework.md).

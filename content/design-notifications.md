@@ -38,7 +38,7 @@ NON-FUNCTIONAL
 
 > **The two-tier split — transactional versus promotional — is the framing move
 > here**, the same shape as the browse/book split in
-> [ticketing](design-ticketing.html). They have different latency targets,
+> [ticketing](design-ticketing.md). They have different latency targets,
 > different retry policies, and different consequences for failure. Designing one
 > pipeline for both means either over-engineering the promotional path or
 > under-serving the OTP.
@@ -111,7 +111,7 @@ flowchart TD
 the reason is bulkheading: SMS provider degradation must not delay push
 notifications. One shared pool means the slowest provider sets everyone's
 latency — the exact failure mode from
-[failure & resilience](failure-and-resilience.html).
+[failure & resilience](failure-and-resilience.md).
 
 ---
 
@@ -156,7 +156,7 @@ dedupe_key = hash(user_id, template_id, entity_id, time_bucket)
 SETNX dedupe:{key} with a TTL of the dedupe window
 ```
 
-**Same mechanism as [idempotency](idempotency.html)** — the atomic claim is what
+**Same mechanism as [idempotency](idempotency.md)** — the atomic claim is what
 makes it correct.
 
 ### Templates

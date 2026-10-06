@@ -37,7 +37,7 @@ NON-FUNCTIONAL
 ```
 
 > **Open by separating the two halves**, as with
-> [ticketing](design-ticketing.html): *"Browsing is read-heavy, cacheable and
+> [ticketing](design-ticketing.md): *"Browsing is read-heavy, cacheable and
 > tolerant of staleness. Checkout is a small fraction of traffic that must be
 > exactly right. I'll design them separately, because forcing one consistency
 > model on both gives you something slow and still wrong."*
@@ -191,7 +191,7 @@ flowchart TD
 
 **A sale is not one step.** Modelling it as three is what makes payment failure
 and abandonment tractable — the same shape as
-[ticketing](design-ticketing.html#4--the-reservation-model).
+[ticketing](design-ticketing.md#4--the-reservation-model).
 
 ```mermaid
 stateDiagram-v2
@@ -273,7 +273,7 @@ sequenceDiagram
 |---|---|
 | **Reserve before charging** | Charging first and then finding no stock means refunding a customer for something you never had |
 | **Release partial reservations** | A 5-item cart where item 4 fails must release items 1–3, or abandoned stock accumulates |
-| **Never guess on a payment timeout** | You do not know if the charge happened. Releasing risks giving away paid stock; confirming risks shipping unpaid goods. **Hold and reconcile** — see [idempotency](idempotency.html) |
+| **Never guess on a payment timeout** | You do not know if the charge happened. Releasing risks giving away paid stock; confirming risks shipping unpaid goods. **Hold and reconcile** — see [idempotency](idempotency.md) |
 
 ### Reservation expiry
 
@@ -322,9 +322,9 @@ Straightforward by comparison, but say the decisions:
 | Concern | Approach |
 |---|---|
 | Product pages | Cache-aside in Redis, TTL minutes; invalidate on update |
-| Images | Object storage + CDN, content-hashed URLs — see [CDN & storage](cdn-and-storage.html) |
-| Search | Elasticsearch kept in sync by **CDC**, not dual writes — see [search](search.html) |
-| Listing pages | Cursor pagination, never offset — see [API design](api-design.html) |
+| Images | Object storage + CDN, content-hashed URLs — see [CDN & storage](cdn-and-storage.md) |
+| Search | Elasticsearch kept in sync by **CDC**, not dual writes — see [search](search.md) |
+| Listing pages | Cursor pagination, never offset — see [API design](api-design.md) |
 | Stock display | From cache. Approximate, and that is fine |
 | Personalisation | Fragment-cache the page; personalise a small hole in it |
 

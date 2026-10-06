@@ -73,7 +73,7 @@ CONCLUSION
 
 **"Metadata and bytes have opposite properties, so they get different systems"
 is the framing move here** — the same shape as browse/book in
-[ticketing](design-ticketing.html) and the two halves of every media design.
+[ticketing](design-ticketing.md) and the two halves of every media design.
 
 ---
 

@@ -191,7 +191,7 @@ one case where push is clearly correct.
 
 **Private content** uses signed segment URLs verified at the edge, with short
 expiries — the same mechanism as
-[CDN & object storage](cdn-and-storage.html), and short per-segment expiries
+[CDN & object storage](cdn-and-storage.md), and short per-segment expiries
 limit the value of a leaked link to seconds.
 
 ---

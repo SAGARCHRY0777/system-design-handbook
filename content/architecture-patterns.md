@@ -53,7 +53,7 @@ You did not add reliability by splitting. You multiplied the ways to fail.
 ```
 
 Every network hop needs a timeout, a retry policy, a circuit breaker, and a
-fallback — see [failure & resilience](failure-and-resilience.html). None of that
+fallback — see [failure & resilience](failure-and-resilience.md). None of that
 exists in a function call.
 
 ### When splitting is genuinely right

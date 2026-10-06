@@ -270,7 +270,7 @@ flowchart TD
 | **Silences** | Known maintenance |
 
 **Alert on symptoms, not causes** — and on **error-budget burn rate** rather
-than fixed thresholds. See [observability](observability.html).
+than fixed thresholds. See [observability](observability.md).
 
 > **Multi-window burn-rate alerting is the mature answer:** page when the budget
 > is being consumed fast enough to matter — say 14× normal over an hour — and

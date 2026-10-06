@@ -138,7 +138,7 @@ and that node holds the latest value.
 **The honest caveat, worth volunteering:** quorums are not linearizability.
 Concurrent writes, partially-failed writes, and recovery from backup all break
 the guarantee at the edges. It is *stronger* consistency, not *strong*
-consistency — see [CAP](cap-and-consistency.html).
+consistency — see [CAP](cap-and-consistency.md).
 
 ### Keeping replicas honest
 

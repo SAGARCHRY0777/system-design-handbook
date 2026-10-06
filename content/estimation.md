@@ -284,4 +284,4 @@ You can move on when you can:
 4. run the Twitter estimate in three minutes out loud, and
 5. finish every estimate with a *"so this means…"* sentence.
 
-Next: the [building blocks](load-balancing.html).
+Next: the [building blocks](load-balancing.md).

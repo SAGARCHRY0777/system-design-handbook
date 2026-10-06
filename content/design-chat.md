@@ -184,7 +184,7 @@ read may span two buckets at a boundary.
 
 **Message IDs must sort correctly.** Snowflake IDs (timestamp-prefixed, unique
 without coordination) give ordering and uniqueness without a central allocator,
-and reuse the point from [sharding](sharding.html).
+and reuse the point from [sharding](sharding.md).
 
 ---
 

@@ -261,7 +261,7 @@ by-products rather than features you build separately.
 
 ## 7 · Presence and cursors
 
-Same problem as [chat](design-chat.html), and the same answer.
+Same problem as [chat](design-chat.md), and the same answer.
 
 | Concern | Approach |
 |---|---|

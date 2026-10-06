@@ -44,7 +44,7 @@ sdtradeoffs
 
 ## 2 · Consistency vs availability
 
-**Only a live question during a partition** — see [CAP](cap-and-consistency.html).
+**Only a live question during a partition** — see [CAP](cap-and-consistency.md).
 
 > **Rule: decide per operation, not per system.** A feed can be stale;
 > a payment cannot. Designing everything to the strictest requirement is how you
@@ -78,7 +78,7 @@ You cannot optimise both; **you choose which path pays**.
 | Staleness | Possible | None |
 
 > **Rule: put the work where the traffic is not.** At 100:1 reads, precompute.
-> At 1:1, do not. See [news feed](design-news-feed.html) for the hybrid that
+> At 1:1, do not. See [news feed](design-news-feed.md) for the hybrid that
 > handles both.
 
 ---
@@ -103,7 +103,7 @@ You cannot optimise both; **you choose which path pays**.
 > **Rule: the real question is whether you know your queries in advance.** If
 > yes and they vary, relational. If access is by one known key at volume,
 > wide-column. Postgres is the right default far longer than people expect — see
-> [databases](databases.html).
+> [databases](databases.md).
 
 ---
 
@@ -180,7 +180,7 @@ You cannot optimise both; **you choose which path pays**.
 ## 12 · Monolith vs microservices
 
 > **Rule: split for organisational reasons, not technical ones.** See
-> [architectural patterns](architecture-patterns.html). Availability multiplies
+> [architectural patterns](architecture-patterns.md). Availability multiplies
 > downward; five services at 99.9% is 99.5%.
 
 ---
@@ -195,7 +195,7 @@ You cannot optimise both; **you choose which path pays**.
 > **Rule: set the TTL from what a stale read costs, then jitter it.** And decide
 > what happens at 0% hit rate — if the database cannot survive a cold cache, the
 > cache is not an optimisation, it is a dependency. See
-> [caching](caching.html).
+> [caching](caching.md).
 
 ---
 

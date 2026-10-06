@@ -10,7 +10,7 @@ summary: REST versus GraphQL versus gRPC decided on real grounds, plus paginatio
 
 # API design
 
-> The [framework](the-framework.html) gives API design five minutes in phase 3.
+> The [framework](the-framework.md) gives API design five minutes in phase 3.
 > This page is what to say inside those five minutes, and what to say when the
 > interviewer decides the API *is* the deep dive.
 
@@ -94,7 +94,7 @@ DELETE /v1/posts/{id}                 -> 204 no content
 | **404** | Not found — *or* found but you may not know it exists |
 | **409** | Conflict — a version clash, or a duplicate |
 | **422** | Well-formed but semantically invalid |
-| **429** | [Rate limited](rate-limiting.html) — with `Retry-After` |
+| **429** | [Rate limited](rate-limiting.md) — with `Retry-After` |
 | **5xx** | Our fault. Never return 200 with an error in the body |
 
 > **401 versus 403 is a small thing that gets noticed.** And returning 404
@@ -163,7 +163,7 @@ sequenceDiagram
 ```
 
 **Five things a webhook receiver must do**, and they map exactly onto
-[idempotency](idempotency.html):
+[idempotency](idempotency.md):
 
 | Requirement | Why |
 |---|---|
@@ -179,7 +179,7 @@ sequenceDiagram
 |---|---|
 | **Polling** | Low frequency, or you cannot expose an endpoint. Simple, wasteful |
 | **Webhooks** | Events are infrequent and you have a public endpoint |
-| **WebSocket / SSE** | Continuous updates to an active client — see [chat](design-chat.html) |
+| **WebSocket / SSE** | Continuous updates to an active client — see [chat](design-chat.md) |
 
 ---
 
@@ -191,7 +191,7 @@ One entry point in front of many services.
 |---|---|
 | TLS termination | Every service holding certificates |
 | AuthN, and coarse authZ | Every service re-implementing it |
-| [Rate limiting](rate-limiting.html) | Per-service limiters that do not compose |
+| [Rate limiting](rate-limiting.md) | Per-service limiters that do not compose |
 | Routing and versioning | Clients knowing service topology |
 | Request/response shaping | Coupling clients to internal models |
 | Metrics and tracing entry | Inconsistent instrumentation |

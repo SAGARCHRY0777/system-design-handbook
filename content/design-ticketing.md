@@ -227,7 +227,7 @@ event), rate limit per user *and* per IP, and shed anonymous traffic first.
 
 ## 7 · Payment
 
-**Reuses [idempotency](idempotency.html) directly** — and connecting the two is
+**Reuses [idempotency](idempotency.md) directly** — and connecting the two is
 good.
 
 ```

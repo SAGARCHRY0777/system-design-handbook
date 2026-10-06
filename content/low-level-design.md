@@ -394,7 +394,7 @@ THE RACE:  two vehicles arrive at once
 > only contending vehicles retry, rather than a lot-wide lock."*
 >
 > That is the same optimistic-concurrency idea as
-> [ticketing](design-ticketing.html) and [e-commerce](design-ecommerce.html),
+> [ticketing](design-ticketing.md) and [e-commerce](design-ecommerce.md),
 > one altitude down.
 
 ---
