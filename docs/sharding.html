@@ -86,7 +86,7 @@ or timestamps, every new write lands on the last shard.</p>
 is why you use consistent hashing instead of plain modulo whenever N might
 change.</p>
 <h3 id="consistent-hashing"><a class="anchor" href="#consistent-hashing">#</a>Consistent hashing</h3><p>Servers and keys on a ring; a key belongs to the next server clockwise. Changing
-N moves <del>1/N of keys instead of all of them. <strong>Virtual nodes</strong> (</del>150 ring points
+N moves ~1/N of keys instead of all of them. <strong>Virtual nodes</strong> (~150 ring points
 per physical server) keep the load even and spread a dead node&#39;s keys across all
 survivors rather than dumping them on one neighbour.</p>
 <h3 id="directory-based"><a class="anchor" href="#directory-based">#</a>Directory-based</h3><p>A lookup service maps key → shard.</p>

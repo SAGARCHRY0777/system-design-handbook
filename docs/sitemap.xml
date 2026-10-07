@@ -2,247 +2,206 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/the-framework.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/requirements-and-scope.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/estimation.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/api-design.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/load-balancing.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/caching.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/queues-and-streams.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/cdn-and-storage.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/rate-limiting.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/search.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/networking.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/databases.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/sharding.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/replication-and-consistency.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/postgres-internals.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/cap-and-consistency.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/idempotency.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/failure-and-resilience.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/observability.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/architecture-patterns.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-url-shortener.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-news-feed.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-chat.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-web-crawler.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-ticketing.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-notifications.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-video-streaming.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-file-sync.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-ride-sharing.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-ecommerce.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-key-value-store.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-logging-monitoring.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/low-level-design.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/design-collaborative-editor.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/numbers-to-know.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/anti-patterns.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/checklist.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/question-bank.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/tradeoffs.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://sagarchry0777.github.io/system-design-handbook/mock-kit.html</loc>
-    <lastmod>2026-10-06</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
